@@ -7,6 +7,16 @@ packages:
   NotableKit:
     path: ../NotableKit
 targets:
+  BopaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: Bopa
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Bopa
   BopaTests:
     type: bundle.unit-test
     platform: iOS

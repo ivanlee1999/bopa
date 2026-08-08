@@ -6,10 +6,14 @@ struct BopaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NavigationStack {
-                LibraryView()
+            if CommandLine.arguments.contains("--bare-canvas") {
+                DiagnosticHost()
+            } else {
+                NavigationStack {
+                    LibraryView()
+                }
+                .environmentObject(store)
             }
-            .environmentObject(store)
         }
     }
 }

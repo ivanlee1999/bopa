@@ -1,9 +1,6 @@
 import NotableKit
-import OSLog
 import PencilKit
 import SwiftUI
-
-let edlog = Logger(subsystem: "dev.ivan.bopa", category: "editor")
 
 /// Page editor: a PencilKit canvas bound to one Notable page, with page navigation.
 /// Saves (debounced) after every drawing change and on exit.
@@ -31,7 +28,7 @@ struct EditorView: View {
                     "Could not open page", systemImage: "exclamationmark.triangle",
                     description: Text(loadError))
             } else {
-                CanvasView(drawing: $drawing, onChanged: scheduleSave)
+                EditorCanvasView(pageId: pageId, drawing: $drawing, onChanged: scheduleSave)
                     .ignoresSafeArea(edges: .bottom)
             }
         }
@@ -66,8 +63,8 @@ struct EditorView: View {
                 }
             }
         }
-        .onAppear { edlog.warning("EditorView appear"); if pageId == nil { openInitialPage() } }
-        .onDisappear { edlog.warning("EditorView DISAPPEAR"); saveNow() }
+        .onAppear { if pageId == nil { openInitialPage() } }
+        .onDisappear { saveNow() }
     }
 
     private func openInitialPage() {
@@ -112,7 +109,6 @@ struct EditorView: View {
     }
 
     private func saveNow() {
-        edlog.warning("saveNow dirty=\(dirty)")
         saveTask?.cancel()
         guard dirty, var page else { return }
         page.strokes = PencilKitBridge.strokeDTOs(from: drawing)
@@ -124,7 +120,12 @@ struct EditorView: View {
 
 /// PKCanvasView wrapper. The canvas is its own scroll view; content grows vertically
 /// (Notable pages are infinite vertical scroll).
-private struct CanvasView: UIViewRepresentable {
+struct EditorCanvasView: UIViewRepresentable {
+    /// Identity of the loaded page. The canvas content is (re)loaded from `drawing` ONLY
+    /// when this changes — never on ordinary SwiftUI renders. Programmatically setting
+    /// `PKCanvasView.drawing` cancels any in-flight stroke, and PKDrawing's equality is
+    /// identity-like, so a value-compare guard cannot prevent that (found by UI-test bisect).
+    var pageId: String?
     @Binding var drawing: PKDrawing
     var onChanged: () -> Void
 
@@ -137,10 +138,13 @@ private struct CanvasView: UIViewRepresentable {
         let canvas = PKCanvasView()
         canvas.delegate = context.coordinator
         canvas.drawingPolicy = .anyInput
+        canvas.tool = PKInkingTool(.pen, color: .black, width: 5)
+        canvas.isAccessibilityElement = true
+        canvas.accessibilityIdentifier = "editor.canvas"
+        canvas.accessibilityValue = "strokes:0" 
         canvas.contentSize = CGSize(width: Self.pageWidth, height: Self.minimumHeight)
         canvas.minimumZoomScale = 0.25
         canvas.maximumZoomScale = 3
-        canvas.drawing = drawing
 
         let picker = context.coordinator.toolPicker
         picker.setVisible(true, forFirstResponder: canvas)
@@ -150,18 +154,25 @@ private struct CanvasView: UIViewRepresentable {
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
-        // Push external drawing changes (page switches) without echoing canvas edits back.
-        if !context.coordinator.canvasIsUpdating, canvas.drawing != drawing {
-            edlog.warning("updateUIView: pushing drawing to canvas (\(drawing.strokes.count) strokes)")
-            context.coordinator.programmaticUpdate = true
-            canvas.drawing = drawing
-            context.coordinator.programmaticUpdate = false
-            growContent(canvas)
-        }
+        // Load canvas content ONLY on page switches (found by UI-test bisect): assigning
+        // canvas.drawing on ordinary renders cancels in-flight strokes, and PKDrawing
+        // equality is identity-like, so a != guard cannot prevent that.
+        guard context.coordinator.loadedPageId != pageId else { return }
+        context.coordinator.loadedPageId = pageId
+        context.coordinator.programmaticUpdate = true
+        canvas.drawing = drawing
+        context.coordinator.programmaticUpdate = false
+        canvas.accessibilityValue = "strokes:\(drawing.strokes.count)"
+        Self.growContent(canvas, for: drawing)
     }
 
-    private func growContent(_ canvas: PKCanvasView) {
-        let needed = canvas.drawing.bounds.maxY + 1000
+    /// Grows the scrollable height to fit the drawing. An EMPTY drawing has a null bounds
+    /// whose maxY is CGFLOAT_MAX — setting contentSize to that breaks the scroll view's
+    /// gesture system and permanently disables inking (found by UI-test bisect).
+    static func growContent(_ canvas: PKCanvasView, for drawing: PKDrawing) {
+        let bounds = drawing.bounds
+        guard !bounds.isNull, bounds.maxY.isFinite else { return }
+        let needed = bounds.maxY + 1000
         if needed > canvas.contentSize.height {
             canvas.contentSize.height = needed
         }
@@ -170,26 +181,22 @@ private struct CanvasView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, PKCanvasViewDelegate {
-        let parent: CanvasView
+        let parent: EditorCanvasView
         let toolPicker = PKToolPicker()
         var programmaticUpdate = false
-        var canvasIsUpdating = false
+        var loadedPageId: String?
 
-        init(_ parent: CanvasView) {
+        init(_ parent: EditorCanvasView) {
             self.parent = parent
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            edlog.warning("drawingDidChange programmatic=\(self.programmaticUpdate) strokes=\(canvasView.drawing.strokes.count)")
             guard !programmaticUpdate else { return }
-            canvasIsUpdating = true
-            parent.drawing = canvasView.drawing
-            canvasIsUpdating = false
+            let drawing = canvasView.drawing
+            parent.drawing = drawing
+            canvasView.accessibilityValue = "strokes:\(drawing.strokes.count)"
             parent.onChanged()
-            let needed = canvasView.drawing.bounds.maxY + 1000
-            if needed > canvasView.contentSize.height {
-                canvasView.contentSize.height = needed
-            }
+            EditorCanvasView.growContent(canvasView, for: drawing)
         }
     }
 }

@@ -10,14 +10,24 @@
 		02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37AA22765996393FB323A60 /* EditorView.swift */; };
 		29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */; };
 		5677850903A70C8887A2C384 /* NotableKit in Frameworks */ = {isa = PBXBuildFile; productRef = EAF3412FA66289006396A938 /* NotableKit */; };
+		60E3A5838850A4ADDF75230D /* DrawingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */; };
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
+		A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */; };
 		C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */; };
 		CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8D206021F65D447A23CFD5 /* LibraryView.swift */; };
 		D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */; };
 		EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1F470FDAB39308F0A7795F /* NotebookStore.swift */; };
+		F6A26EF4A3D7C39C2ECB8579 /* BareCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D3EA159F6A8667952EEF771 /* BareCanvas.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		3F057521AD4C8500930CC665 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F247876D0614D8A68E186553 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 83B1D95569B22B0B76DD7FC1;
+			remoteInfo = Bopa;
+		};
 		BA4AB69AB97E2396DA7CD8F6 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = F247876D0614D8A68E186553 /* Project object */;
@@ -30,6 +40,10 @@
 /* Begin PBXFileReference section */
 		067F82B43BDD4E6D982DBA40 /* BopaTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BopaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		13EC02E525247FA06BC975D5 /* BopaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BopaApp.swift; sourceTree = "<group>"; };
+		16D436CB210A8416B43424AF /* BopaUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BopaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareCanvasUITests.swift; sourceTree = "<group>"; };
+		2D3EA159F6A8667952EEF771 /* BareCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareCanvas.swift; sourceTree = "<group>"; };
+		3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingUITests.swift; sourceTree = "<group>"; };
 		3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridgeTests.swift; sourceTree = "<group>"; };
 		3D8D206021F65D447A23CFD5 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		467920EDEC849CD5B59CA33B /* NotableKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NotableKit; path = ../NotableKit; sourceTree = SOURCE_ROOT; };
@@ -58,6 +72,7 @@
 				AD8E5630BF3CA2332230E481 /* Packages */,
 				EBB9433109DCADDCCB9E64EC /* Sources */,
 				F98CDBC573F54114A6329452 /* Tests */,
+				CA08E7DA5D20ED789AA336D6 /* UITests */,
 				7E125F42646EADFD6FCD212F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -67,6 +82,7 @@
 			children = (
 				51065DC8A1BE9070F3A77ADB /* Bopa.app */,
 				067F82B43BDD4E6D982DBA40 /* BopaTests.xctest */,
+				16D436CB210A8416B43424AF /* BopaUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -79,9 +95,19 @@
 			name = Packages;
 			sourceTree = "<group>";
 		};
+		CA08E7DA5D20ED789AA336D6 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */,
+				3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
 		EBB9433109DCADDCCB9E64EC /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				2D3EA159F6A8667952EEF771 /* BareCanvas.swift */,
 				13EC02E525247FA06BC975D5 /* BopaApp.swift */,
 				B37AA22765996393FB323A60 /* EditorView.swift */,
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
@@ -103,6 +129,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		56E625DC2A7395CAE0911217 /* BopaUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4D237AC6AC1CA7A2AC29F6B1 /* Build configuration list for PBXNativeTarget "BopaUITests" */;
+			buildPhases = (
+				3BF62A025028E7510DA63371 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				01E3B3ED5C17B98AB8603063 /* PBXTargetDependency */,
+			);
+			name = BopaUITests;
+			packageProductDependencies = (
+			);
+			productName = BopaUITests;
+			productReference = 16D436CB210A8416B43424AF /* BopaUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		83B1D95569B22B0B76DD7FC1 /* Bopa */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 28004F3B00AD129F8F9F1FFE /* Build configuration list for PBXNativeTarget "Bopa" */;
@@ -149,6 +193,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					56E625DC2A7395CAE0911217 = {
+						TestTargetID = 83B1D95569B22B0B76DD7FC1;
+					};
 				};
 			};
 			buildConfigurationList = 02CB3492FC28462D6C2D82C1 /* Build configuration list for PBXProject "Bopa" */;
@@ -168,6 +215,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				56E625DC2A7395CAE0911217 /* BopaUITests */,
 				BC5D5E69D8EA02720C638844 /* BopaTests */,
 				83B1D95569B22B0B76DD7FC1 /* Bopa */,
 			);
@@ -175,6 +223,15 @@
 /* End PBXProject section */
 
 /* Begin PBXSourcesBuildPhase section */
+		3BF62A025028E7510DA63371 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */,
+				60E3A5838850A4ADDF75230D /* DrawingUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		44D4B94C6127337495328C2F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -187,6 +244,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F6A26EF4A3D7C39C2ECB8579 /* BareCanvas.swift in Sources */,
 				78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */,
 				02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */,
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
@@ -199,6 +257,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		01E3B3ED5C17B98AB8603063 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 83B1D95569B22B0B76DD7FC1 /* Bopa */;
+			targetProxy = 3F057521AD4C8500930CC665 /* PBXContainerItemProxy */;
+		};
 		DE23625FF3BA37B48867F72B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 83B1D95569B22B0B76DD7FC1 /* Bopa */;
@@ -360,6 +423,40 @@
 			};
 			name = Debug;
 		};
+		75444FD26E5D57BF9BB43A91 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ivan.BopaUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Bopa;
+			};
+			name = Release;
+		};
+		EBA396F6047A458D80A0BF3D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.ivan.BopaUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Bopa;
+			};
+			name = Debug;
+		};
 		EBC50236D097DEED56B937D4 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -423,6 +520,15 @@
 			buildConfigurations = (
 				F9F6CE2C41F2AD81840DB9DC /* Debug */,
 				EBC50236D097DEED56B937D4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4D237AC6AC1CA7A2AC29F6B1 /* Build configuration list for PBXNativeTarget "BopaUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EBA396F6047A458D80A0BF3D /* Debug */,
+				75444FD26E5D57BF9BB43A91 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

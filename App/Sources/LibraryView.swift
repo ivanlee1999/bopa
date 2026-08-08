@@ -41,6 +41,7 @@ struct LibraryView: View {
             } label: {
                 Image(systemName: "plus")
             }
+            .accessibilityIdentifier("library.add")
         }
         .alert("New notebook", isPresented: $showingNewNotebook) {
             TextField("Title", text: $newTitle)
