@@ -5,12 +5,9 @@ import XCTest
 /// injection, which PencilKit ignores), so a passing drag here verifies the live canvas.
 final class DrawingUITests: XCTestCase {
 
+    /// Creates a fresh notebook, opens it, and returns the canvas element.
     @MainActor
-    func testFingerDragProducesStroke() throws {
-        let app = XCUIApplication()
-        app.launch()
-
-        // Create a notebook (or reuse the existing test one).
+    private func openFreshNotebook(_ app: XCUIApplication) -> XCUIElement {
         let title = "UITest \(Int.random(in: 1000...9999))"
         app.buttons["library.add"].tap()
         let textField = app.textFields.firstMatch
@@ -18,36 +15,94 @@ final class DrawingUITests: XCTestCase {
         textField.typeText(title)
         app.buttons["Create"].tap()
 
-        // Open it.
         let row = app.staticTexts[title]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
 
         let canvas = app.descendants(matching: .any)["editor.canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 5), "canvas should appear")
+        return canvas
+    }
+
+    /// Draws a short diagonal squiggle on the canvas (diagonal-down, not horizontal,
+    /// to avoid any nav-gesture ambiguity).
+    @MainActor
+    private func drawStroke(
+        on canvas: XCUIElement, from: CGVector, to: CGVector
+    ) {
+        let start = canvas.coordinate(withNormalizedOffset: from)
+        let end = canvas.coordinate(withNormalizedOffset: to)
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    /// Waits until the canvas accessibilityValue reports the given stroke count
+    /// (updated in canvasViewDrawingDidChange, i.e. at stroke end / after undo).
+    @MainActor
+    private func waitForStrokes(
+        _ count: Int, on canvas: XCUIElement, message: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let predicate = NSPredicate(format: "value == 'strokes:\(count)'")
+        let result = XCTWaiter().wait(
+            for: [expectation(for: predicate, evaluatedWith: canvas)], timeout: 5)
+        XCTAssertEqual(
+            result, .completed,
+            "\(message), canvas value = \(canvas.value ?? "nil")",
+            file: file, line: line)
+    }
+
+    @MainActor
+    func testFingerDragProducesStroke() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let canvas = openFreshNotebook(app)
         XCTAssertEqual(canvas.value as? String, "strokes:0")
 
-        // Draw a diagonal-down squiggle (not horizontal, to avoid any nav-gesture ambiguity).
-        let start = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.30))
-        let end = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.55))
-        start.press(forDuration: 0.05, thenDragTo: end)
-
-        // The accessibilityValue updates in canvasViewDrawingDidChange (stroke end).
-        let drew = NSPredicate(format: "value == 'strokes:1'")
-        let result = XCTWaiter().wait(
-            for: [expectation(for: drew, evaluatedWith: canvas)], timeout: 5)
-        XCTAssertEqual(result, .completed,
-                       "expected 1 stroke after drag, canvas value = \(canvas.value ?? "nil")")
+        drawStroke(
+            on: canvas,
+            from: CGVector(dx: 0.35, dy: 0.30), to: CGVector(dx: 0.45, dy: 0.55))
+        waitForStrokes(1, on: canvas, message: "expected 1 stroke after drag")
 
         // Second stroke for good measure.
-        let start2 = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.30))
-        let end2 = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.55))
-        start2.press(forDuration: 0.05, thenDragTo: end2)
+        drawStroke(
+            on: canvas,
+            from: CGVector(dx: 0.55, dy: 0.30), to: CGVector(dx: 0.50, dy: 0.55))
+        waitForStrokes(2, on: canvas, message: "expected 2 strokes")
+    }
 
-        let drewTwo = NSPredicate(format: "value == 'strokes:2'")
-        let result2 = XCTWaiter().wait(
-            for: [expectation(for: drewTwo, evaluatedWith: canvas)], timeout: 5)
-        XCTAssertEqual(result2, .completed,
-                       "expected 2 strokes, canvas value = \(canvas.value ?? "nil")")
+    @MainActor
+    func testUndoRemovesJustDrawnStrokeAndRedoRestoresIt() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let canvas = openFreshNotebook(app)
+        XCTAssertEqual(canvas.value as? String, "strokes:0")
+
+        let undoButton = app.buttons["editor.undo"]
+        let redoButton = app.buttons["editor.redo"]
+        XCTAssertTrue(undoButton.waitForExistence(timeout: 5))
+        XCTAssertFalse(undoButton.isEnabled, "undo should be disabled before any edit")
+        XCTAssertFalse(redoButton.isEnabled, "redo should be disabled before any edit")
+
+        drawStroke(
+            on: canvas,
+            from: CGVector(dx: 0.35, dy: 0.30), to: CGVector(dx: 0.45, dy: 0.55))
+        waitForStrokes(1, on: canvas, message: "expected 1 stroke after drag")
+
+        let undoEnabled = NSPredicate(format: "isEnabled == true")
+        let enabledResult = XCTWaiter().wait(
+            for: [expectation(for: undoEnabled, evaluatedWith: undoButton)], timeout: 5)
+        XCTAssertEqual(enabledResult, .completed, "undo button should enable after drawing")
+
+        undoButton.tap()
+        waitForStrokes(0, on: canvas, message: "expected 0 strokes after undo")
+
+        let redoEnabled = XCTWaiter().wait(
+            for: [expectation(for: undoEnabled, evaluatedWith: redoButton)], timeout: 5)
+        XCTAssertEqual(redoEnabled, .completed, "redo button should enable after undo")
+
+        redoButton.tap()
+        waitForStrokes(1, on: canvas, message: "expected stroke back after redo")
     }
 }

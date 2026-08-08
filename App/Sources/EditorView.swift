@@ -12,9 +12,12 @@ struct EditorView: View {
     @State private var page: PageFile?
     @State private var drawing = PKDrawing()
     @State private var pageBackground: UIImage?
+    @State private var pageImages: [PageImage] = []
     @State private var dirty = false
     @State private var saveTask: Task<Void, Never>?
     @State private var loadError: String?
+    @StateObject private var undoController = CanvasUndoController()
+    @State private var scrollState = CanvasScrollState()
 
     private var manifest: NotebookManifest? { store.manifest(id: notebookId) }
     private var pageIndex: Int {
@@ -29,7 +32,15 @@ struct EditorView: View {
                     "Could not open page", systemImage: "exclamationmark.triangle",
                     description: Text(loadError))
             } else {
-                EditorCanvasView(pageId: pageId, background: pageBackground, drawing: $drawing, onChanged: scheduleSave)
+                EditorCanvasView(
+                    pageId: pageId,
+                    background: pageBackground,
+                    images: pageImages,
+                    pageScroll: page?.scroll ?? 0,
+                    drawing: $drawing,
+                    undoController: undoController,
+                    scrollState: scrollState,
+                    onChanged: scheduleSave)
                     .ignoresSafeArea(edges: .bottom)
             }
         }
@@ -37,6 +48,22 @@ struct EditorView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    undoController.undo()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .disabled(!undoController.canUndo)
+                .accessibilityIdentifier("editor.undo")
+
+                Button {
+                    undoController.redo()
+                } label: {
+                    Image(systemName: "arrow.uturn.forward")
+                }
+                .disabled(!undoController.canRedo)
+                .accessibilityIdentifier("editor.redo")
+
                 if let manifest {
                     Button {
                         openPage(at: pageIndex - 1)
@@ -86,10 +113,14 @@ struct EditorView: View {
             page = loaded
             pageId = newPageId
             drawing = PencilKitBridge.drawing(from: loaded.strokes)
+            let notebookDir = store.notebookDirURL(notebookId)
             pageBackground = BackgroundRenderer.image(
                 for: loaded,
-                notebookDir: store.notebookDirURL(notebookId),
+                notebookDir: notebookDir,
                 storeRoot: store.rootURL)
+            pageImages = BackgroundRenderer.pageImages(for: loaded, notebookDir: notebookDir)
+            // Seed with the persisted offset so a save before any scroll preserves it.
+            scrollState.pageY = CGFloat(max(loaded.scroll, 0))
             dirty = false
             loadError = nil
         } catch {
@@ -115,11 +146,66 @@ struct EditorView: View {
 
     private func saveNow() {
         saveTask?.cancel()
-        guard dirty, var page else { return }
+        guard var page else { return }
+        let scroll = max(0, Int(scrollState.pageY.rounded()))
+        guard dirty || scroll != page.scroll else { return }
         page.strokes = PencilKitBridge.strokeDTOs(from: drawing)
+        page.scroll = scroll
         self.page = page
         try? store.savePage(page)
         dirty = false
+    }
+}
+
+/// Reference box for the canvas's current scroll offset in unzoomed page space, written
+/// by the canvas coordinator on every scroll and read at save time. A plain class (not
+/// observable) on purpose: scrolling must not trigger SwiftUI re-renders.
+@MainActor
+final class CanvasScrollState {
+    var pageY: CGFloat = 0
+}
+
+/// Bridges the canvas's NSUndoManager to SwiftUI button state. PencilKit registers
+/// drawing edits with the responder chain's undo manager (the one CanvasContainerView
+/// owns); this observes that manager's notifications so the toolbar buttons
+/// enable/disable correctly.
+@MainActor
+final class CanvasUndoController: NSObject, ObservableObject {
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
+    private weak var manager: UndoManager?
+
+    func attach(_ manager: UndoManager) {
+        guard manager !== self.manager else { return }
+        if let old = self.manager {
+            NotificationCenter.default.removeObserver(self, name: nil, object: old)
+        }
+        self.manager = manager
+        let names: [Notification.Name] = [
+            .NSUndoManagerCheckpoint,
+            .NSUndoManagerDidUndoChange,
+            .NSUndoManagerDidRedoChange,
+        ]
+        for name in names {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(undoManagerStateDidChange(_:)),
+                name: name, object: manager)
+        }
+        refresh()
+    }
+
+    func undo() { manager?.undo() }
+    func redo() { manager?.redo() }
+
+    /// Re-reads canUndo/canRedo. Also called explicitly after removeAllActions(),
+    /// which posts no notification.
+    func refresh() {
+        canUndo = manager?.canUndo ?? false
+        canRedo = manager?.canRedo ?? false
+    }
+
+    @objc private func undoManagerStateDidChange(_ note: Notification) {
+        refresh()
     }
 }
 
@@ -132,7 +218,12 @@ struct EditorCanvasView: UIViewRepresentable {
     /// identity-like, so a value-compare guard cannot prevent that (found by UI-test bisect).
     var pageId: String?
     var background: UIImage?
+    var images: [PageImage] = []
+    /// Persisted unzoomed page-space y offset, applied on page switches.
+    var pageScroll: Int = 0
     @Binding var drawing: PKDrawing
+    var undoController: CanvasUndoController = CanvasUndoController()
+    var scrollState: CanvasScrollState = CanvasScrollState()
     var onChanged: () -> Void
 
     /// Logical page width shared with the BOOX (Notable uses the device's pixel width;
@@ -149,10 +240,12 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.tool = PKInkingTool(.pen, color: .black, width: 5)
         canvas.isAccessibilityElement = true
         canvas.accessibilityIdentifier = "editor.canvas"
-        canvas.accessibilityValue = "strokes:0" 
+        canvas.accessibilityValue = "strokes:0"
         canvas.contentSize = CGSize(width: Self.pageWidth, height: Self.minimumHeight)
         canvas.minimumZoomScale = 0.25
         canvas.maximumZoomScale = 3
+
+        undoController.attach(container.pageUndoManager)
 
         let picker = context.coordinator.toolPicker
         picker.setVisible(true, forFirstResponder: canvas)
@@ -163,9 +256,10 @@ struct EditorCanvasView: UIViewRepresentable {
 
     func updateUIView(_ container: CanvasContainerView, context: Context) {
         let canvas = container.canvas
-        // Background may arrive/change without a page switch; setBackground is idempotent
-        // and never touches canvas.drawing.
+        // Background and images may arrive/change without a page switch; both setters are
+        // idempotent and never touch canvas.drawing.
         container.setBackground(background)
+        container.setImages(images)
         // Load canvas content ONLY on page switches (found by UI-test bisect): assigning
         // canvas.drawing on ordinary renders cancels in-flight strokes, and PKDrawing
         // equality is identity-like, so a != guard cannot prevent that.
@@ -176,6 +270,11 @@ struct EditorCanvasView: UIViewRepresentable {
         context.coordinator.programmaticUpdate = false
         canvas.accessibilityValue = "strokes:\(drawing.strokes.count)"
         Self.growContent(canvas, for: drawing)
+        // A page switch must not be undoable into the previous page's drawing.
+        container.pageUndoManager.removeAllActions()
+        undoController.refresh()
+        // Restore the persisted scroll position for this page.
+        container.setInitialScroll(pageY: CGFloat(pageScroll))
     }
 
     /// Grows the scrollable height to fit the drawing. An EMPTY drawing has a null bounds
@@ -200,11 +299,15 @@ struct EditorCanvasView: UIViewRepresentable {
         weak var container: CanvasContainerView?
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            container?.updateBackgroundGeometry()
+            container?.updateContentGeometry()
+            parent.scrollState.pageY =
+                scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
         }
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
-            container?.updateBackgroundGeometry()
+            container?.updateContentGeometry()
+            parent.scrollState.pageY =
+                scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
         }
 
         init(_ parent: EditorCanvasView) {
