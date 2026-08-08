@@ -57,4 +57,38 @@ enum BackgroundRenderer {
         cache.setObject(image, forKey: key)
         return image
     }
+
+    // MARK: - Page images
+
+    /// Resolves an ImageDTO uri to a file URL. Relative uris ("images/abc.jpg") resolve
+    /// under the notebook dir as-is; device-absolute Android paths (which some synced
+    /// pages carry) resolve by basename under the notebook's `images/` dir.
+    static func imageFileURL(uri: String?, notebookDir: URL) -> URL? {
+        guard let uri, !uri.isEmpty else { return nil }
+        if uri.hasPrefix("/") {
+            let basename = (uri as NSString).lastPathComponent
+            guard !basename.isEmpty, basename != "/" else { return nil }
+            return notebookDir
+                .appendingPathComponent("images", isDirectory: true)
+                .appendingPathComponent(basename)
+        }
+        return notebookDir.appendingPathComponent(uri)
+    }
+
+    /// Decodes a page's images from disk, keyed to their page-space frames.
+    /// Missing, unreadable, or degenerate (non-positive size) entries are skipped silently.
+    static func pageImages(for page: PageFile, notebookDir: URL) -> [PageImage] {
+        page.images.compactMap { dto in
+            guard dto.width > 0, dto.height > 0,
+                  let url = imageFileURL(uri: dto.uri, notebookDir: notebookDir),
+                  FileManager.default.fileExists(atPath: url.path),
+                  let image = UIImage(contentsOfFile: url.path)
+            else { return nil }
+            return PageImage(
+                image: image,
+                frame: CGRect(
+                    x: CGFloat(dto.x), y: CGFloat(dto.y),
+                    width: CGFloat(dto.width), height: CGFloat(dto.height)))
+        }
+    }
 }

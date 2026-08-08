@@ -1,16 +1,33 @@
 import PencilKit
 import UIKit
 
-/// Hosts the PKCanvasView with a page background (e.g. a rendered PDF page) BEHIND the ink.
-/// The background is a sibling under the canvas, kept aligned with the canvas's scroll
-/// offset and zoom (PencilKit offers no built-in background layer).
+/// A decoded page image with its frame in page coordinates (unzoomed).
+struct PageImage {
+    let image: UIImage
+    let frame: CGRect
+}
+
+/// Hosts the PKCanvasView over the page content layer BEHIND the ink: the page background
+/// (e.g. a rendered PDF page) plus any positioned page images. The content views are
+/// siblings under the canvas, kept aligned with the canvas's scroll offset and zoom
+/// (PencilKit offers no built-in background layer).
 final class CanvasContainerView: UIView {
     let canvas = PKCanvasView()
     private let backgroundImageView = UIImageView()
+    private var imageViews: [UIImageView] = []
     private var didSetInitialZoom = false
+    private var pendingScrollY: CGFloat?
 
     var pageWidth: CGFloat = 1404
     private(set) var backgroundImage: UIImage?
+    private(set) var pageImages: [PageImage] = []
+
+    /// PKCanvasView looks up its UndoManager through the responder chain, and SwiftUI's
+    /// hosting controller does not supply one — which leaves the tool picker's undo/redo
+    /// buttons inert. Owning a manager here puts it on the chain right above the canvas,
+    /// so PencilKit registers drawing edits with it and EditorView can drive/observe it.
+    let pageUndoManager = UndoManager()
+    override var undoManager: UndoManager? { pageUndoManager }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -38,7 +55,11 @@ final class CanvasContainerView: UIView {
                 canvas.zoomScale = fit
             }
         }
-        updateBackgroundGeometry()
+        if didSetInitialZoom, let pendingScrollY {
+            self.pendingScrollY = nil
+            applyScroll(pageY: pendingScrollY)
+        }
+        updateContentGeometry()
     }
 
     func setBackground(_ image: UIImage?) {
@@ -52,23 +73,71 @@ final class CanvasContainerView: UIView {
                 canvas.contentSize.height = contentHeight * canvas.zoomScale
             }
         }
-        updateBackgroundGeometry()
+        updateContentGeometry()
     }
 
-    /// Called on init, layout, scroll, and zoom.
-    func updateBackgroundGeometry() {
-        guard let image = backgroundImage else {
-            backgroundImageView.isHidden = true
-            return
+    /// Replaces the page image layer. Idempotent: no-op when the same images (by object
+    /// identity) at the same page frames are already installed.
+    func setImages(_ images: [PageImage]) {
+        let unchanged = images.count == pageImages.count
+            && zip(images, pageImages).allSatisfy { $0.image === $1.image && $0.frame == $1.frame }
+        guard !unchanged else { return }
+        pageImages = images
+        for view in imageViews { view.removeFromSuperview() }
+        imageViews = images.map { pageImage in
+            let view = UIImageView(image: pageImage.image)
+            view.contentMode = .scaleToFill
+            view.clipsToBounds = true
+            // Above the page background, below the ink.
+            insertSubview(view, belowSubview: canvas)
+            return view
         }
-        backgroundImageView.isHidden = false
+        updateContentGeometry()
+    }
+
+    /// Scrolls to a persisted unzoomed page-space y offset. Applied immediately once the
+    /// initial layout/zoom has happened; before that it is deferred to the first layout
+    /// pass (zoomScale is not final until then).
+    func setInitialScroll(pageY: CGFloat) {
+        let y = max(0, pageY)
+        if didSetInitialZoom {
+            applyScroll(pageY: y)
+        } else {
+            pendingScrollY = y
+        }
+    }
+
+    private func applyScroll(pageY: CGFloat) {
+        let target = pageY * canvas.zoomScale
+        let maxOffset = max(canvas.contentSize.height - canvas.bounds.height, 0)
+        canvas.contentOffset.y = min(max(target, 0), maxOffset)
+    }
+
+    /// Called on init, layout, scroll, and zoom. Keeps the content layer (background +
+    /// page images) aligned with the canvas content: page coordinates scaled by zoom,
+    /// translated by the scroll offset.
+    func updateContentGeometry() {
         let scale = canvas.zoomScale
-        let width = pageWidth * scale
-        let height = width * image.size.height / image.size.width
-        backgroundImageView.frame = CGRect(
-            x: -canvas.contentOffset.x,
-            y: -canvas.contentOffset.y,
-            width: width,
-            height: height)
+        let offset = canvas.contentOffset
+        if let image = backgroundImage {
+            backgroundImageView.isHidden = false
+            let width = pageWidth * scale
+            let height = width * image.size.height / image.size.width
+            backgroundImageView.frame = CGRect(
+                x: -offset.x,
+                y: -offset.y,
+                width: width,
+                height: height)
+        } else {
+            backgroundImageView.isHidden = true
+        }
+        for (view, pageImage) in zip(imageViews, pageImages) {
+            let f = pageImage.frame
+            view.frame = CGRect(
+                x: f.origin.x * scale - offset.x,
+                y: f.origin.y * scale - offset.y,
+                width: f.width * scale,
+                height: f.height * scale)
+        }
     }
 }
