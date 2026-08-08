@@ -9,12 +9,11 @@
 /* Begin PBXBuildFile section */
 		02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37AA22765996393FB323A60 /* EditorView.swift */; };
 		29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */; };
-		3CFEC301B1ED29B4D9CFF6ED /* BackgroundRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27BB5272061EA302A49313CA /* BackgroundRenderer.swift */; };
 		5677850903A70C8887A2C384 /* NotableKit in Frameworks */ = {isa = PBXBuildFile; productRef = EAF3412FA66289006396A938 /* NotableKit */; };
 		60E3A5838850A4ADDF75230D /* DrawingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */; };
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
+		836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */; };
 		A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */; };
-		C10E0057637247CCB7ED659A /* CanvasContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CE531A38B3D637083298DA9 /* CanvasContainerView.swift */; };
 		C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */; };
 		CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8D206021F65D447A23CFD5 /* LibraryView.swift */; };
 		D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */; };
@@ -44,8 +43,6 @@
 		13EC02E525247FA06BC975D5 /* BopaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BopaApp.swift; sourceTree = "<group>"; };
 		16D436CB210A8416B43424AF /* BopaUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BopaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareCanvasUITests.swift; sourceTree = "<group>"; };
-		27BB5272061EA302A49313CA /* BackgroundRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundRenderer.swift; sourceTree = "<group>"; };
-		2CE531A38B3D637083298DA9 /* CanvasContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasContainerView.swift; sourceTree = "<group>"; };
 		2D3EA159F6A8667952EEF771 /* BareCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareCanvas.swift; sourceTree = "<group>"; };
 		3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingUITests.swift; sourceTree = "<group>"; };
 		3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridgeTests.swift; sourceTree = "<group>"; };
@@ -54,6 +51,7 @@
 		51065DC8A1BE9070F3A77ADB /* Bopa.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bopa.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5C1F470FDAB39308F0A7795F /* NotebookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStore.swift; sourceTree = "<group>"; };
 		B37AA22765996393FB323A60 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
+		B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
 		DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettings.swift; sourceTree = "<group>"; };
 		E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridge.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -111,10 +109,8 @@
 		EBB9433109DCADDCCB9E64EC /* Sources */ = {
 			isa = PBXGroup;
 			children = (
-				27BB5272061EA302A49313CA /* BackgroundRenderer.swift */,
 				2D3EA159F6A8667952EEF771 /* BareCanvas.swift */,
 				13EC02E525247FA06BC975D5 /* BopaApp.swift */,
-				2CE531A38B3D637083298DA9 /* CanvasContainerView.swift */,
 				B37AA22765996393FB323A60 /* EditorView.swift */,
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
 				5C1F470FDAB39308F0A7795F /* NotebookStore.swift */,
@@ -127,6 +123,7 @@
 		F98CDBC573F54114A6329452 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */,
 				3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */,
 			);
 			path = Tests;
@@ -242,6 +239,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */,
 				29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -250,10 +248,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				3CFEC301B1ED29B4D9CFF6ED /* BackgroundRenderer.swift in Sources */,
 				F6A26EF4A3D7C39C2ECB8579 /* BareCanvas.swift in Sources */,
 				78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */,
-				C10E0057637247CCB7ED659A /* CanvasContainerView.swift in Sources */,
 				02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */,
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
 				EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */,
