@@ -152,4 +152,23 @@ while sqlite3_step(stmt) == SQLITE_ROW {
 }
 sqlite3_finalize(stmt)
 
-print("imported \(notebookCount) notebooks, \(pageWrites) pages, \(strokeCount) strokes -> \(outRoot.path)")
+// Folders -> folders.json (same columns as the wire DTO; timestamps are epoch millis).
+var folders: [FolderDTO] = []
+if sqlite3_prepare_v2(db, "SELECT id,title,parentFolderId,createdAt,updatedAt FROM Folder", -1, &stmt, nil) == SQLITE_OK {
+    while sqlite3_step(stmt) == SQLITE_ROW {
+        folders.append(FolderDTO(
+            id: text(stmt, 0)!,
+            title: text(stmt, 1) ?? "Untitled",
+            parentFolderId: text(stmt, 2),
+            createdAt: iso(sqlite3_column_int64(stmt, 3)),
+            updatedAt: iso(sqlite3_column_int64(stmt, 4))))
+    }
+    sqlite3_finalize(stmt)
+}
+if !folders.isEmpty {
+    try! FileManager.default.createDirectory(at: outRoot, withIntermediateDirectories: true)
+    let file = FoldersFile(folders: folders, serverTimestamp: NotableDate.format(Date()))
+    try! encoder.encode(file).write(to: outRoot.appendingPathComponent("folders.json"))
+}
+
+print("imported \(notebookCount) notebooks, \(pageWrites) pages, \(strokeCount) strokes, \(folders.count) folders -> \(outRoot.path)")

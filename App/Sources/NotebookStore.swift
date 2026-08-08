@@ -7,6 +7,7 @@ import NotableKit
 @MainActor
 final class NotebookStore: ObservableObject {
     @Published private(set) var notebooks: [NotebookManifest] = []
+    @Published private(set) var folders: [FolderDTO] = []
 
     let rootURL: URL
 
@@ -37,6 +38,9 @@ final class NotebookStore: ObservableObject {
     private func pageURL(notebookId: String, pageId: String) -> URL {
         notebookDir(notebookId).appendingPathComponent("pages/\(pageId).json")
     }
+    private var foldersURL: URL {
+        rootURL.appendingPathComponent("folders.json")
+    }
 
     func refresh() {
         let notebooksDir = rootURL.appendingPathComponent("notebooks", isDirectory: true)
@@ -46,9 +50,13 @@ final class NotebookStore: ObservableObject {
             return try? decoder.decode(NotebookManifest.self, from: data)
         }
         .sorted { ($0.updatedAt, $0.title) > ($1.updatedAt, $1.title) }
+
+        folders = ((try? Data(contentsOf: foldersURL))
+            .flatMap { try? decoder.decode(FoldersFile.self, from: $0) }?.folders ?? [])
+            .sorted { ($0.title.localizedLowercase, $0.id) < ($1.title.localizedLowercase, $1.id) }
     }
 
-    func createNotebook(title: String) throws -> NotebookManifest {
+    func createNotebook(title: String, parentFolderId: String? = nil) throws -> NotebookManifest {
         let now = NotableDate.format(Date())
         let notebookId = UUID().uuidString.lowercased()
         let pageId = UUID().uuidString.lowercased()
@@ -58,6 +66,7 @@ final class NotebookStore: ObservableObject {
             createdAt: now, updatedAt: now)
         let manifest = NotebookManifest(
             notebookId: notebookId, title: title, pageIds: [pageId], openPageId: pageId,
+            parentFolderId: parentFolderId,
             createdAt: now, updatedAt: now, serverTimestamp: now)
 
         try FileManager.default.createDirectory(
@@ -112,5 +121,91 @@ final class NotebookStore: ObservableObject {
         try FileManager.default.createDirectory(
             at: notebookDir(manifest.notebookId), withIntermediateDirectories: true)
         try encoder.encode(manifest).write(to: manifestURL(manifest.notebookId))
+    }
+
+    // MARK: - Notebook management
+
+    func renameNotebook(id: String, title: String) throws {
+        guard var manifest = manifest(id: id) else { throw CocoaError(.fileNoSuchFile) }
+        manifest.title = title
+        manifest.updatedAt = NotableDate.format(Date())
+        try writeManifest(manifest)
+        refresh()
+    }
+
+    func moveNotebook(id: String, toFolder folderId: String?) throws {
+        guard var manifest = manifest(id: id) else { throw CocoaError(.fileNoSuchFile) }
+        manifest.parentFolderId = folderId
+        manifest.updatedAt = NotableDate.format(Date())
+        try writeManifest(manifest)
+        refresh()
+    }
+
+    /// Removes the local directory and records the id as a pending deletion; the sync
+    /// engine uploads the tombstone at the start of the next sync (works offline).
+    func deleteNotebook(id: String) throws {
+        try FileManager.default.removeItem(at: notebookDir(id))
+        PendingDeletions.add(id, root: rootURL)
+        refresh()
+    }
+
+    // MARK: - Folders
+
+    @discardableResult
+    func createFolder(title: String, parentFolderId: String? = nil) throws -> FolderDTO {
+        let now = NotableDate.format(Date())
+        let folder = FolderDTO(
+            id: UUID().uuidString.lowercased(), title: title,
+            parentFolderId: parentFolderId, createdAt: now, updatedAt: now)
+        try writeFolders(folders + [folder])
+        return folder
+    }
+
+    func renameFolder(id: String, title: String) throws {
+        var all = folders
+        guard let index = all.firstIndex(where: { $0.id == id }) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        all[index].title = title
+        all[index].updatedAt = NotableDate.format(Date())
+        try writeFolders(all)
+    }
+
+    /// Only empty folders (no subfolders, no notebooks) may be deleted.
+    func deleteFolder(id: String) throws {
+        guard isFolderEmpty(id) else { throw CocoaError(.fileWriteInvalidFileName) }
+        try writeFolders(folders.filter { $0.id != id })
+    }
+
+    private func writeFolders(_ folders: [FolderDTO]) throws {
+        let file = FoldersFile(
+            folders: folders.sorted { $0.id < $1.id },
+            serverTimestamp: NotableDate.format(Date()))
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try encoder.encode(file).write(to: foldersURL)
+        refresh()
+    }
+
+    // MARK: - Folder queries
+
+    func folders(in parentFolderId: String?) -> [FolderDTO] {
+        folders.filter { $0.parentFolderId == parentFolderId }
+    }
+
+    func notebooks(in parentFolderId: String?) -> [NotebookManifest] {
+        notebooks.filter { $0.parentFolderId == parentFolderId }
+    }
+
+    func folder(id: String) -> FolderDTO? {
+        folders.first { $0.id == id }
+    }
+
+    /// Direct children (subfolders + notebooks) of a folder.
+    func itemCount(in folderId: String) -> Int {
+        folders(in: folderId).count + notebooks(in: folderId).count
+    }
+
+    func isFolderEmpty(_ id: String) -> Bool {
+        itemCount(in: id) == 0
     }
 }

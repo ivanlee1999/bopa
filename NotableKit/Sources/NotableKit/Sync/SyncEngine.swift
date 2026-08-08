@@ -55,7 +55,23 @@ public actor SyncEngine {
             return report
         }
 
-        // 1. Tombstones: a deletion wins over existence.
+        // 1. Flush deletions recorded while offline: PUT a zero-byte tombstone per pending
+        // id, then clear it. Failed ids stay pending for the next sync.
+        for id in PendingDeletions.load(root: rootURL) {
+            do {
+                try await dav.put(NotableSyncPaths.tombstone(id), data: Data())
+                try? FileManager.default.removeItem(at: localNotebookDir(id))
+                state[id] = nil
+                PendingDeletions.remove(id, root: rootURL)
+            } catch {
+                report.errors.append("\(id): pending deletion failed (\(error))")
+            }
+        }
+
+        // 2. Folder tree (single-file union merge, docs §2).
+        await syncFolders(&report)
+
+        // 3. Tombstones: a deletion wins over existence.
         let tombstones = await fetchTombstoneIds(&report)
         for id in tombstones {
             if localNotebookExists(id) {
@@ -65,7 +81,7 @@ public actor SyncEngine {
             }
         }
 
-        // 2. Inventory.
+        // 4. Inventory.
         let localIds = listLocalNotebookIds().subtracting(tombstones)
         var remoteIds = Set<String>()
         do {
@@ -79,7 +95,7 @@ public actor SyncEngine {
         }
         remoteIds.subtract(tombstones)
 
-        // 3. Reconcile the union.
+        // 5. Reconcile the union.
         for id in localIds.union(remoteIds).sorted() {
             do {
                 switch (localIds.contains(id), remoteIds.contains(id)) {
@@ -237,15 +253,74 @@ public actor SyncEngine {
         }
     }
 
+    // MARK: - Folders
+
+    /// Union-by-id merge of `<root>/folders.json` with `/notable/folders.json`; newer
+    /// `updatedAt` wins per folder. PUTs only when the merge changed the remote view,
+    /// and rewrites the local file only when it differs from the merged result.
+    private func syncFolders(_ report: inout SyncReport) async {
+        let localURL = rootURL.appendingPathComponent("folders.json")
+        let localFile = (try? Data(contentsOf: localURL))
+            .flatMap { try? JSONDecoder().decode(FoldersFile.self, from: $0) }
+
+        var remoteFile: FoldersFile?
+        var remoteData: Data?
+        do {
+            let result = try await dav.get(NotableSyncPaths.foldersFile)
+            remoteData = result.data
+            remoteFile = try? JSONDecoder().decode(FoldersFile.self, from: result.data)
+        } catch WebDAVError.notFound {
+            // Absent remote: treated as empty.
+        } catch {
+            report.errors.append("folders: \(error)")
+            return
+        }
+        guard localFile != nil || remoteData != nil else { return }
+
+        let merged = FolderMerge.merge(
+            local: localFile?.folders ?? [], remote: remoteFile?.folders ?? [])
+        let remoteSorted = (remoteFile?.folders ?? []).sorted { $0.id < $1.id }
+        let localSorted = (localFile?.folders ?? []).sorted { $0.id < $1.id }
+
+        try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        if merged != remoteSorted || remoteFile == nil {
+            let out = FoldersFile(folders: merged, serverTimestamp: NotableDate.format(Date()))
+            do {
+                let data = try JSONEncoder().encode(out)
+                try await dav.put(NotableSyncPaths.foldersFile, data: data)
+                try? data.write(to: localURL)
+                report.uploaded.append("folders.json")
+            } catch {
+                report.errors.append("folders: \(error)")
+            }
+        } else if merged != localSorted || localFile == nil {
+            // Remote view already matches the merge; adopt its exact bytes locally.
+            if let remoteData {
+                try? remoteData.write(to: localURL)
+                report.downloaded.append("folders.json")
+            }
+        }
+    }
+
     // MARK: - Tombstones
 
+    /// Deletes locally and records the id as pending, then tries to tombstone the server
+    /// immediately. Offline is fine: the id stays pending and the tombstone is uploaded
+    /// at the start of the next sync.
     public func deleteNotebook(_ id: String) async throws {
+        if state.isEmpty { loadState() }
         try? FileManager.default.removeItem(at: localNotebookDir(id))
         state[id] = nil
-        try await dav.makeCollection(NotableSyncPaths.root)
-        try await dav.makeCollection(NotableSyncPaths.tombstonesDir)
-        try await dav.put(NotableSyncPaths.tombstone(id), data: Data())
+        PendingDeletions.add(id, root: rootURL)
         saveState()
+        do {
+            try await dav.makeCollection(NotableSyncPaths.root)
+            try await dav.makeCollection(NotableSyncPaths.tombstonesDir)
+            try await dav.put(NotableSyncPaths.tombstone(id), data: Data())
+            PendingDeletions.remove(id, root: rootURL)
+        } catch {
+            // Server unreachable: deletion stays pending.
+        }
     }
 
     private func fetchTombstoneIds(_ report: inout SyncReport) async -> Set<String> {
