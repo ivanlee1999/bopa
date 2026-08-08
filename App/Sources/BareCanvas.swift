@@ -60,7 +60,7 @@ struct DiagnosticHost: View {
     @ViewBuilder
     private var core: some View {
         if CommandLine.arguments.contains("--bare-editorcanvas") {
-            EditorCanvasView(pageId: "diag", drawing: $drawing, onChanged: {})
+            EditorCanvasView(pageId: "diag", background: nil, drawing: $drawing, onChanged: {})
         } else {
             BareCanvasScreen()
         }

@@ -11,6 +11,7 @@ struct EditorView: View {
     @State private var pageId: String?
     @State private var page: PageFile?
     @State private var drawing = PKDrawing()
+    @State private var pageBackground: UIImage?
     @State private var dirty = false
     @State private var saveTask: Task<Void, Never>?
     @State private var loadError: String?
@@ -28,7 +29,7 @@ struct EditorView: View {
                     "Could not open page", systemImage: "exclamationmark.triangle",
                     description: Text(loadError))
             } else {
-                EditorCanvasView(pageId: pageId, drawing: $drawing, onChanged: scheduleSave)
+                EditorCanvasView(pageId: pageId, background: pageBackground, drawing: $drawing, onChanged: scheduleSave)
                     .ignoresSafeArea(edges: .bottom)
             }
         }
@@ -85,6 +86,10 @@ struct EditorView: View {
             page = loaded
             pageId = newPageId
             drawing = PencilKitBridge.drawing(from: loaded.strokes)
+            pageBackground = BackgroundRenderer.image(
+                for: loaded,
+                notebookDir: store.notebookDirURL(notebookId),
+                storeRoot: store.rootURL)
             dirty = false
             loadError = nil
         } catch {
@@ -126,6 +131,7 @@ struct EditorCanvasView: UIViewRepresentable {
     /// `PKCanvasView.drawing` cancels any in-flight stroke, and PKDrawing's equality is
     /// identity-like, so a value-compare guard cannot prevent that (found by UI-test bisect).
     var pageId: String?
+    var background: UIImage?
     @Binding var drawing: PKDrawing
     var onChanged: () -> Void
 
@@ -134,8 +140,10 @@ struct EditorCanvasView: UIViewRepresentable {
     static let pageWidth: CGFloat = 1404
     static let minimumHeight: CGFloat = 3744
 
-    func makeUIView(context: Context) -> PKCanvasView {
-        let canvas = PKCanvasView()
+    func makeUIView(context: Context) -> CanvasContainerView {
+        let container = CanvasContainerView()
+        context.coordinator.container = container
+        let canvas = container.canvas
         canvas.delegate = context.coordinator
         canvas.drawingPolicy = .anyInput
         canvas.tool = PKInkingTool(.pen, color: .black, width: 5)
@@ -150,10 +158,14 @@ struct EditorCanvasView: UIViewRepresentable {
         picker.setVisible(true, forFirstResponder: canvas)
         picker.addObserver(canvas)
         canvas.becomeFirstResponder()
-        return canvas
+        return container
     }
 
-    func updateUIView(_ canvas: PKCanvasView, context: Context) {
+    func updateUIView(_ container: CanvasContainerView, context: Context) {
+        let canvas = container.canvas
+        // Background may arrive/change without a page switch; setBackground is idempotent
+        // and never touches canvas.drawing.
+        container.setBackground(background)
         // Load canvas content ONLY on page switches (found by UI-test bisect): assigning
         // canvas.drawing on ordinary renders cancels in-flight strokes, and PKDrawing
         // equality is identity-like, so a != guard cannot prevent that.
@@ -185,6 +197,15 @@ struct EditorCanvasView: UIViewRepresentable {
         let toolPicker = PKToolPicker()
         var programmaticUpdate = false
         var loadedPageId: String?
+        weak var container: CanvasContainerView?
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            container?.updateBackgroundGeometry()
+        }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            container?.updateBackgroundGeometry()
+        }
 
         init(_ parent: EditorCanvasView) {
             self.parent = parent

@@ -27,6 +27,10 @@ final class NotebookStore: ObservableObject {
     private func notebookDir(_ id: String) -> URL {
         rootURL.appendingPathComponent("notebooks/\(id)", isDirectory: true)
     }
+
+    nonisolated func notebookDirURL(_ id: String) -> URL {
+        rootURL.appendingPathComponent("notebooks/\(id)", isDirectory: true)
+    }
     private func manifestURL(_ id: String) -> URL {
         notebookDir(id).appendingPathComponent("manifest.json")
     }
