@@ -25,8 +25,11 @@ fully editable, stroke by stroke, on the other — pressure and tilt included.
       pressure/tilt/dt channels), manifest/page/folders JSON, round-trip test suite
 - [x] **M2 — iPad app MVP:** notebook browser + PencilKit canvas; open/edit/save Notable
       notebooks locally; PKDrawing ↔ Notable stroke conversion
-- [ ] **M3 — Sync engine:** WebDAV client (PROPFIND/GET/PUT/MKCOL), ETag + If-Match
-      reconciliation, tombstones — interoperating with a live Notable instance
+- [x] **M3 — Sync engine:** WebDAV client (PROPFIND/GET/PUT/MKCOL), ETag + If-Match
+      reconciliation, tombstones; verified two-device convergence against a real WebDAV
+      server (rclone)
+- [ ] **M3.5 — Live interop:** sync with the actual BOOX Tab 10 C running Notable against
+      Ivan's WebDAV server; verify a note edited on both devices round-trips
 - [ ] **M4 — Polish:** pen/background mapping parity, images, conflict UX, PDF export
 
 ## Repo layout
