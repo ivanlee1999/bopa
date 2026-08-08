@@ -54,16 +54,23 @@ private struct FolderContentsView: View {
                         description: Text("Create a notebook or folder here with the toolbar."))
                 }
             } else {
-                List {
-                    ForEach(subfolders, id: \.id) { folder in
-                        folderRow(folder)
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 190, maximum: 250), spacing: 20, alignment: .top)],
+                        alignment: .leading, spacing: 24
+                    ) {
+                        ForEach(subfolders, id: \.id) { folder in
+                            folderCard(folder)
+                        }
+                        ForEach(notebooks, id: \.notebookId) { notebook in
+                            notebookCard(notebook)
+                        }
                     }
-                    ForEach(notebooks, id: \.notebookId) { notebook in
-                        notebookRow(notebook)
-                    }
+                    .padding(20)
                 }
             }
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle(folderId.flatMap { store.folder(id: $0)?.title } ?? "bopa")
         .toolbar {
             NavigationLink {
@@ -139,21 +146,35 @@ private struct FolderContentsView: View {
         .onAppear { store.refresh() }
     }
 
-    // MARK: Rows
+    // MARK: Cards
 
-    private func folderRow(_ folder: FolderDTO) -> some View {
+    private func folderCard(_ folder: FolderDTO) -> some View {
         NavigationLink(value: FolderRef(id: folder.id)) {
-            HStack(spacing: 12) {
-                Image(systemName: "folder")
-                    .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+                    .overlay {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.tint.opacity(0.8))
+                    }
+                    .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.06)))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(folder.title).font(.headline)
+                    Text(folder.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
                     Text(folderSubtitle(folder))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 2)
             }
         }
+        .buttonStyle(.plain)
         .contextMenu {
             Button {
                 renamingFolderId = folder.id
@@ -172,15 +193,23 @@ private struct FolderContentsView: View {
         }
     }
 
-    private func notebookRow(_ notebook: NotebookManifest) -> some View {
+    private func notebookCard(_ notebook: NotebookManifest) -> some View {
         NavigationLink(value: notebook.notebookId) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(notebook.title).font(.headline)
-                Text(notebookSubtitle(notebook))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                cover(for: notebook)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(notebook.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(notebookSubtitle(notebook))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 2)
             }
         }
+        .buttonStyle(.plain)
         .contextMenu {
             Button {
                 renamingNotebookId = notebook.notebookId
@@ -208,6 +237,30 @@ private struct FolderContentsView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    @ViewBuilder
+    private func cover(for notebook: NotebookManifest) -> some View {
+        Group {
+            if let image = ThumbnailRenderer.thumbnail(for: notebook, store: store) {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Color.white
+                    Image(systemName: "pencil.and.scribble")
+                        .font(.system(size: 36))
+                        .foregroundStyle(Color.primary.opacity(0.15))
+                }
+            }
+        }
+        .aspectRatio(3.0 / 4.0, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08)))
+        .shadow(color: .black.opacity(0.10), radius: 5, y: 3)
     }
 
     // MARK: Subtitles

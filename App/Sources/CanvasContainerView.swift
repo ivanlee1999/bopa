@@ -13,6 +13,9 @@ struct PageImage {
 /// (PencilKit offers no built-in background layer).
 final class CanvasContainerView: UIView {
     let canvas = PKCanvasView()
+    /// The "paper": a white sheet behind everything, so the page reads as a page on a desk.
+    /// Deliberately white in both appearances — ink colors are authored against white.
+    private let pageSheet = UIView()
     private let backgroundImageView = UIImageView()
     private var imageViews: [UIImageView] = []
     private var didSetInitialZoom = false
@@ -31,7 +34,13 @@ final class CanvasContainerView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .systemBackground
+        backgroundColor = .secondarySystemBackground
+        pageSheet.backgroundColor = .white
+        pageSheet.layer.shadowColor = UIColor.black.cgColor
+        pageSheet.layer.shadowOpacity = 0.12
+        pageSheet.layer.shadowRadius = 8
+        pageSheet.layer.shadowOffset = CGSize(width: 0, height: 2)
+        addSubview(pageSheet)
         backgroundImageView.contentMode = .scaleAspectFit
         backgroundImageView.isHidden = true
         addSubview(backgroundImageView)
@@ -119,6 +128,11 @@ final class CanvasContainerView: UIView {
     func updateContentGeometry() {
         let scale = canvas.zoomScale
         let offset = canvas.contentOffset
+        pageSheet.frame = CGRect(
+            x: -offset.x,
+            y: -offset.y,
+            width: pageWidth * scale,
+            height: max(canvas.contentSize.height, bounds.height * 2))
         if let image = backgroundImage {
             backgroundImageView.isHidden = false
             let width = pageWidth * scale
