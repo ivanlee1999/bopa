@@ -54,6 +54,7 @@ final class DrawingUITests: XCTestCase {
     @MainActor
     func testFingerDragProducesStroke() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool"]
         app.launch()
 
         let canvas = openFreshNotebook(app)
@@ -74,6 +75,7 @@ final class DrawingUITests: XCTestCase {
     @MainActor
     func testUndoRemovesJustDrawnStrokeAndRedoRestoresIt() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool"]
         app.launch()
 
         let canvas = openFreshNotebook(app)

@@ -20,6 +20,9 @@ struct BareCanvasScreen: UIViewRepresentable {
         }
         if CommandLine.arguments.contains("--bare-picker") {
             let picker = context.coordinator.toolPicker
+            if CommandLine.arguments.contains("--uitest-reset-tool") {
+                picker.selectedTool = PKInkingTool(.pen, color: .black, width: 5)
+            }
             picker.setVisible(true, forFirstResponder: canvas)
             picker.addObserver(canvas)
             canvas.becomeFirstResponder()

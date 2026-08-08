@@ -248,6 +248,11 @@ struct EditorCanvasView: UIViewRepresentable {
         undoController.attach(container.pageUndoManager)
 
         let picker = context.coordinator.toolPicker
+        if CommandLine.arguments.contains("--uitest-reset-tool") {
+            // PKToolPicker persists the last-selected tool per app; a leftover eraser
+            // makes drawing tests silently no-op. Tests opt into a known pen.
+            picker.selectedTool = PKInkingTool(.pen, color: .black, width: 5)
+        }
         picker.setVisible(true, forFirstResponder: canvas)
         picker.addObserver(canvas)
         canvas.becomeFirstResponder()

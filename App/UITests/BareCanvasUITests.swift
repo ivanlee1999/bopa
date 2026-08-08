@@ -15,6 +15,7 @@ final class BareCanvasUITests: XCTestCase {
         try drag(args: ["--bare-canvas", "--bare-editorcanvas"], identifier: "editor.canvas")
     }
 
+
     @MainActor
     func testEditorCanvasWithNav() throws {
         try drag(args: ["--bare-canvas", "--bare-editorcanvas", "--bare-nav"], identifier: "editor.canvas")
@@ -23,7 +24,7 @@ final class BareCanvasUITests: XCTestCase {
     @MainActor
     private func drag(args: [String], identifier: String = "bare.canvas") throws {
         let app = XCUIApplication()
-        app.launchArguments = args
+        app.launchArguments = args + ["--uitest-reset-tool"]
         app.launch()
 
         let canvas = app.descendants(matching: .any)[identifier].firstMatch
