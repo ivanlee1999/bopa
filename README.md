@@ -21,7 +21,7 @@ fully editable, stroke by stroke, on the other — pressure and tilt included.
 - [x] Reverse-document Notable's sync protocol (pinned at v0.2.6, `eb3a4c1`)
 - [x] **M0 (hardware validation):** Notable APK on the BOOX Tab 10 C — verify raw-pen latency and
       WebDAV sync against the target server
-- [ ] **M1 — NotableKit (Swift package):** codec for the SB stroke binary (polyline, LZ4 block,
+- [x] **M1 — NotableKit (Swift package):** codec for the SB stroke binary (polyline, LZ4 block,
       pressure/tilt/dt channels), manifest/page/folders JSON, round-trip test suite
 - [ ] **M2 — iPad app MVP:** notebook browser + PencilKit canvas; open/edit/save Notable
       notebooks locally; PKDrawing ↔ Notable stroke conversion
