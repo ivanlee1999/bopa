@@ -19,7 +19,7 @@ fully editable, stroke by stroke, on the other — pressure and tilt included.
 
 - [x] Research interop options (BOOX `.note` is a dead end over WebDAV; PDF loop flattens ink)
 - [x] Reverse-document Notable's sync protocol (pinned at v0.2.6, `eb3a4c1`)
-- [ ] **M0 (hardware validation):** Notable APK on the BOOX Tab 10 C — verify raw-pen latency and
+- [x] **M0 (hardware validation):** Notable APK on the BOOX Tab 10 C — verify raw-pen latency and
       WebDAV sync against the target server
 - [ ] **M1 — NotableKit (Swift package):** codec for the SB stroke binary (polyline, LZ4 block,
       pressure/tilt/dt channels), manifest/page/folders JSON, round-trip test suite
