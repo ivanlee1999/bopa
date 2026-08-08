@@ -30,6 +30,11 @@ struct LibraryView: View {
             EditorView(notebookId: notebookId)
         }
         .toolbar {
+            NavigationLink {
+                SyncSettingsView()
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
+            }
             Button {
                 newTitle = ""
                 showingNewNotebook = true

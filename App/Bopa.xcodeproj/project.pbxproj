@@ -13,6 +13,7 @@
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
 		C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */; };
 		CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8D206021F65D447A23CFD5 /* LibraryView.swift */; };
+		D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */; };
 		EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1F470FDAB39308F0A7795F /* NotebookStore.swift */; };
 /* End PBXBuildFile section */
 
@@ -35,6 +36,7 @@
 		51065DC8A1BE9070F3A77ADB /* Bopa.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bopa.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5C1F470FDAB39308F0A7795F /* NotebookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStore.swift; sourceTree = "<group>"; };
 		B37AA22765996393FB323A60 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
+		DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettings.swift; sourceTree = "<group>"; };
 		E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridge.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -85,6 +87,7 @@
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
 				5C1F470FDAB39308F0A7795F /* NotebookStore.swift */,
 				E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */,
+				DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -189,6 +192,7 @@
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
 				EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */,
 				C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */,
+				D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
