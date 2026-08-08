@@ -270,23 +270,21 @@ public struct FolderDTO: Codable, Equatable, Sendable {
 /// ISO-8601 UTC timestamps in `java.time.Instant.toString()` style: fractional seconds are
 /// printed only when non-zero, and both variants must parse.
 public enum NotableDate {
-    private static let withFraction: ISO8601DateFormatter = {
+    private static func formatter(fractional: Bool) -> ISO8601DateFormatter {
         let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        f.formatOptions = fractional
+            ? [.withInternetDateTime, .withFractionalSeconds]
+            : [.withInternetDateTime]
         return f
-    }()
-    private static let withoutFraction: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
+    }
 
     public static func parse(_ string: String) -> Date? {
-        withFraction.date(from: string) ?? withoutFraction.date(from: string)
+        formatter(fractional: true).date(from: string)
+            ?? formatter(fractional: false).date(from: string)
     }
 
     public static func format(_ date: Date) -> String {
-        withFraction.string(from: date)
+        formatter(fractional: true).string(from: date)
     }
 }
 
