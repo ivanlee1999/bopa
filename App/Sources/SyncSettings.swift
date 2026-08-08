@@ -72,11 +72,10 @@ enum Keychain {
 
 struct SyncSettingsView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var coordinator: SyncCoordinator
     @Environment(\.dismiss) private var dismiss
 
     @State private var settings = SyncSettings.load()
-    @State private var syncing = false
-    @State private var lastResult: String?
 
     var body: some View {
         Form {
@@ -93,9 +92,10 @@ struct SyncSettingsView: View {
             }
             Section {
                 Button {
-                    Task { await syncNow() }
+                    settings.save()
+                    Task { await coordinator.syncNow(store: store) }
                 } label: {
-                    if syncing {
+                    if coordinator.isSyncing {
                         HStack(spacing: 8) {
                             ProgressView()
                             Text("Syncing…")
@@ -104,35 +104,14 @@ struct SyncSettingsView: View {
                         Label("Sync now", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
-                .disabled(!settings.isConfigured || syncing)
+                .disabled(!settings.isConfigured || coordinator.isSyncing)
             } footer: {
-                if let lastResult {
-                    Text(lastResult)
+                if let detail = coordinator.statusDetail {
+                    Text(detail)
                 }
             }
         }
         .navigationTitle("Sync")
         .onDisappear { settings.save() }
-    }
-
-    @MainActor
-    private func syncNow() async {
-        settings.save()
-        guard let transport = settings.makeTransport() else { return }
-        syncing = true
-        defer { syncing = false }
-
-        let engine = SyncEngine(transport: transport, rootURL: store.rootURL)
-        let report = await engine.sync()
-        store.refresh()
-
-        var parts: [String] = []
-        if !report.uploaded.isEmpty { parts.append("↑\(report.uploaded.count)") }
-        if !report.downloaded.isEmpty { parts.append("↓\(report.downloaded.count)") }
-        if !report.skipped.isEmpty { parts.append("=\(report.skipped.count)") }
-        if !report.deletedLocally.isEmpty { parts.append("🗑\(report.deletedLocally.count)") }
-        if !report.conflicts.isEmpty { parts.append("⚠︎ conflicts: \(report.conflicts.joined(separator: ", "))") }
-        if !report.errors.isEmpty { parts.append("errors: \(report.errors.joined(separator: "; "))") }
-        lastResult = parts.isEmpty ? "Nothing to sync" : parts.joined(separator: "  ")
     }
 }

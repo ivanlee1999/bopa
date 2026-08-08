@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37AA22765996393FB323A60 /* EditorView.swift */; };
+		122E21FD884486D3B1F6AEDC /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */; };
 		29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */; };
 		3CFEC301B1ED29B4D9CFF6ED /* BackgroundRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27BB5272061EA302A49313CA /* BackgroundRenderer.swift */; };
 		5677850903A70C8887A2C384 /* NotableKit in Frameworks */ = {isa = PBXBuildFile; productRef = EAF3412FA66289006396A938 /* NotableKit */; };
@@ -20,6 +21,7 @@
 		D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */; };
 		EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1F470FDAB39308F0A7795F /* NotebookStore.swift */; };
 		F6A26EF4A3D7C39C2ECB8579 /* BareCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D3EA159F6A8667952EEF771 /* BareCanvas.swift */; };
+		F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,8 +53,10 @@
 		3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridgeTests.swift; sourceTree = "<group>"; };
 		3D8D206021F65D447A23CFD5 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		467920EDEC849CD5B59CA33B /* NotableKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NotableKit; path = ../NotableKit; sourceTree = SOURCE_ROOT; };
+		4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		51065DC8A1BE9070F3A77ADB /* Bopa.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bopa.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5C1F470FDAB39308F0A7795F /* NotebookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStore.swift; sourceTree = "<group>"; };
+		660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
 		B37AA22765996393FB323A60 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
 		DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettings.swift; sourceTree = "<group>"; };
 		E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridge.swift; sourceTree = "<group>"; };
@@ -119,6 +123,7 @@
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
 				5C1F470FDAB39308F0A7795F /* NotebookStore.swift */,
 				E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */,
+				660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */,
 				DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */,
 			);
 			path = Sources;
@@ -128,6 +133,7 @@
 			isa = PBXGroup;
 			children = (
 				3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */,
+				4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -243,6 +249,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */,
+				F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -258,6 +265,7 @@
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
 				EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */,
 				C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */,
+				122E21FD884486D3B1F6AEDC /* SyncCoordinator.swift in Sources */,
 				D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
