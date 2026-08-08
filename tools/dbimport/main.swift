@@ -5,6 +5,12 @@ import SQLite3
 // (notebooks/<id>/manifest.json + pages/<pageId>.json) used by the bopa iPad app.
 // Usage: dbimport <app_database> <outputRoot>
 
+enum BackgroundKind {
+    static func isFileBacked(_ type: String) -> Bool {
+        type.hasPrefix("pdf") || type == "autoPdf" || type.hasPrefix("image")
+    }
+}
+
 guard CommandLine.arguments.count == 3 else {
     fatalError("usage: dbimport <app_database> <outputRoot>")
 }
@@ -114,6 +120,27 @@ while sqlite3_step(stmt) == SQLITE_ROW {
 
     let dir = outRoot.appendingPathComponent("notebooks/\(id)/pages")
     try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+    // Copy referenced PDF/image backgrounds (device-absolute paths in the DB; the files
+    // live next to the database). Resolution in the app is by basename.
+    let dbDir = URL(fileURLWithPath: dbPath).deletingLastPathComponent()
+    let bgDir = outRoot.appendingPathComponent("notebooks/\(id)/backgrounds")
+    var copiedBackgrounds: Set<String> = []
+    for pageId in pageIds {
+        guard let page = pages[pageId],
+              BackgroundKind.isFileBacked(page.backgroundType) else { continue }
+        let basename = (page.background as NSString).lastPathComponent
+        guard !basename.isEmpty, !copiedBackgrounds.contains(basename) else { continue }
+        copiedBackgrounds.insert(basename)
+        for sub in ["backgrounds/pdfs", "backgrounds/images", "backgrounds"] {
+            let source = dbDir.appendingPathComponent("\(sub)/\(basename)")
+            if FileManager.default.fileExists(atPath: source.path) {
+                try? FileManager.default.createDirectory(at: bgDir, withIntermediateDirectories: true)
+                try? FileManager.default.copyItem(at: source, to: bgDir.appendingPathComponent(basename))
+                break
+            }
+        }
+    }
     try! encoder.encode(manifest)
         .write(to: outRoot.appendingPathComponent("notebooks/\(id)/manifest.json"))
     for pageId in pageIds {

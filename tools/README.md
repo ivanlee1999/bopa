@@ -16,3 +16,13 @@ swiftc -O NotableKit/Sources/NotableKit/{Polyline,StrokePoint,SBStrokeCodec,Wire
   layout (`notebooks/<id>/manifest.json` + `pages/*.json`), normalizing legacy raw
   pressure. Point outputRoot at the app's `Documents/notable` to import real notebooks
   without any server.
+- `dbexport <app_database> <storeRoot> [notebookId ...]` — the reverse: writes the app's
+  local store back into a (copy of a) Notable database, carrying iPad edits to the BOOX
+  without a server. WAL-checkpointed; replace `app_database` on-device with Notable
+  force-stopped and the old `-wal`/`-shm` files deleted.
+
+Build dbexport:
+
+```bash
+swiftc -O NotableKit/Sources/NotableKit/{Polyline,StrokePoint,SBStrokeCodec,WireModels}.swift tools/dbexport/main.swift -o /tmp/dbexport
+```
