@@ -30,7 +30,12 @@ fully editable, stroke by stroke, on the other — pressure and tilt included.
       server (rclone)
 - [ ] **M3.5 — Live interop:** sync with the actual BOOX Tab 10 C running Notable against
       Ivan's WebDAV server; verify a note edited on both devices round-trips
-- [ ] **M4 — Polish:** pen/background mapping parity, images, conflict UX, PDF export
+- [x] **M4a — App parity batch** (3 parallel agents): folder hierarchy + notebook
+      rename/move/delete (with offline tombstones), page images rendered under the ink,
+      undo/redo, per-page scroll persistence, PDF page backgrounds, auto-sync on
+      launch/foreground with status capsule
+- [ ] **M4b — Remaining polish:** native lined/grid templates, page delete/reorder,
+      share as PDF, handwriting search/OCR, PDF import from iPad
 
 ## Repo layout
 
