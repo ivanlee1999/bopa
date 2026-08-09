@@ -16,6 +16,8 @@ final class MockWebDAVServer: HTTPTransport, @unchecked Sendable {
     private var etagCounter = 0
     /// Paths that force a 500, for failure-injection tests.
     var failingPaths: Set<String> = []
+    /// Every request the client made, for asserting conditional-request behavior.
+    private var requests: [(method: String, path: String, ifNoneMatch: String?)] = []
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         handle(request)
@@ -24,6 +26,7 @@ final class MockWebDAVServer: HTTPTransport, @unchecked Sendable {
     private func handle(_ request: HTTPRequest) -> HTTPResponse {
         lock.withLock {
             let path = normalize(request.path)
+            requests.append((request.method, path, request.headers["If-None-Match"]))
             if failingPaths.contains(path) { return HTTPResponse(status: 500) }
 
             switch request.method {
@@ -136,6 +139,19 @@ final class MockWebDAVServer: HTTPTransport, @unchecked Sendable {
             collections.insert(components.joined(separator: "/"))
             components = components.dropLast()
         }
+    }
+
+    /// Requests recorded so far; `clearRequestLog()` resets it between sync runs.
+    func requestLog() -> [(method: String, path: String, ifNoneMatch: String?)] {
+        lock.withLock { requests }
+    }
+
+    func clearRequestLog() {
+        lock.withLock { requests.removeAll() }
+    }
+
+    func etag(for path: String) -> String? {
+        lock.withLock { files[normalize(path)]?.etag }
     }
 
     func filePaths() -> [String] {

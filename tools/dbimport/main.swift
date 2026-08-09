@@ -17,10 +17,37 @@ guard CommandLine.arguments.count == 3 else {
 let dbPath = CommandLine.arguments[1]
 let outRoot = URL(fileURLWithPath: CommandLine.arguments[2])
 
-var db: OpaquePointer?
-guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
-    fatalError("cannot open \(dbPath)")
+
+/// Opens the database, preferring read-write. A WAL-mode database needs write access to
+/// recover its -wal file (where the newest strokes live), so read-write is tried first and
+/// read-only is the fallback for copies on read-only media.
+func openDatabase(_ path: String) -> OpaquePointer {
+    var handle: OpaquePointer?
+    if sqlite3_open_v2(path, &handle, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let opened = handle {
+        return opened
+    }
+    if handle != nil {
+        sqlite3_close(handle)
+        handle = nil
+    }
+    if sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let opened = handle {
+        FileHandle.standardError.write(
+            Data("note: opened read-only; unflushed -wal content may be missing\n".utf8))
+        return opened
+    }
+    fatalError("cannot open \(path): \(handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error")")
 }
+
+/// Prepares a statement, surfacing SQLite's error instead of returning a nil handle that
+/// would crash the next sqlite3_step.
+func prepare(_ db: OpaquePointer, _ sql: String) -> OpaquePointer {
+    var stmt: OpaquePointer?
+    guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let prepared = stmt else {
+        fatalError("prepare failed for \(sql): \(String(cString: sqlite3_errmsg(db)))")
+    }
+    return prepared
+}
+let db = openDatabase(dbPath)
 defer { sqlite3_close(db) }
 
 func text(_ stmt: OpaquePointer?, _ i: Int32) -> String? {
@@ -35,8 +62,7 @@ encoder.outputFormatting = [.withoutEscapingSlashes]
 
 // Strokes grouped by page
 var strokesByPage: [String: [StrokeDTO]] = [:]
-var stmt: OpaquePointer?
-sqlite3_prepare_v2(db, "SELECT id,size,pen,color,maxPressure,top,bottom,left,right,points,pageId,createdAt,updatedAt FROM Stroke", -1, &stmt, nil)
+var stmt = prepare(db, "SELECT id,size,pen,color,maxPressure,top,bottom,left,right,points,pageId,createdAt,updatedAt FROM Stroke")
 var strokeCount = 0
 while sqlite3_step(stmt) == SQLITE_ROW {
     let blobLen = Int(sqlite3_column_bytes(stmt, 9))
@@ -81,7 +107,7 @@ struct PageRow {
     var file: PageFile
 }
 var pages: [String: PageFile] = [:]
-sqlite3_prepare_v2(db, "SELECT id,scroll,notebookId,background,backgroundType,parentFolderId,createdAt,updatedAt FROM Page", -1, &stmt, nil)
+stmt = prepare(db, "SELECT id,scroll,notebookId,background,backgroundType,parentFolderId,createdAt,updatedAt FROM Page")
 while sqlite3_step(stmt) == SQLITE_ROW {
     let id = text(stmt, 0)!
     pages[id] = PageFile(
@@ -100,7 +126,7 @@ sqlite3_finalize(stmt)
 // Notebooks
 var notebookCount = 0
 var pageWrites = 0
-sqlite3_prepare_v2(db, "SELECT id,title,openPageId,pageIds,parentFolderId,defaultBackground,defaultBackgroundType,linkedExternalUri,createdAt,updatedAt FROM Notebook", -1, &stmt, nil)
+stmt = prepare(db, "SELECT id,title,openPageId,pageIds,parentFolderId,defaultBackground,defaultBackgroundType,linkedExternalUri,createdAt,updatedAt FROM Notebook")
 while sqlite3_step(stmt) == SQLITE_ROW {
     let id = text(stmt, 0)!
     let pageIds = (try? JSONDecoder().decode([String].self, from: Data((text(stmt, 3) ?? "[]").utf8))) ?? []
@@ -154,16 +180,21 @@ sqlite3_finalize(stmt)
 
 // Folders -> folders.json (same columns as the wire DTO; timestamps are epoch millis).
 var folders: [FolderDTO] = []
-if sqlite3_prepare_v2(db, "SELECT id,title,parentFolderId,createdAt,updatedAt FROM Folder", -1, &stmt, nil) == SQLITE_OK {
-    while sqlite3_step(stmt) == SQLITE_ROW {
+// Optional handle, not `prepare`: older databases have no Folder table, and its absence
+// is expected rather than fatal.
+var folderStmt: OpaquePointer?
+if sqlite3_prepare_v2(
+    db, "SELECT id,title,parentFolderId,createdAt,updatedAt FROM Folder", -1, &folderStmt, nil
+) == SQLITE_OK, let folderStmt {
+    while sqlite3_step(folderStmt) == SQLITE_ROW {
         folders.append(FolderDTO(
-            id: text(stmt, 0)!,
-            title: text(stmt, 1) ?? "Untitled",
-            parentFolderId: text(stmt, 2),
-            createdAt: iso(sqlite3_column_int64(stmt, 3)),
-            updatedAt: iso(sqlite3_column_int64(stmt, 4))))
+            id: text(folderStmt, 0)!,
+            title: text(folderStmt, 1) ?? "Untitled",
+            parentFolderId: text(folderStmt, 2),
+            createdAt: iso(sqlite3_column_int64(folderStmt, 3)),
+            updatedAt: iso(sqlite3_column_int64(folderStmt, 4))))
     }
-    sqlite3_finalize(stmt)
+    sqlite3_finalize(folderStmt)
 }
 if !folders.isEmpty {
     try! FileManager.default.createDirectory(at: outRoot, withIntermediateDirectories: true)

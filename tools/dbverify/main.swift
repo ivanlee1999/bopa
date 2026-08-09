@@ -8,17 +8,40 @@ let dbPath = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
     : "boox/b/notabledb/app_database"
 
-var db: OpaquePointer?
-guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
-    fatalError("cannot open \(dbPath)")
+
+/// Opens the database, preferring read-write. A WAL-mode database needs write access to
+/// recover its -wal file (where the newest strokes live), so read-write is tried first and
+/// read-only is the fallback for copies on read-only media.
+func openDatabase(_ path: String) -> OpaquePointer {
+    var handle: OpaquePointer?
+    if sqlite3_open_v2(path, &handle, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let opened = handle {
+        return opened
+    }
+    if handle != nil {
+        sqlite3_close(handle)
+        handle = nil
+    }
+    if sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let opened = handle {
+        FileHandle.standardError.write(
+            Data("note: opened read-only; unflushed -wal content may be missing\n".utf8))
+        return opened
+    }
+    fatalError("cannot open \(path): \(handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error")")
 }
+
+/// Prepares a statement, surfacing SQLite's error instead of returning a nil handle that
+/// would crash the next sqlite3_step.
+func prepare(_ db: OpaquePointer, _ sql: String) -> OpaquePointer {
+    var stmt: OpaquePointer?
+    guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let prepared = stmt else {
+        fatalError("prepare failed for \(sql): \(String(cString: sqlite3_errmsg(db)))")
+    }
+    return prepared
+}
+let db = openDatabase(dbPath)
 defer { sqlite3_close(db) }
 
-var stmt: OpaquePointer?
-let sql = "SELECT id, pen, color, size, maxPressure, points FROM stroke"
-guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-    fatalError("prepare failed: \(String(cString: sqlite3_errmsg(db)))")
-}
+let stmt = prepare(db, "SELECT id, pen, color, size, maxPressure, points FROM stroke")
 defer { sqlite3_finalize(stmt) }
 
 var total = 0

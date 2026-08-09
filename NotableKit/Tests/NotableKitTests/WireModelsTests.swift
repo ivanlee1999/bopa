@@ -100,6 +100,16 @@ final class WireModelsTests: XCTestCase {
         XCTAssertNotNil(NotableDate.parse(NotableDate.format(d)))
     }
 
+    func testFormatOmitsFractionalSecondsWhenZero() {
+        let whole = Date(timeIntervalSince1970: 1_784_800_000)
+        let fractional = Date(timeIntervalSince1970: 1_784_800_000.25)
+
+        XCTAssertFalse(NotableDate.format(whole).contains("."), NotableDate.format(whole))
+        XCTAssertTrue(NotableDate.format(fractional).contains("."), NotableDate.format(fractional))
+        // Both forms must survive a round trip.
+        XCTAssertEqual(NotableDate.parse(NotableDate.format(whole)), whole)
+    }
+
     func testSyncPaths() {
         XCTAssertEqual(NotableSyncPaths.manifestFile("nb"), "/notable/notebooks/nb/manifest.json")
         XCTAssertEqual(NotableSyncPaths.pageFile("nb", "pg"), "/notable/notebooks/nb/pages/pg.json")

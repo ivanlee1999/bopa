@@ -251,6 +251,41 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(report.skipped, ["nb1"])
     }
 
+    func testSkipRefreshesStoredEtagSoNextSyncCanHit304() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+
+        // Remote manifest rewritten with the SAME updatedAt (within tolerance => .skip),
+        // which rotates its ETag. The engine must adopt the new ETag.
+        let remote = try XCTUnwrap(server.fileData("/notable/notebooks/nb1/manifest.json"))
+        server.setFile("/notable/notebooks/nb1/manifest.json", remote)
+        let skipReport = await engine().sync()
+        XCTAssertEqual(skipReport.skipped, ["nb1"])
+
+        server.clearRequestLog()
+        let finalReport = await engine().sync()
+        XCTAssertEqual(finalReport.skipped, ["nb1"])
+
+        let manifestGets = server.requestLog().filter {
+            $0.method == "GET" && $0.path == "/notable/notebooks/nb1/manifest.json"
+        }
+        XCTAssertEqual(manifestGets.count, 1)
+        // A stale ETag would make this conditional GET miss and return a full 200 body.
+        let currentEtag = try XCTUnwrap(server.etag(for: "/notable/notebooks/nb1/manifest.json"))
+        XCTAssertEqual(manifestGets.first?.ifNoneMatch, currentEtag)
+    }
+
+    func testListReturnsOnlyDirectChildren() async throws {
+        server.setFile("/notable/notebooks/nb1/manifest.json", Data("{}".utf8))
+        server.setFile("/notable/notebooks/nb1/pages/p1.json", Data("{}".utf8))
+
+        let children = try await WebDAVClient(transport: server).list("/notable/notebooks/nb1")
+        let names = children.map(\.name).sorted()
+
+        XCTAssertEqual(names, ["manifest.json", "pages"])
+        XCTAssertFalse(names.contains("p1.json"), "grandchildren must not be reported as children")
+    }
+
     func testSyncStateFileNeverUploaded() async throws {
         try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
         _ = await engine().sync()

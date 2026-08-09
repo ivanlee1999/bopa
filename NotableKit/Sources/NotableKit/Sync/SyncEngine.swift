@@ -172,11 +172,19 @@ public actor SyncEngine {
             }
             try await downloadContent(id, manifestData: data, etag: remoteInfo?.etag)
             report.downloaded.append(id)
-        case .skip, .skipUploadOnly, .skipDownloadOnly:
-            // Refresh the state row so future no-op syncs stay cheap.
-            if state[id] == nil {
-                state[id] = NotebookSyncState(localUpdatedAtAtSync: localUpdatedAt, etag: remoteInfo?.etag)
-            }
+        case .skip:
+            // Both sides agree: commit the freshest facts so the next sync's conditional
+            // GET can hit 304. Keeping a stale ETag here would force a full manifest
+            // download on every future sync.
+            state[id] = NotebookSyncState(
+                localUpdatedAtAtSync: localUpdatedAt,
+                etag: remoteInfo?.etag ?? stored?.etag)
+            report.skipped.append(id)
+        case .skipUploadOnly, .skipDownloadOnly:
+            // A transfer was deliberately suppressed by a one-directional mode. Recording
+            // "in sync" here would strand the pending change: once the mode is lifted,
+            // the planner would see no local movement (or an unchanged remote) and never
+            // transfer it. Leave the state untouched.
             report.skipped.append(id)
         }
     }

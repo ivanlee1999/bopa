@@ -284,7 +284,10 @@ public enum NotableDate {
     }
 
     public static func format(_ date: Date) -> String {
-        formatter(fractional: true).string(from: date)
+        // `java.time.Instant.toString()` prints fractional seconds only when they are
+        // non-zero; match that so timestamps we write are shaped like Notable's own.
+        let millis = Int64((date.timeIntervalSince1970 * 1000).rounded())
+        return formatter(fractional: millis % 1000 != 0).string(from: date)
     }
 }
 

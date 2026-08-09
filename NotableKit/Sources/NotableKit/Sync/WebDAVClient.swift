@@ -86,9 +86,19 @@ public struct WebDAVClient: Sendable {
         }
         let all = try MultistatusParser.parse(r.body)
         let normalizedSelf = path.hasSuffix("/") ? String(path.dropLast()) : path
-        // Keep only direct children: the listed collection's own entry is excluded. Some
-        // servers prefix hrefs (e.g. "/dav/notable/..."), so match on suffix of the parent.
-        return all.filter { $0.path != normalizedSelf && $0.path.contains("\(normalizedSelf)/") }
+        // Keep only DIRECT children. Some servers prefix hrefs (e.g. "/dav/notable/...")
+        // so the parent is matched as a substring rather than by equality; requiring
+        // exactly one remaining segment then rejects grandchildren, which a server that
+        // over-reports depth would otherwise smuggle in as if they were children.
+        let marker = "\(normalizedSelf)/"
+        return all.compactMap { resource in
+            guard resource.path != normalizedSelf,
+                  let separator = resource.path.range(of: marker)
+            else { return nil }
+            let remainder = resource.path[separator.upperBound...]
+            guard !remainder.isEmpty, !remainder.contains("/") else { return nil }
+            return resource
+        }
     }
 }
 
