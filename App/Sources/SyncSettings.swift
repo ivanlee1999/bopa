@@ -40,6 +40,62 @@ struct SyncSettings {
     }
 }
 
+// MARK: - Browsing
+
+extension SyncSettings {
+    /// `serverURL` parsed leniently: a missing scheme is assumed to be https so "host/path"
+    /// typed by hand still resolves.
+    private var parsedComponents: URLComponents? {
+        let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let components = URLComponents(string: trimmed), components.scheme != nil {
+            return components
+        }
+        return URLComponents(string: "https://" + trimmed)
+    }
+
+    /// `scheme://host[:port]`, with any path stripped. The folder picker browses from here so
+    /// the entire share is reachable, not just the subtree the user happened to type.
+    var hostRootURL: URL? {
+        guard var components = parsedComponents,
+              components.scheme?.hasPrefix("http") == true,
+              let host = components.host, !host.isEmpty
+        else { return nil }
+        components.percentEncodedPath = ""
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        return components.url
+    }
+
+    /// Currently chosen folder as a server-absolute, percent-**decoded** path — the same
+    /// currency `WebDAVClient`/`DavResource` use. "/" when the URL carries no path.
+    var remotePath: String {
+        RemotePath.normalize(parsedComponents?.path ?? "")
+    }
+
+    /// Right-hand text of the "Folder" row.
+    var remotePathDisplay: String {
+        hostRootURL == nil ? "Not set" : remotePath
+    }
+
+    /// A host plus Basic-auth credentials are the minimum needed to PROPFIND anything.
+    var canBrowse: Bool {
+        hostRootURL != nil && !username.isEmpty && !password.isEmpty
+    }
+
+    /// Transport rooted at the host so `WebDAVClient.list` can be handed absolute server
+    /// paths. Credentials are carried across verbatim from the same fields the sync engine uses.
+    func makeBrowsingTransport() -> URLSessionTransport? {
+        guard let hostRootURL else { return nil }
+        return URLSessionTransport(
+            baseURL: hostRootURL,
+            username: username.isEmpty ? nil : username,
+            password: password.isEmpty ? nil : password)
+    }
+}
+
 enum Keychain {
     static func save(account: String, value: String) {
         let query: [String: Any] = [
@@ -76,6 +132,7 @@ struct SyncSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var settings = SyncSettings.load()
+    @State private var showingFolderPicker = false
 
     var body: some View {
         Form {
@@ -89,6 +146,34 @@ struct SyncSettingsView: View {
                     .autocapitalization(.none)
                     .autocorrectionDisabled()
                 SecureField("Password", text: $settings.password)
+            }
+            Section {
+                // Alternative to typing the URL above, not a replacement: the picker just
+                // rewrites the same `serverURL` field.
+                Button {
+                    settings.save()
+                    showingFolderPicker = true
+                } label: {
+                    HStack {
+                        Text("Folder")
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 12)
+                        Text(settings.remotePathDisplay)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .disabled(!settings.canBrowse)
+                .accessibilityIdentifier("sync.folderRow")
+            } footer: {
+                Text(settings.canBrowse
+                    ? "Browse the server to pick the folder bopa and Notable share."
+                    : "Fill in the address, username and password to browse the server.")
             }
             Section {
                 Button {
@@ -112,6 +197,9 @@ struct SyncSettingsView: View {
             }
         }
         .navigationTitle("Sync")
+        .navigationDestination(isPresented: $showingFolderPicker) {
+            RemoteFolderPicker(settings: $settings)
+        }
         .onDisappear { settings.save() }
     }
 }

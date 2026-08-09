@@ -18,12 +18,14 @@
 		60E3A5838850A4ADDF75230D /* DrawingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */; };
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
 		836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */; };
+		8AA222EE7E1E70A50620353E /* RemoteFolderPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C708E78695B6C125620979F /* RemoteFolderPickerTests.swift */; };
 		A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */; };
 		C10E0057637247CCB7ED659A /* CanvasContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CE531A38B3D637083298DA9 /* CanvasContainerView.swift */; };
 		C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */; };
 		C980C9CF1CD6F2E3D8B74DE7 /* PageImageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */; };
 		CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8D206021F65D447A23CFD5 /* LibraryView.swift */; };
 		D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */; };
+		E46386971C89909F5E7E0CB4 /* RemoteFolderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B5B24D30EBF003DBBA84C9 /* RemoteFolderPicker.swift */; };
 		EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1F470FDAB39308F0A7795F /* NotebookStore.swift */; };
 		F6A26EF4A3D7C39C2ECB8579 /* BareCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D3EA159F6A8667952EEF771 /* BareCanvas.swift */; };
 		F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */; };
@@ -60,7 +62,9 @@
 		467920EDEC849CD5B59CA33B /* NotableKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NotableKit; path = ../NotableKit; sourceTree = SOURCE_ROOT; };
 		4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		51065DC8A1BE9070F3A77ADB /* Bopa.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bopa.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		59B5B24D30EBF003DBBA84C9 /* RemoteFolderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFolderPicker.swift; sourceTree = "<group>"; };
 		5C1F470FDAB39308F0A7795F /* NotebookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStore.swift; sourceTree = "<group>"; };
+		5C708E78695B6C125620979F /* RemoteFolderPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFolderPickerTests.swift; sourceTree = "<group>"; };
 		660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
 		7346F25A719C7EB849AE025F /* Thumbnails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Thumbnails.swift; sourceTree = "<group>"; };
 		9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageImageTests.swift; sourceTree = "<group>"; };
@@ -135,6 +139,7 @@
 				5C1F470FDAB39308F0A7795F /* NotebookStore.swift */,
 				E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */,
 				FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */,
+				59B5B24D30EBF003DBBA84C9 /* RemoteFolderPicker.swift */,
 				660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */,
 				DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */,
 				7346F25A719C7EB849AE025F /* Thumbnails.swift */,
@@ -148,6 +153,7 @@
 				B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */,
 				9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */,
 				3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */,
+				5C708E78695B6C125620979F /* RemoteFolderPickerTests.swift */,
 				4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */,
 			);
 			path = Tests;
@@ -283,6 +289,7 @@
 				836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */,
 				C980C9CF1CD6F2E3D8B74DE7 /* PageImageTests.swift in Sources */,
 				29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */,
+				8AA222EE7E1E70A50620353E /* RemoteFolderPickerTests.swift in Sources */,
 				F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -299,6 +306,7 @@
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
 				EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */,
 				C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */,
+				E46386971C89909F5E7E0CB4 /* RemoteFolderPicker.swift in Sources */,
 				122E21FD884486D3B1F6AEDC /* SyncCoordinator.swift in Sources */,
 				D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */,
 				41553EDB7232E60A06C58F8F /* Thumbnails.swift in Sources */,
