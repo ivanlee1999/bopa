@@ -61,17 +61,24 @@ final class NotebookStore: ObservableObject {
         remoteIndex = RemoteIndex.load(root: rootURL)
     }
 
-    func createNotebook(title: String, parentFolderId: String? = nil) throws -> NotebookManifest {
+    func createNotebook(
+        title: String, parentFolderId: String? = nil, template: NativeTemplate = .blank
+    ) throws -> NotebookManifest {
         let now = NotableDate.format(Date())
         let notebookId = UUID().uuidString.lowercased()
         let pageId = UUID().uuidString.lowercased()
+        let plan = TemplateApplication.plan(pageCount: 1, from: .native(template))
+        let pageFields = plan.pages[0]
 
         let page = PageFile(
             id: pageId, notebookId: notebookId,
+            background: pageFields.background, backgroundType: pageFields.backgroundType,
             createdAt: now, updatedAt: now)
         let manifest = NotebookManifest(
             notebookId: notebookId, title: title, pageIds: [pageId], openPageId: pageId,
             parentFolderId: parentFolderId,
+            defaultBackground: plan.notebookDefaults.background,
+            defaultBackgroundType: plan.notebookDefaults.backgroundType,
             createdAt: now, updatedAt: now, serverTimestamp: now)
 
         try FileManager.default.createDirectory(
@@ -106,13 +113,26 @@ final class NotebookStore: ObservableObject {
         refresh()
     }
 
-    func addPage(to notebookId: String) throws -> PageFile {
+    /// Appends a page. Its paper follows the notebook's own default (what Notable does);
+    /// `fallbackTemplate` applies only when that default is not a native template —
+    /// a PDF-backed notebook's per-page PDF binding is not something we can invent here.
+    func addPage(to notebookId: String, fallbackTemplate: NativeTemplate = .blank) throws -> PageFile {
         guard var manifest = manifest(id: notebookId) else {
             throw CocoaError(.fileNoSuchFile)
         }
         let now = NotableDate.format(Date())
+        let notebookDefault = PageBackground(
+            background: manifest.defaultBackground, backgroundType: manifest.defaultBackgroundType)
+        let template: NativeTemplate
+        if case .native(let native) = notebookDefault {
+            template = native
+        } else {
+            template = fallbackTemplate
+        }
+        let fields = TemplateApplication.pageFields(for: .native(template))
         let page = PageFile(
             id: UUID().uuidString.lowercased(), notebookId: notebookId,
+            background: fields.background, backgroundType: fields.backgroundType,
             createdAt: now, updatedAt: now)
         try encoder.encode(page).write(to: pageURL(notebookId: notebookId, pageId: page.id))
         manifest.pageIds.append(page.id)

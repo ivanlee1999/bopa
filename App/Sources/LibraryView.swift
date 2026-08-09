@@ -52,6 +52,7 @@ struct LibraryView: View {
 /// `folderId == nil` is the library root.
 private struct FolderContentsView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var handwriting: HandwritingSettings
     let folderId: String?
     @Binding var selection: LibrarySelection?
     let openNotebook: (String) -> Void
@@ -109,8 +110,9 @@ private struct FolderContentsView: View {
             Button {
                 showingSyncSettings = true
             } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
+                Image(systemName: "gearshape")
             }
+            .accessibilityIdentifier("library.settings")
             Button {
                 newFolderTitle = ""
                 showingNewFolder = true
@@ -129,7 +131,7 @@ private struct FolderContentsView: View {
         // Presented rather than pushed, for the same reason as the editor.
         .sheet(isPresented: $showingSyncSettings) {
             NavigationStack {
-                SyncSettingsView()
+                SettingsView()
             }
         }
         .alert("New notebook", isPresented: $showingNewNotebook) {
@@ -137,7 +139,8 @@ private struct FolderContentsView: View {
             Button("Create") {
                 let title = newNotebookTitle.trimmingCharacters(in: .whitespaces)
                 _ = try? store.createNotebook(
-                    title: title.isEmpty ? "Untitled" : title, parentFolderId: folderId)
+                    title: title.isEmpty ? "Untitled" : title, parentFolderId: folderId,
+                    template: handwriting.config.defaultTemplate)
             }
             Button("Cancel", role: .cancel) {}
         }

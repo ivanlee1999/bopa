@@ -1,0 +1,88 @@
+import NotableKit
+import XCTest
+
+@testable import Bopa
+
+final class HandwritingSettingsTests: XCTestCase {
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+
+    override func setUp() async throws {
+        suiteName = "bopa-handwriting-test-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+    }
+
+    override func tearDown() async throws {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    func testDefaultsMatchCurrentBehaviour() {
+        let config = HandwritingConfig.load(from: defaults)
+
+        // The out-of-the-box canvas: finger inks, palette visible, page scrolls, fit width.
+        XCTAssertTrue(config.fingerDrawing)
+        XCTAssertTrue(config.showsToolPicker)
+        XCTAssertFalse(config.scrollLocked)
+        XCTAssertEqual(config.zoomOnOpen, .fitWidth)
+        XCTAssertEqual(config.doubleTapAction, .system)
+        XCTAssertEqual(config.squeezeAction, .system)
+        XCTAssertEqual(config.defaultTemplate, .blank)
+    }
+
+    func testRoundTripsThroughUserDefaults() {
+        var config = HandwritingConfig()
+        config.fingerDrawing = false
+        config.showsToolPicker = false
+        config.scrollLocked = true
+        config.zoomOnOpen = .actualSize
+        config.doubleTapAction = .eraser
+        config.squeezeAction = .undo
+        config.defaultTemplate = .dotted
+        config.save(to: defaults)
+
+        XCTAssertEqual(HandwritingConfig.load(from: defaults), config)
+    }
+
+    /// A `false` toggle must survive a reload — the reason loading goes through
+    /// `object(forKey:)` rather than `bool(forKey:)`.
+    func testStoredFalseIsNotMistakenForMissing() {
+        var config = HandwritingConfig()
+        config.fingerDrawing = false
+        config.save(to: defaults)
+
+        XCTAssertFalse(HandwritingConfig.load(from: defaults).fingerDrawing)
+    }
+
+    func testUnknownStoredValuesFallBackToDefaults() {
+        defaults.set("sparkles", forKey: HandwritingConfig.Key.defaultTemplate)
+        defaults.set("teleport", forKey: HandwritingConfig.Key.doubleTapAction)
+
+        let config = HandwritingConfig.load(from: defaults)
+        XCTAssertEqual(config.defaultTemplate, .blank)
+        XCTAssertEqual(config.doubleTapAction, .system)
+    }
+
+    @MainActor
+    func testSettingsObjectPersistsOnMutation() {
+        let settings = HandwritingSettings(defaults: defaults)
+        settings.config.fingerDrawing = false
+        settings.config.defaultTemplate = .lined
+
+        let reloaded = HandwritingSettings(defaults: defaults)
+        XCTAssertFalse(reloaded.config.fingerDrawing)
+        XCTAssertEqual(reloaded.config.defaultTemplate, .lined)
+    }
+
+    /// NotableKit's `NativeTemplate` preserves an unrecognized stored name as `.custom` rather
+    /// than folding it to blank; `HandwritingConfig` is the layer that refuses to pick an
+    /// undrawable template as the app default (see `testUnknownStoredValuesFallBackToDefaults`).
+    func testDefaultTemplateOnlyEverPicksADrawableBuiltIn() {
+        XCTAssertEqual(
+            NativeTemplate.builtIn.map(\.name),
+            ["blank", "dotted", "lined", "squared", "hexed"])
+        for template in NativeTemplate.builtIn {
+            XCTAssertTrue(template.isDrawable)
+        }
+        XCTAssertFalse(NativeTemplate(name: "legalPad").isDrawable)
+    }
+}
