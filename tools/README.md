@@ -26,3 +26,10 @@ Build dbexport:
 ```bash
 swiftc -O NotableKit/Sources/NotableKit/{Polyline,StrokePoint,SBStrokeCodec,WireModels}.swift tools/dbexport/main.swift -o /tmp/dbexport
 ```
+
+- `icongen <output.png> [size]` — renders the app icon (handwritten "b" on a white page,
+  ink-blue ground). The 1024 master lives in `App/Sources/Assets.xcassets`; regenerate with:
+
+```bash
+swiftc -O tools/icongen/main.swift -o /tmp/icongen && /tmp/icongen App/Sources/Assets.xcassets/AppIcon.appiconset/icon_1024.png 1024
+```

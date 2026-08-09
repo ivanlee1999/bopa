@@ -7,9 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0039A71CECB36F833C1E1192 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BE21820564A6CE54CAC908C4 /* Assets.xcassets */; };
 		02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37AA22765996393FB323A60 /* EditorView.swift */; };
 		122E21FD884486D3B1F6AEDC /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */; };
 		29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */; };
+		33A2FCE6768C0CE5D75A1AE4 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */; };
 		3CFEC301B1ED29B4D9CFF6ED /* BackgroundRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27BB5272061EA302A49313CA /* BackgroundRenderer.swift */; };
 		41553EDB7232E60A06C58F8F /* Thumbnails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7346F25A719C7EB849AE025F /* Thumbnails.swift */; };
 		5677850903A70C8887A2C384 /* NotableKit in Frameworks */ = {isa = PBXBuildFile; productRef = EAF3412FA66289006396A938 /* NotableKit */; };
@@ -64,8 +66,10 @@
 		9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageImageTests.swift; sourceTree = "<group>"; };
 		B37AA22765996393FB323A60 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
 		B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
+		BE21820564A6CE54CAC908C4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettings.swift; sourceTree = "<group>"; };
 		E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridge.swift; sourceTree = "<group>"; };
+		FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +125,7 @@
 		EBB9433109DCADDCCB9E64EC /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				BE21820564A6CE54CAC908C4 /* Assets.xcassets */,
 				27BB5272061EA302A49313CA /* BackgroundRenderer.swift */,
 				2D3EA159F6A8667952EEF771 /* BareCanvas.swift */,
 				13EC02E525247FA06BC975D5 /* BopaApp.swift */,
@@ -129,6 +134,7 @@
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
 				5C1F470FDAB39308F0A7795F /* NotebookStore.swift */,
 				E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */,
+				FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */,
 				660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */,
 				DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */,
 				7346F25A719C7EB849AE025F /* Thumbnails.swift */,
@@ -173,6 +179,7 @@
 			buildConfigurationList = 28004F3B00AD129F8F9F1FFE /* Build configuration list for PBXNativeTarget "Bopa" */;
 			buildPhases = (
 				9171D3C274B2482B3F759424 /* Sources */,
+				7D353F8CF132C26AE20A07D4 /* Resources */,
 				567495D012A4A934793AF21F /* Frameworks */,
 			);
 			buildRules = (
@@ -217,6 +224,10 @@
 					56E625DC2A7395CAE0911217 = {
 						TestTargetID = 83B1D95569B22B0B76DD7FC1;
 					};
+					83B1D95569B22B0B76DD7FC1 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = 02CB3492FC28462D6C2D82C1 /* Build configuration list for PBXProject "Bopa" */;
@@ -242,6 +253,18 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7D353F8CF132C26AE20A07D4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0039A71CECB36F833C1E1192 /* Assets.xcassets in Resources */,
+				33A2FCE6768C0CE5D75A1AE4 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		3BF62A025028E7510DA63371 /* Sources */ = {
@@ -490,8 +513,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -513,8 +539,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

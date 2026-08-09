@@ -37,10 +37,30 @@ fully editable, stroke by stroke, on the other — pressure and tilt included.
 - [ ] **M4b — Remaining polish:** native lined/grid templates, page delete/reorder,
       share as PDF, handwriting search/OCR, PDF import from iPad
 
+## Running it on a real iPad
+
+Simulator: `cd App && xcodegen generate && open Bopa.xcodeproj`, pick an iPad, Run.
+
+Device (free personal team): set your team under Signing & Capabilities, plug in the
+iPad, Run. Note the build expires after 7 days and must be re-installed.
+
+TestFlight (needs a paid Apple Developer Program membership):
+
+```bash
+./scripts/archive.sh <YOUR_TEAM_ID>
+```
+
+produces a signed `.ipa` in `build/export`. Create the app record in App Store Connect
+(bundle id `dev.ivan.bopa`), upload with Transporter or Xcode Organizer, then add
+yourself as an internal tester. The app icon, privacy manifest (UserDefaults, reason
+CA92.1) and export-compliance declaration are already in place.
+
 ## Repo layout
 
 ```
 docs/          protocol spec and design notes
+scripts/       archive.sh (TestFlight builds), webdav-check.sh (server diagnosis)
+tools/         dbverify / dbimport / dbexport / icongen
 NotableKit/    Swift package: format codec + sync engine (M1/M3)
 App/           iPad app (M2+)
 ```

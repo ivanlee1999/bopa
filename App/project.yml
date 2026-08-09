@@ -37,6 +37,14 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Only standard HTTPS/Keychain crypto: exempt from export compliance, declared
+        # here so App Store Connect stops asking on every upload.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        # Set at archive time (scripts/archive.sh TEAM_ID); empty keeps simulator builds
+        # and CI signing-free.
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: dev.ivan.bopa
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
