@@ -1,9 +1,20 @@
 #!/bin/bash
-# Diagnose (and fix) Notable's 404 against a Synology WebDAV share.
-# Usage: ./scripts/webdav-check.sh
+# Diagnose (and work around) a WebDAV server that rejects HEAD on directories —
+# the failure mode behind Notable reporting 404/403 on Synology shares.
+#
+# Usage:
+#   BOPA_WEBDAV_URL=https://host/share BOPA_WEBDAV_USER=you ./scripts/webdav-check.sh
+#   ./scripts/webdav-check.sh https://host/share you
 set -u
-BASE="https://webdav.liyifan.us/onyx"
-USER_NAME="ivan"
+
+BASE="${1:-${BOPA_WEBDAV_URL:-}}"
+USER_NAME="${2:-${BOPA_WEBDAV_USER:-}}"
+
+if [ -z "$BASE" ] || [ -z "$USER_NAME" ]; then
+  echo "usage: $0 <base-url> <username>   (or set BOPA_WEBDAV_URL / BOPA_WEBDAV_USER)" >&2
+  exit 1
+fi
+BASE="${BASE%/}"
 
 printf "Password for %s (input hidden): " "$USER_NAME"
 read -rs PASSWORD

@@ -1,11 +1,18 @@
 #!/bin/bash
 # List the children of a WebDAV collection (PROPFIND Depth: 1).
-# Usage: ./scripts/webdav-ls.sh [path]        e.g. ./scripts/webdav-ls.sh /onyx/notable/notebooks
+# Usage:
+#   BOPA_WEBDAV_HOST=https://host BOPA_WEBDAV_USER=you ./scripts/webdav-ls.sh /share/notable/notebooks
 set -uo pipefail
 
-HOST="${BOPA_WEBDAV_HOST:-https://webdav.liyifan.us}"
-USER_NAME="${BOPA_WEBDAV_USER:-ivan}"
-PATH_ARG="${1:-/onyx}"
+HOST="${BOPA_WEBDAV_HOST:-}"
+USER_NAME="${BOPA_WEBDAV_USER:-}"
+PATH_ARG="${1:-/}"
+
+if [ -z "$HOST" ] || [ -z "$USER_NAME" ]; then
+  echo "usage: BOPA_WEBDAV_HOST=https://host BOPA_WEBDAV_USER=you $0 <path>" >&2
+  exit 1
+fi
+HOST="${HOST%/}"
 
 printf "Password for %s (input hidden): " "$USER_NAME"
 read -rs PASSWORD
