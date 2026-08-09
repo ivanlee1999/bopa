@@ -257,4 +257,117 @@ final class SyncEngineTests: XCTestCase {
 
         XCTAssertFalse(server.filePaths().contains { $0.contains("bopa-sync-state") })
     }
+
+    // MARK: Remote index
+
+    private func remoteIndex() throws -> RemoteIndex {
+        try XCTUnwrap(RemoteIndex.load(root: rootURL))
+    }
+
+    private func writeLocalFolders(_ folders: [FolderDTO]) throws {
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        let file = FoldersFile(folders: folders, serverTimestamp: "2026-08-02T10:00:00Z")
+        try JSONEncoder().encode(file)
+            .write(to: rootURL.appendingPathComponent("folders.json"))
+    }
+
+    private func folder(_ id: String, updatedAt: String = "2026-08-02T10:00:00Z") -> FolderDTO {
+        FolderDTO(id: id, title: "F-\(id)", createdAt: "2026-08-01T00:00:00Z", updatedAt: updatedAt)
+    }
+
+    func testRemoteIndexRecordsUploadedNotebook() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+
+        _ = await engine().sync()
+
+        let index = try remoteIndex()
+        XCTAssertEqual(index.version, 1)
+        XCTAssertTrue(index.hasNotebook("nb1"))
+        XCTAssertFalse(index.syncedAt.isEmpty)
+    }
+
+    func testRemoteIndexRecordsDownloadedNotebook() async throws {
+        try seedRemoteNotebook(id: "nb2", pageIds: ["pa"], updatedAt: "2026-08-02T11:00:00Z")
+
+        _ = await engine().sync()
+
+        XCTAssertEqual(try remoteIndex().notebookIds, ["nb2"])
+    }
+
+    func testRemoteIndexRecordsRemoteFolderIds() async throws {
+        try writeLocalFolders([folder("local-only")])
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+
+        _ = await engine().sync()
+
+        // The merge pushed the local folder to the server, so it counts as remote now.
+        XCTAssertEqual(try remoteIndex().folderIds, ["local-only"])
+        XCTAssertTrue(try remoteIndex().hasFolder("local-only"))
+    }
+
+    func testRemoteIndexKeepsFoldersThatOnlyExistOnServer() async throws {
+        let remote = FoldersFile(
+            folders: [folder("server-folder")], serverTimestamp: "2026-08-02T10:00:00Z")
+        server.setFile("/notable/folders.json", try JSONEncoder().encode(remote))
+
+        _ = await engine().sync()
+
+        XCTAssertEqual(try remoteIndex().folderIds, ["server-folder"])
+    }
+
+    func testRemoteIndexDropsNotebookThatDisappearedFromServer() async throws {
+        try seedRemoteNotebook(id: "nb2", pageIds: ["pa"], updatedAt: "2026-08-02T11:00:00Z")
+        _ = await engine().sync()
+        XCTAssertTrue(try remoteIndex().hasNotebook("nb2"))
+
+        // Server-side wipe (not a tombstone): the local copy stays but is no longer remote.
+        server.removeAll(under: "/notable/notebooks/nb2")
+        // Fails to re-upload, so it must not be recorded as present on the server.
+        server.failingPaths = ["/notable/notebooks/nb2/manifest.json"]
+
+        _ = await engine().sync()
+
+        XCTAssertFalse(try remoteIndex().hasNotebook("nb2"))
+    }
+
+    func testRemoteIndexDropsFolderThatDisappearedFromServer() async throws {
+        let remote = FoldersFile(
+            folders: [folder("f1"), folder("f2")], serverTimestamp: "2026-08-02T10:00:00Z")
+        server.setFile("/notable/folders.json", try JSONEncoder().encode(remote))
+        _ = await engine().sync()
+        XCTAssertEqual(try remoteIndex().folderIds, ["f1", "f2"])
+
+        // Someone rewrote folders.json on the server without f2, and the local copy is
+        // rewritten to match so the union merge does not resurrect it.
+        let trimmed = FoldersFile(
+            folders: [folder("f1")], serverTimestamp: "2026-08-02T12:00:00Z")
+        let data = try JSONEncoder().encode(trimmed)
+        server.setFile("/notable/folders.json", data)
+        try data.write(to: rootURL.appendingPathComponent("folders.json"))
+
+        _ = await engine().sync()
+
+        XCTAssertEqual(try remoteIndex().folderIds, ["f1"])
+    }
+
+    func testRemoteIndexDropsLocallyDeletedNotebook() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        let e = engine()
+        _ = await e.sync()
+        XCTAssertTrue(try remoteIndex().hasNotebook("nb1"))
+
+        try await e.deleteNotebook("nb1")
+
+        XCTAssertFalse(try remoteIndex().hasNotebook("nb1"))
+    }
+
+    func testRemoteIndexFileNeverUploaded() async throws {
+        try writeLocalFolders([folder("f1")])
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+        _ = await engine().sync()
+
+        XCTAssertFalse(server.filePaths().contains { $0.contains("bopa-remote-index") })
+        XCTAssertFalse(server.filePaths().contains { $0.contains(RemoteIndex.fileName) })
+    }
 }

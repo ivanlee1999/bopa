@@ -138,6 +138,16 @@ final class MockWebDAVServer: HTTPTransport, @unchecked Sendable {
         }
     }
 
+    /// Wipes a resource and everything under it, as if another client (or a person with a
+    /// file manager) had deleted it server-side without leaving a tombstone.
+    func removeAll(under path: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let target = normalize(path)
+        files = files.filter { $0.key != target && !$0.key.hasPrefix(target + "/") }
+        collections = collections.filter { $0 != target && !$0.hasPrefix(target + "/") }
+    }
+
     func filePaths() -> [String] {
         lock.lock()
         defer { lock.unlock() }

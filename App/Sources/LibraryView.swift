@@ -1,20 +1,50 @@
 import NotableKit
 import SwiftUI
 
-/// Navigation value for pushing a folder's contents (notebooks push plain `String` ids).
-struct FolderRef: Hashable {
-    let id: String
-}
-
+/// The library: a sidebar for folder navigation on the left, the card grid for the
+/// selected folder on the right. Selecting a folder — in the sidebar or by tapping a
+/// folder card — moves the same selection, so the two columns never disagree.
 struct LibraryView: View {
+    @EnvironmentObject private var store: NotebookStore
+    @State private var selection: LibrarySelection? = .root
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var openNotebook: OpenNotebook?
+
+    /// Identifiable wrapper so the editor can be driven by `fullScreenCover(item:)`.
+    struct OpenNotebook: Identifiable, Hashable {
+        let id: String
+    }
+
     var body: some View {
-        FolderContentsView(folderId: nil)
-            .navigationDestination(for: String.self) { notebookId in
-                EditorView(notebookId: notebookId)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            LibrarySidebar(selection: $selection)
+        } detail: {
+            FolderContentsView(
+                folderId: selection?.folderId,
+                selection: $selection,
+                openNotebook: { openNotebook = OpenNotebook(id: $0) })
+        }
+        .navigationSplitViewStyle(.balanced)
+        // The editor is presented, not pushed: this view lives inside the app's
+        // NavigationStack, and a stack nested in a split-view column swallows its pushes.
+        // Presenting also gives the canvas the whole screen, which is what you want when
+        // you are writing.
+        .fullScreenCover(item: $openNotebook) { target in
+            NavigationStack {
+                EditorView(notebookId: target.id)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                openNotebook = nil
+                            } label: {
+                                Label("Library", systemImage: "chevron.backward")
+                            }
+                            .accessibilityIdentifier("editor.close")
+                        }
+                    }
             }
-            .navigationDestination(for: FolderRef.self) { ref in
-                FolderContentsView(folderId: ref.id)
-            }
+            .environmentObject(store)
+        }
     }
 }
 
@@ -23,6 +53,8 @@ struct LibraryView: View {
 private struct FolderContentsView: View {
     @EnvironmentObject private var store: NotebookStore
     let folderId: String?
+    @Binding var selection: LibrarySelection?
+    let openNotebook: (String) -> Void
 
     @State private var showingNewNotebook = false
     @State private var newNotebookTitle = ""
@@ -37,6 +69,7 @@ private struct FolderContentsView: View {
 
     @State private var deletingNotebookId: String?
     @State private var showingDeleteNotebook = false
+    @State private var showingSyncSettings = false
 
     private var subfolders: [FolderDTO] { store.folders(in: folderId) }
     private var notebooks: [NotebookManifest] { store.notebooks(in: folderId) }
@@ -71,10 +104,10 @@ private struct FolderContentsView: View {
             }
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle(folderId.flatMap { store.folder(id: $0)?.title } ?? "bopa")
+        .navigationTitle(folderId.flatMap { store.folder(id: $0)?.title } ?? "All Notes")
         .toolbar {
-            NavigationLink {
-                SyncSettingsView()
+            Button {
+                showingSyncSettings = true
             } label: {
                 Image(systemName: "arrow.triangle.2.circlepath")
             }
@@ -92,6 +125,12 @@ private struct FolderContentsView: View {
                 Image(systemName: "plus")
             }
             .accessibilityIdentifier("library.add")
+        }
+        // Presented rather than pushed, for the same reason as the editor.
+        .sheet(isPresented: $showingSyncSettings) {
+            NavigationStack {
+                SyncSettingsView()
+            }
         }
         .alert("New notebook", isPresented: $showingNewNotebook) {
             TextField("Title", text: $newNotebookTitle)
@@ -148,8 +187,12 @@ private struct FolderContentsView: View {
 
     // MARK: Cards
 
+    /// Opening a subfolder moves the sidebar selection rather than pushing, so the two
+    /// columns can never disagree about where the user is.
     private func folderCard(_ folder: FolderDTO) -> some View {
-        NavigationLink(value: FolderRef(id: folder.id)) {
+        Button {
+            selection = .folder(folder.id)
+        } label: {
             VStack(alignment: .leading, spacing: 8) {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color(.secondarySystemGroupedBackground))
@@ -162,6 +205,10 @@ private struct FolderContentsView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .strokeBorder(Color.primary.opacity(0.06)))
+                    .overlay(alignment: .topTrailing) {
+                        ProvenanceCoverBadge(
+                            provenance: store.provenance(ofFolder: folder.id))
+                    }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(folder.title)
                         .font(.subheadline.weight(.semibold))
@@ -194,7 +241,9 @@ private struct FolderContentsView: View {
     }
 
     private func notebookCard(_ notebook: NotebookManifest) -> some View {
-        NavigationLink(value: notebook.notebookId) {
+        Button {
+            openNotebook(notebook.notebookId)
+        } label: {
             VStack(alignment: .leading, spacing: 8) {
                 cover(for: notebook)
                 VStack(alignment: .leading, spacing: 2) {
@@ -260,6 +309,10 @@ private struct FolderContentsView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08)))
+        .overlay(alignment: .topTrailing) {
+            ProvenanceCoverBadge(
+                provenance: store.provenance(ofNotebook: notebook.notebookId))
+        }
         .shadow(color: .black.opacity(0.10), radius: 5, y: 3)
     }
 
