@@ -74,6 +74,45 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(store.folders.count, 1)
     }
 
+    // MARK: Paper templates
+
+    func testCreateNotebookStampsTemplateOnManifestAndFirstPage() throws {
+        let manifest = try store.createNotebook(title: "Ruled", template: .lined)
+
+        XCTAssertEqual(manifest.defaultBackground, "lined")
+        XCTAssertEqual(manifest.defaultBackgroundType, "native")
+        let page = try store.loadPage(
+            notebookId: manifest.notebookId, pageId: try XCTUnwrap(manifest.pageIds.first))
+        XCTAssertEqual(page.background, "lined")
+        XCTAssertEqual(page.backgroundType, "native")
+    }
+
+    func testAddedPageInheritsNotebookTemplateOverFallback() throws {
+        let manifest = try store.createNotebook(title: "Dots", template: .dotted)
+
+        let page = try store.addPage(to: manifest.notebookId, fallbackTemplate: .squared)
+
+        XCTAssertEqual(page.background, "dotted")
+        XCTAssertEqual(page.backgroundType, "native")
+    }
+
+    /// A notebook whose default is a PDF cannot bind a new page to a PDF page here, so the
+    /// caller's fallback (the app-level default paper) applies instead.
+    func testAddedPageUsesFallbackWhenNotebookDefaultIsNotNative() throws {
+        var manifest = try store.createNotebook(title: "Scanned")
+        manifest.defaultBackground = "/sdcard/book.pdf"
+        manifest.defaultBackgroundType = "autoPdf"
+        try JSONEncoder().encode(manifest).write(
+            to: rootURL.appendingPathComponent(
+                "notebooks/\(manifest.notebookId)/manifest.json"))
+        store.refresh()
+
+        let page = try store.addPage(to: manifest.notebookId, fallbackTemplate: .squared)
+
+        XCTAssertEqual(page.background, "squared")
+        XCTAssertEqual(page.backgroundType, "native")
+    }
+
     // MARK: Notebooks in folders
 
     func testCreateNotebookInFolder() throws {

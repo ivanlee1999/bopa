@@ -6,6 +6,7 @@ import SwiftUI
 /// Saves (debounced) after every drawing change and on exit.
 struct EditorView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var handwriting: HandwritingSettings
     let notebookId: String
 
     @State private var pageId: String?
@@ -25,6 +26,24 @@ struct EditorView: View {
         return manifest.pageIds.firstIndex(of: pageId) ?? 0
     }
 
+    /// The current page's native paper. PDF- and image-backed pages draw no template:
+    /// their background image already carries the paper.
+    private var pageTemplate: NativeTemplate {
+        guard let page else { return .blank }
+        let background = PageBackground(background: page.background, backgroundType: page.backgroundType)
+        guard case .native(let template) = background, template.isDrawable else { return .blank }
+        return template
+    }
+
+    /// Only native-backed pages can switch template; changing a PDF-backed page would
+    /// throw away the link to its PDF (which the BOOX side also relies on).
+    private var canChangeTemplate: Bool {
+        guard let page else { return false }
+        let background = PageBackground(background: page.background, backgroundType: page.backgroundType)
+        if case .native = background { return true }
+        return false
+    }
+
     var body: some View {
         Group {
             if let loadError {
@@ -37,7 +56,9 @@ struct EditorView: View {
                     background: pageBackground,
                     images: pageImages,
                     pageScroll: page?.scroll ?? 0,
+                    template: pageTemplate,
                     drawing: $drawing,
+                    config: handwriting.config,
                     undoController: undoController,
                     scrollState: scrollState,
                     onChanged: scheduleSave)
@@ -89,6 +110,33 @@ struct EditorView: View {
                         Image(systemName: "plus.square")
                     }
                 }
+
+                Menu {
+                    Menu {
+                        Picker("Paper", selection: paperBinding) {
+                            ForEach(NativeTemplate.builtIn, id: \.name) { template in
+                                Label(template.displayName, systemImage: template.symbolName)
+                                    .tag(template)
+                            }
+                        }
+                    } label: {
+                        Label("Paper", systemImage: "doc.plaintext")
+                    }
+                    .disabled(!canChangeTemplate)
+
+                    Toggle(isOn: $handwriting.config.fingerDrawing) {
+                        Label("Finger draws", systemImage: "hand.point.up.left")
+                    }
+                    Toggle(isOn: $handwriting.config.scrollLocked) {
+                        Label("Lock scrolling", systemImage: "lock")
+                    }
+                    Toggle(isOn: $handwriting.config.showsToolPicker) {
+                        Label("Tool palette", systemImage: "paintpalette")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityIdentifier("editor.options")
             }
         }
         .onAppear { if pageId == nil { openInitialPage() } }
@@ -130,9 +178,29 @@ struct EditorView: View {
 
     private func addPage() {
         saveNow()
-        if let newPage = try? store.addPage(to: notebookId) {
+        if let newPage = try? store.addPage(
+            to: notebookId, fallbackTemplate: handwriting.config.defaultTemplate)
+        {
             open(pageId: newPage.id)
         }
+    }
+
+    private var paperBinding: Binding<NativeTemplate> {
+        Binding(get: { pageTemplate }, set: { setTemplate($0) })
+    }
+
+    /// Writes the template into the page file (`backgroundType: "native"`), which is what
+    /// the BOOX reads back after a sync.
+    private func setTemplate(_ template: NativeTemplate) {
+        guard var page, canChangeTemplate else { return }
+        let fields = TemplateApplication.pageFields(for: .native(template))
+        guard fields.background != page.background || fields.backgroundType != page.backgroundType
+        else { return }
+        page.background = fields.background
+        page.backgroundType = fields.backgroundType
+        self.page = page
+        dirty = true
+        saveNow()
     }
 
     private func scheduleSave() {
@@ -221,7 +289,10 @@ struct EditorCanvasView: UIViewRepresentable {
     var images: [PageImage] = []
     /// Persisted unzoomed page-space y offset, applied on page switches.
     var pageScroll: Int = 0
+    /// Native paper drawn behind the ink (`.blank` for PDF-backed pages).
+    var template: NativeTemplate = .blank
     @Binding var drawing: PKDrawing
+    var config = HandwritingConfig()
     var undoController: CanvasUndoController = CanvasUndoController()
     var scrollState: CanvasScrollState = CanvasScrollState()
     var onChanged: () -> Void
@@ -236,7 +307,6 @@ struct EditorCanvasView: UIViewRepresentable {
         context.coordinator.container = container
         let canvas = container.canvas
         canvas.delegate = context.coordinator
-        canvas.drawingPolicy = .anyInput
         canvas.tool = PKInkingTool(.pen, color: .black, width: 5)
         canvas.isAccessibilityElement = true
         canvas.accessibilityIdentifier = "editor.canvas"
@@ -253,14 +323,17 @@ struct EditorCanvasView: UIViewRepresentable {
             // makes drawing tests silently no-op. Tests opt into a known pen.
             picker.selectedTool = PKInkingTool(.pen, color: .black, width: 5)
         }
-        picker.setVisible(true, forFirstResponder: canvas)
         picker.addObserver(canvas)
+        picker.addObserver(context.coordinator)
+        context.coordinator.apply(config, to: container)
         canvas.becomeFirstResponder()
         return container
     }
 
     func updateUIView(_ container: CanvasContainerView, context: Context) {
         let canvas = container.canvas
+        context.coordinator.apply(config, to: container)
+        container.setTemplate(template)
         // Background and images may arrive/change without a page switch; both setters are
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)
@@ -296,12 +369,143 @@ struct EditorCanvasView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    final class Coordinator: NSObject, PKCanvasViewDelegate {
+    final class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver,
+        UIPencilInteractionDelegate
+    {
         let parent: EditorCanvasView
         let toolPicker = PKToolPicker()
         var programmaticUpdate = false
         var loadedPageId: String?
         weak var container: CanvasContainerView?
+
+        private var config = HandwritingConfig()
+        private var didApplyConfig = false
+        /// The tool selected before the current one, for the "previous tool" and
+        /// eraser-toggle pencil gestures.
+        private var previousTool: PKTool?
+        private let pencilInteraction = UIPencilInteraction()
+        /// Session-local override of the tool palette (the "show/hide" pencil gesture);
+        /// nil means "follow the setting".
+        private var toolPickerOverride: Bool?
+
+        /// Pushes the handwriting preferences onto the canvas. Called on creation and on
+        /// every SwiftUI update; every step is idempotent and none of them touch
+        /// `canvas.drawing` (which would cancel an in-flight stroke).
+        func apply(_ newConfig: HandwritingConfig, to container: CanvasContainerView) {
+            guard newConfig != config || !didApplyConfig else { return }
+            config = newConfig
+            didApplyConfig = true
+            let canvas = container.canvas
+
+            canvas.drawingPolicy = config.fingerDrawing ? .anyInput : .pencilOnly
+            canvas.isScrollEnabled = !config.scrollLocked
+            container.fitWidthOnOpen = config.zoomOnOpen == .fitWidth
+
+            let showsPicker = toolPickerOverride ?? config.showsToolPicker
+            toolPicker.setVisible(showsPicker, forFirstResponder: canvas)
+
+            // Only claim the pencil gestures when the user asked for something other than
+            // the system behaviour; otherwise leave them to PencilKit.
+            let wantsPencilGestures =
+                config.doubleTapAction != .system || config.squeezeAction != .system
+            if wantsPencilGestures {
+                pencilInteraction.delegate = self
+                if pencilInteraction.view !== container {
+                    container.addInteraction(pencilInteraction)
+                }
+            } else if pencilInteraction.view != nil {
+                container.removeInteraction(pencilInteraction)
+                pencilInteraction.delegate = nil
+            }
+        }
+
+        // MARK: - Apple Pencil gestures
+
+        func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
+            perform(config.doubleTapAction, fallback: Self.systemTapAction())
+        }
+
+        @available(iOS 17.5, *)
+        func pencilInteraction(
+            _ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap
+        ) {
+            perform(config.doubleTapAction, fallback: Self.systemTapAction())
+        }
+
+        @available(iOS 17.5, *)
+        func pencilInteraction(
+            _ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze
+        ) {
+            guard squeeze.phase == .ended else { return }
+            perform(config.squeezeAction, fallback: Self.systemSqueezeAction())
+        }
+
+        /// Maps the system-wide Settings › Apple Pencil preference onto our action set, used
+        /// when only one of the two gestures is customised and the other says "System".
+        private static func action(for preference: UIPencilPreferredAction) -> PencilAction {
+            switch preference {
+            case .switchEraser: .eraser
+            case .switchPrevious: .previousTool
+            case .showColorPalette, .showInkAttributes: .toggleToolPicker
+            default: .ignore
+            }
+        }
+
+        private static func systemTapAction() -> PencilAction {
+            action(for: UIPencilInteraction.preferredTapAction)
+        }
+
+        private static func systemSqueezeAction() -> PencilAction {
+            guard #available(iOS 17.5, *) else { return .ignore }
+            return action(for: UIPencilInteraction.preferredSqueezeAction)
+        }
+
+        private func perform(_ action: PencilAction, fallback: @autoclosure () -> PencilAction) {
+            switch action == .system ? fallback() : action {
+            case .system, .ignore:
+                break
+            case .eraser:
+                if toolPicker.selectedTool is PKEraserTool {
+                    select(previousTool ?? PKInkingTool(.pen, color: .black, width: 5))
+                } else {
+                    select(PKEraserTool(.bitmap))
+                }
+            case .previousTool:
+                if let previousTool { select(previousTool) }
+            case .undo:
+                container?.pageUndoManager.undo()
+            case .toggleToolPicker:
+                guard let canvas = container?.canvas else { return }
+                let showing = toolPickerOverride ?? config.showsToolPicker
+                toolPickerOverride = !showing
+                toolPicker.setVisible(!showing, forFirstResponder: canvas)
+            }
+        }
+
+        private func select(_ tool: PKTool) {
+            noteSelection(tool)
+            isProgrammaticToolChange = true
+            toolPicker.selectedTool = tool
+            container?.canvas.tool = tool
+            isProgrammaticToolChange = false
+        }
+
+        private func noteSelection(_ tool: PKTool) {
+            previousTool = currentTool
+            currentTool = tool
+        }
+
+        // MARK: - PKToolPickerObserver
+
+        func toolPickerSelectedToolDidChange(_ toolPicker: PKToolPicker) {
+            // Skipped for our own switches: `select` has already done the bookkeeping, and
+            // running it twice would make "previous tool" the current one.
+            guard !isProgrammaticToolChange else { return }
+            noteSelection(toolPicker.selectedTool)
+        }
+
+        private var currentTool: PKTool?
+        private var isProgrammaticToolChange = false
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             container?.updateContentGeometry()

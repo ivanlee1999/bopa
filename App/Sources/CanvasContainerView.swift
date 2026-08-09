@@ -1,3 +1,4 @@
+import NotableKit
 import PencilKit
 import UIKit
 
@@ -16,12 +17,17 @@ final class CanvasContainerView: UIView {
     /// The "paper": a white sheet behind everything, so the page reads as a page on a desk.
     /// Deliberately white in both appearances — ink colors are authored against white.
     private let pageSheet = UIView()
+    private let paperView = PaperTemplateView()
     private let backgroundImageView = UIImageView()
     private var imageViews: [UIImageView] = []
     private var didSetInitialZoom = false
     private var pendingScrollY: CGFloat?
 
-    var pageWidth: CGFloat = 1404
+    /// Whether the first layout zooms the page to fit the view's width (otherwise 1:1).
+    var fitWidthOnOpen = true
+    var pageWidth: CGFloat = 1404 {
+        didSet { paperView.pageWidth = pageWidth }
+    }
     private(set) var backgroundImage: UIImage?
     private(set) var pageImages: [PageImage] = []
 
@@ -41,6 +47,8 @@ final class CanvasContainerView: UIView {
         pageSheet.layer.shadowRadius = 8
         pageSheet.layer.shadowOffset = CGSize(width: 0, height: 2)
         addSubview(pageSheet)
+        paperView.pageWidth = pageWidth
+        addSubview(paperView)
         backgroundImageView.contentMode = .scaleAspectFit
         backgroundImageView.isHidden = true
         addSubview(backgroundImageView)
@@ -56,12 +64,13 @@ final class CanvasContainerView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         canvas.frame = bounds
+        paperView.frame = bounds
         if !didSetInitialZoom, bounds.width > 0 {
             didSetInitialZoom = true
             let fit = bounds.width / pageWidth
             if fit < 1 {
                 canvas.minimumZoomScale = min(canvas.minimumZoomScale, fit)
-                canvas.zoomScale = fit
+                if fitWidthOnOpen { canvas.zoomScale = fit }
             }
         }
         if didSetInitialZoom, let pendingScrollY {
@@ -69,6 +78,12 @@ final class CanvasContainerView: UIView {
             applyScroll(pageY: pendingScrollY)
         }
         updateContentGeometry()
+    }
+
+    /// Sets the ruled/dotted/grid paper drawn on the sheet. A PDF-backed page passes
+    /// `.blank`: its background image already carries the paper.
+    func setTemplate(_ template: NativeTemplate) {
+        paperView.template = template
     }
 
     func setBackground(_ image: UIImage?) {
@@ -133,6 +148,7 @@ final class CanvasContainerView: UIView {
             y: -offset.y,
             width: pageWidth * scale,
             height: max(canvas.contentSize.height, bounds.height * 2))
+        paperView.setGeometry(zoomScale: scale, contentOffset: offset)
         if let image = backgroundImage {
             backgroundImageView.isHidden = false
             let width = pageWidth * scale

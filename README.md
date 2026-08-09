@@ -34,9 +34,12 @@ fully editable, stroke by stroke, on the other — pressure and tilt included.
       rename/move/delete (with offline tombstones), page images rendered under the ink,
       undo/redo, per-page scroll persistence, PDF page backgrounds, auto-sync on
       launch/foreground with status capsule
-- [ ] **M4b — Remaining polish:** native lined/grid templates (NotableKit: import, storage and
-      rendering done — see [Templates](#templates); App-side picker UI still open), page
-      delete/reorder, share as PDF, handwriting search/OCR, PDF import from iPad
+- [x] **M4c — Handwriting settings:** pencil-only input (palm rejection), Apple Pencil
+      double-tap/squeeze actions, tool-palette and scroll-lock toggles, zoom-on-open, and a
+      native-paper picker (blank/lined/dotted/grid/hex) wired to NotableKit's template engine
+      (see [Templates](#templates)) so pages render the same on the BOOX
+- [ ] **M4b — Remaining polish:** image/PDF template import from iPad, page delete/reorder,
+      share as PDF, handwriting search/OCR
 
 ## Running it on a real iPad
 
