@@ -191,12 +191,65 @@ Proposed PencilKit mapping (to be tuned by eye):
 Unknown-pen safety: Notable's `Pen.fromString` falls back to BALLPEN; our reader should do the
 same. Writers must only emit the enum names above.
 
-## 7. Backgrounds
+## 7. Backgrounds (page templates)
 
-`background` / `backgroundType` fields: `backgroundType` `"native"` refers to built-in template
-names in `background` (e.g. `blank`, lined/grid variants); custom image/PDF backgrounds use the
-`backgrounds/` directory. Exact native template names TBD — enumerate from
-`editor/utils` before implementing background rendering (tracked as an open task).
+A page's template is the `background` + `backgroundType` pair. The type keys come from
+`data/model/BackgroundType.kt`:
+
+| `backgroundType` | meaning | `background` holds | local folder |
+|---|---|---|---|
+| `native` | grid the app draws itself | template name | — |
+| `image` | image scaled to page width, drawn once at the top | asset path | `images/` |
+| `imagerepeating` | same image tiled down the scroll | asset path | `images/` |
+| `coverImage` | notebook cover art (a title box is drawn over it) | asset path | `covers/` |
+| `pdf<N>` | one fixed PDF page; **N is 0-based** | asset path | `pdfs/` |
+| `autoPdf` | PDF page follows the page's index within its notebook | asset path | `pdfs/` |
+
+`BackgroundType.fromKey` falls back to `native` for anything it doesn't recognize, including a
+`pdf` key with a non-numeric suffix.
+
+**Native template names** (`ui/dialogs/BackgroundSelector.kt`): `blank`, `dotted`, `lined`,
+`squared`, `hexed` — nothing else. Notable *throws* when asked to draw a native name it doesn't
+know (`drawBg`), so only these five are safe to write. Their geometry
+(`editor/drawing/backgrounds.kt`): lines, squares and dots on an 80-unit grid anchored to the page
+origin (so they align across devices at any scroll offset), 1px Android `GRAY` (#888888), dots 6
+units across. Hexagons are the exception — the radius is derived from the live canvas size
+(`max(w, h) / (26 * 1.5)`), so the pattern is viewport-dependent and cannot be matched exactly.
+
+**Assets** are stored per device under `notabledb/backgrounds/{images,covers,pdfs}/` and are drawn
+scaled so their width matches the page width, anchored at the top of the (infinitely scrolling)
+page. On the server they are flat, per notebook: `notebooks/<id>/backgrounds/<basename>` —
+so basenames must be unique across the whole local store, not just within one folder.
+
+### Custom backgrounds do not round-trip in v0.2.6
+
+The three halves of the feature disagree about what `background` contains for a non-native
+background:
+
+- **Writers** store an *absolute* device path — `BackgroundSelector.kt:161` (picker) and
+  `importPdf.kt:57` (PDF import) both save `copiedFile.toString()`, e.g.
+  `/storage/emulated/0/Documents/notabledb/backgrounds/pdfs/weekly.pdf`.
+- **The uploader** skips any background whose path `isAbsolute`, treating it as a linked external
+  file outside managed storage (`NotebookSyncService.kt:368`). So a template imported on the BOOX
+  is never uploaded, and the page JSON that *is* uploaded carries a device-local path.
+- **The downloader** does the opposite: it reads `background` as a path *relative* to the
+  backgrounds folder, fetches `backgrounds/<basename>`, and writes it to
+  `backgrounds/<relative path>` (`NotebookSyncService.kt:509-527`). Unlike images — which it
+  rewrites to an absolute path on the way in (`image.copy(uri = localFile.absolutePath)`) — it
+  leaves the page's `background` field untouched, and `loadBackgroundBitmap` resolves it with a
+  bare `File(path)`, which cannot find a relative path.
+
+Net effect: templates imported on either side don't currently show up on the other.
+
+**What bopa does:** always write the *relative* form (`pdfs/weekly.pdf`) and upload the asset to
+`backgrounds/<basename>` ourselves. That is the shape Notable's download path understands, so the
+file lands in the right place on the BOOX; the page renders blank there until upstream resolves
+relative background paths against the backgrounds folder (a one-line fix in
+`loadBackgroundBitmap`, plus relativizing on upload). Reading is tolerant of every form —
+relative, bare basename, and the absolute paths Notable writes.
+
+Implementation: `NotableKit/Sources/NotableKit/Backgrounds` (wire format) and `…/Templates`
+(import, apply, render).
 
 ## 8. Sync semantics (what a compatible client must do)
 
