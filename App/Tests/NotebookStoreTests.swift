@@ -129,6 +129,86 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(PendingDeletions.load(root: rootURL), [manifest.notebookId])
     }
 
+    // MARK: Sync provenance
+
+    private func writeRemoteIndex(notebookIds: Set<String>, folderIds: Set<String>) throws {
+        try RemoteIndex(
+            notebookIds: notebookIds, folderIds: folderIds,
+            syncedAt: NotableDate.format(Date()))
+            .save(root: rootURL)
+    }
+
+    func testProvenanceIsUnknownBeforeFirstSync() throws {
+        let folder = try store.createFolder(title: "Work")
+        let notebook = try store.createNotebook(title: "Fresh")
+
+        XCTAssertFalse(store.hasSyncedAtLeastOnce)
+        XCTAssertEqual(store.provenance(ofNotebook: notebook.notebookId), .unknown)
+        XCTAssertEqual(store.provenance(ofFolder: folder.id), .unknown)
+    }
+
+    func testProvenanceSplitsServerAndLocalOnlyItems() throws {
+        let synced = try store.createNotebook(title: "Synced")
+        let fresh = try store.createNotebook(title: "Fresh")
+        let syncedFolder = try store.createFolder(title: "Synced folder")
+        let freshFolder = try store.createFolder(title: "Fresh folder")
+
+        try writeRemoteIndex(
+            notebookIds: [synced.notebookId], folderIds: [syncedFolder.id])
+        store.refresh()
+
+        XCTAssertTrue(store.hasSyncedAtLeastOnce)
+        XCTAssertEqual(store.provenance(ofNotebook: synced.notebookId), .onServer)
+        XCTAssertEqual(store.provenance(ofNotebook: fresh.notebookId), .localOnly)
+        XCTAssertEqual(store.provenance(ofFolder: syncedFolder.id), .onServer)
+        XCTAssertEqual(store.provenance(ofFolder: freshFolder.id), .localOnly)
+    }
+
+    func testRefreshPicksUpRemoteIndexChanges() throws {
+        let notebook = try store.createNotebook(title: "Synced")
+        try writeRemoteIndex(notebookIds: [notebook.notebookId], folderIds: [])
+        store.refresh()
+        XCTAssertEqual(store.provenance(ofNotebook: notebook.notebookId), .onServer)
+
+        // A later sync found it gone from the server.
+        try writeRemoteIndex(notebookIds: [], folderIds: [])
+        store.refresh()
+
+        XCTAssertEqual(store.provenance(ofNotebook: notebook.notebookId), .localOnly)
+        XCTAssertEqual(store.remoteIndex?.notebookIds, [])
+    }
+
+    func testTotalNotebookCountCountsEveryFolder() throws {
+        let folder = try store.createFolder(title: "Work")
+        _ = try store.createNotebook(title: "Loose")
+        _ = try store.createNotebook(title: "Filed", parentFolderId: folder.id)
+
+        XCTAssertEqual(store.totalNotebookCount, 2)
+        XCTAssertEqual(store.notebooks(in: nil).count, 1)
+    }
+
+    // MARK: Sidebar tree
+
+    func testFolderNodeTreeNestsAndCarriesCounts() throws {
+        let parent = try store.createFolder(title: "Work")
+        let child = try store.createFolder(title: "Projects", parentFolderId: parent.id)
+        _ = try store.createNotebook(title: "Filed", parentFolderId: child.id)
+        try writeRemoteIndex(notebookIds: [], folderIds: [parent.id])
+        store.refresh()
+
+        let tree = FolderNode.tree(from: store)
+
+        XCTAssertEqual(tree.map(\.id), [parent.id])
+        XCTAssertEqual(tree[0].itemCount, 1)
+        XCTAssertEqual(tree[0].provenance, .onServer)
+        let children = try XCTUnwrap(tree[0].children)
+        XCTAssertEqual(children.map(\.title), ["Projects"])
+        XCTAssertEqual(children[0].itemCount, 1)
+        XCTAssertEqual(children[0].provenance, .localOnly)
+        XCTAssertNil(children[0].children, "leaves must have nil children, not []")
+        XCTAssertEqual(child.id, children[0].id)
+    }
+
     func testFoldersReloadFromDiskOnRefresh() throws {
         try store.createFolder(title: "Persisted")
 

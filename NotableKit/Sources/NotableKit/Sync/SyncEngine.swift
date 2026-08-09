@@ -31,6 +31,7 @@ public actor SyncEngine {
     let dav: WebDAVClient
     let rootURL: URL
     let stateURL: URL
+    let remoteIndexURL: URL
 
     private var state: [String: NotebookSyncState] = [:]
 
@@ -38,6 +39,7 @@ public actor SyncEngine {
         self.dav = WebDAVClient(transport: transport)
         self.rootURL = rootURL
         self.stateURL = rootURL.appendingPathComponent(".bopa-sync-state.json")
+        self.remoteIndexURL = RemoteIndex.fileURL(root: rootURL)
     }
 
     // MARK: - Entry point
@@ -69,7 +71,7 @@ public actor SyncEngine {
         }
 
         // 2. Folder tree (single-file union merge, docs §2).
-        await syncFolders(&report)
+        let remoteFolderIds = await syncFolders(&report)
 
         // 3. Tombstones: a deletion wins over existence.
         let tombstones = await fetchTombstoneIds(&report)
@@ -95,12 +97,15 @@ public actor SyncEngine {
         }
         remoteIds.subtract(tombstones)
 
-        // 5. Reconcile the union.
+        // 5. Reconcile the union. `serverNotebookIds` tracks what the server holds as we
+        // go, so a freshly uploaded notebook lands in the remote index right away.
+        var serverNotebookIds = remoteIds
         for id in localIds.union(remoteIds).sorted() {
             do {
                 switch (localIds.contains(id), remoteIds.contains(id)) {
                 case (true, false):
                     try await upload(id, ifMatch: nil)
+                    serverNotebookIds.insert(id)
                     report.uploaded.append(id)
                 case (false, true):
                     try await download(id)
@@ -118,6 +123,7 @@ public actor SyncEngine {
         }
 
         saveState()
+        saveRemoteIndex(notebookIds: serverNotebookIds, folderIds: remoteFolderIds)
         return report
     }
 
@@ -266,7 +272,11 @@ public actor SyncEngine {
     /// Union-by-id merge of `<root>/folders.json` with `/notable/folders.json`; newer
     /// `updatedAt` wins per folder. PUTs only when the merge changed the remote view,
     /// and rewrites the local file only when it differs from the merged result.
-    private func syncFolders(_ report: inout SyncReport) async {
+    ///
+    /// Returns the folder ids the server holds once this step is done — the folder half of
+    /// the remote index. Folders the merge failed to push stay out of it, so they keep
+    /// reading as local-only in the UI.
+    private func syncFolders(_ report: inout SyncReport) async -> Set<String> {
         let localURL = rootURL.appendingPathComponent("folders.json")
         let localFile = (try? Data(contentsOf: localURL))
             .flatMap { try? JSONDecoder().decode(FoldersFile.self, from: $0) }
@@ -281,9 +291,10 @@ public actor SyncEngine {
             // Absent remote: treated as empty.
         } catch {
             report.errors.append("folders: \(error)")
-            return
+            return []
         }
-        guard localFile != nil || remoteData != nil else { return }
+        var serverFolderIds = Set((remoteFile?.folders ?? []).map(\.id))
+        guard localFile != nil || remoteData != nil else { return serverFolderIds }
 
         let merged = FolderMerge.merge(
             local: localFile?.folders ?? [], remote: remoteFile?.folders ?? [])
@@ -297,6 +308,7 @@ public actor SyncEngine {
                 let data = try JSONEncoder().encode(out)
                 try await dav.put(NotableSyncPaths.foldersFile, data: data)
                 try? data.write(to: localURL)
+                serverFolderIds = Set(merged.map(\.id))
                 report.uploaded.append("folders.json")
             } catch {
                 report.errors.append("folders: \(error)")
@@ -308,6 +320,7 @@ public actor SyncEngine {
                 report.downloaded.append("folders.json")
             }
         }
+        return serverFolderIds
     }
 
     // MARK: - Tombstones
@@ -321,6 +334,10 @@ public actor SyncEngine {
         state[id] = nil
         PendingDeletions.add(id, root: rootURL)
         saveState()
+        if var index = RemoteIndex.load(root: rootURL), index.notebookIds.contains(id) {
+            index.notebookIds.remove(id)
+            try? index.save(root: rootURL)
+        }
         do {
             try await dav.makeCollection(NotableSyncPaths.root)
             try await dav.makeCollection(NotableSyncPaths.tombstonesDir)
@@ -384,5 +401,17 @@ public actor SyncEngine {
         guard let data = try? JSONEncoder().encode(state) else { return }
         try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try? data.write(to: stateURL)
+    }
+
+    // MARK: - Remote index
+
+    /// Records what the server holds so the library UI can mark items on-server vs
+    /// local-only without talking to the network. Rewritten wholesale after each completed
+    /// sync, so ids that disappeared from the server drop out on their own.
+    private func saveRemoteIndex(notebookIds: Set<String>, folderIds: Set<String>) {
+        let index = RemoteIndex(
+            notebookIds: notebookIds, folderIds: folderIds,
+            syncedAt: NotableDate.format(Date()))
+        try? index.save(root: rootURL)
     }
 }

@@ -8,6 +8,9 @@ import NotableKit
 final class NotebookStore: ObservableObject {
     @Published private(set) var notebooks: [NotebookManifest] = []
     @Published private(set) var folders: [FolderDTO] = []
+    /// What the server held at the end of the last sync; nil until this library has
+    /// synced at least once. Read-only here — only the sync engine writes it.
+    @Published private(set) var remoteIndex: RemoteIndex?
 
     let rootURL: URL
 
@@ -54,6 +57,8 @@ final class NotebookStore: ObservableObject {
         folders = ((try? Data(contentsOf: foldersURL))
             .flatMap { try? decoder.decode(FoldersFile.self, from: $0) }?.folders ?? [])
             .sorted { ($0.title.localizedLowercase, $0.id) < ($1.title.localizedLowercase, $1.id) }
+
+        remoteIndex = RemoteIndex.load(root: rootURL)
     }
 
     func createNotebook(title: String, parentFolderId: String? = nil) throws -> NotebookManifest {
@@ -208,4 +213,24 @@ final class NotebookStore: ObservableObject {
     func isFolderEmpty(_ id: String) -> Bool {
         itemCount(in: id) == 0
     }
+
+    /// Notebooks anywhere in the library, used by the sidebar's "All Notes" count.
+    var totalNotebookCount: Int { notebooks.count }
+
+    // MARK: - Sync provenance
+
+    /// Whether a notebook exists on the WebDAV server as of the last completed sync.
+    func provenance(ofNotebook id: String) -> SyncProvenance {
+        guard let remoteIndex else { return .unknown }
+        return remoteIndex.hasNotebook(id) ? .onServer : .localOnly
+    }
+
+    /// Whether a folder appears in the server's `folders.json` as of the last sync.
+    func provenance(ofFolder id: String) -> SyncProvenance {
+        guard let remoteIndex else { return .unknown }
+        return remoteIndex.hasFolder(id) ? .onServer : .localOnly
+    }
+
+    /// True once a sync has recorded a remote index — the cue for showing badges at all.
+    var hasSyncedAtLeastOnce: Bool { remoteIndex != nil }
 }
