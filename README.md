@@ -34,8 +34,9 @@ fully editable, stroke by stroke, on the other — pressure and tilt included.
       rename/move/delete (with offline tombstones), page images rendered under the ink,
       undo/redo, per-page scroll persistence, PDF page backgrounds, auto-sync on
       launch/foreground with status capsule
-- [ ] **M4b — Remaining polish:** native lined/grid templates, page delete/reorder,
-      share as PDF, handwriting search/OCR, PDF import from iPad
+- [ ] **M4b — Remaining polish:** native lined/grid templates (NotableKit: import, storage and
+      rendering done — see [Templates](#templates); App-side picker UI still open), page
+      delete/reorder, share as PDF, handwriting search/OCR, PDF import from iPad
 
 ## Running it on a real iPad
 
@@ -64,6 +65,35 @@ tools/         dbverify / dbimport / dbexport / icongen
 NotableKit/    Swift package: format codec + sync engine (M1/M3)
 App/           iPad app (M2+)
 ```
+
+## Templates
+
+A template is one page you write on: a built-in grid, an imported image, or one page of an
+imported PDF — a planner downloaded from [onplanners.com](https://onplanners.com/), say. Importing
+a multi-page PDF gives you one template per page to choose from; the file itself is stored once.
+
+```swift
+let library = TemplateLibrary(notableDirectory: appSupportDirectory)
+
+// Import a downloaded planner -> one single-page template per PDF page.
+let pages = try library.importTemplates(from: downloadedPDF)
+let daily = pages[2]
+
+// Use it: background fields for a page, and for the notebook's new-page default.
+let plan = TemplateApplication.plan(pageCount: 30, from: daily)
+// plan.pages[0]        -> background "pdfs/Daily-Planner.pdf", backgroundType "pdf2"
+// plan.notebookDefaults -> same, for manifest.json
+// plan.assets          -> files to PUT under notebooks/<id>/backgrounds/
+
+// Draw it behind the ink, or in a picker.
+let renderer = TemplateRenderer(store: library.store)
+let backdrop = try renderer.image(for: daily, pageWidth: 1404, viewport: visibleRect, scale: 2)
+let preview = try renderer.thumbnail(for: daily, size: CGSize(width: 150, height: 275))
+```
+
+Templates written this way are the form Notable's sync downloader understands — with one upstream
+caveat about custom backgrounds on the BOOX side, see
+[§7 of the protocol spec](docs/notable-sync-protocol.md#custom-backgrounds-do-not-round-trip-in-v026).
 
 ## License note
 
