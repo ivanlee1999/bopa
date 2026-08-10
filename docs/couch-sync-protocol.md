@@ -166,6 +166,14 @@ used at all because the two languages' default float *printing* does not agree, 
 bit patterns are identical by definition. For an image, the same shape over
 `assetId|createdAt|updatedAt|x|y|width|height` (no floats involved).
 
+> **Float rendering differs between the two apps and that is fine.** Swift's encoder writes a
+> whole-valued float as `0`/`1`; Kotlin writes `0.0`/`1.0`. The same document therefore does
+> not round-trip byte-identically between the apps. Nothing depends on it: merges compare
+> *decoded* values, and the one place a float's textual form could matter — the stroke
+> tiebreak — uses the IEEE-754 bit pattern of the decoded value rather than its JSON text.
+> Do not "fix" this by pinning a float format; do not introduce any rule that compares raw
+> document text.
+
 String comparisons above are by code unit. Swift compares UTF-8 and Kotlin UTF-16; these
 agree for all ASCII, which covers every id, device id and timestamp in the protocol. They
 could differ only for supplementary-plane characters in a `title` that reached the

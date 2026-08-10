@@ -523,12 +523,24 @@ Each phase lands as a PR (bopa: branch off `main` here; notable: its own branch)
 > | Protocol spec + vectors | ✅ `docs/couch-sync-protocol.md`, `docs/couch-sync-vectors/` | ✅ vectors copied byte-identical |
 > | Merge (vector-driven) | ✅ `CouchMerge.swift` | ✅ `sync/couch/Merge.kt` |
 > | Document models | ✅ `CouchModels.swift` | ✅ `sync/couch/CouchModels.kt` |
-> | Tombstone derivation | ✅ `CouchTombstones.swift` | ⬜ |
-> | CouchDB client | ✅ `CouchDBClient.swift` | ⬜ |
-> | Sync engine | ✅ `CouchSyncEngine.swift` (+ `MockCouchServer`) | ⬜ |
+> | Tombstone derivation | ✅ `CouchTombstones.swift` | ✅ `CouchTombstones.kt` |
+> | CouchDB client | ✅ `CouchDBClient.swift` | ✅ `CouchDbClient.kt` + `CouchTransport.kt` |
+> | Sync engine | ✅ `CouchSyncEngine.swift` (+ `MockCouchServer`) | ✅ `CouchSyncEngine.kt` (+ `FakeCouch`) |
+> | Verified against real CouchDB | ✅ 9 integration tests | ✅ 9 integration tests |
+> | Cross-app interop proof | ✅ `scripts/couch-interop.sh` — passes end to end | ✅ steps 1 and 3 |
 > | Storage mapping | ✅ `CouchMapping.swift` | ⬜ (needs a `deleted_stroke` Room table) |
 > | Local-store adapter + app wiring | ⬜ | ⬜ |
-> | Server on the NAS | ⬜ | — |
+> | Server on the NAS | ⬜ (stack ready: `docs/deploy/couchdb`) | — |
+>
+> Both engines are proven against a real CouchDB 3.5, and `scripts/couch-interop.sh` proves
+> they interoperate: notable writes a page, bopa merges its own stroke in, notable reads the
+> union back. The two apps write **identical field sets** — checked by diffing the documents
+> each produces, not just by both tests passing.
+>
+> Running the real server immediately found two things no mock had: CouchDB answers **200**,
+> not 201, to a tombstone write (so every deletion would have failed in production), and the
+> official image's entrypoint chowns `/opt/couchdb` before boot, so a read-only config mount
+> crash-loops the container with no log output at all.
 >
 > Two findings changed the design mid-flight, both recorded in the spec:
 > **(a)** neither app records erasures today, so tombstones must be *derived* by diffing the
