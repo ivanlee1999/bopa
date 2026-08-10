@@ -257,7 +257,27 @@ required field is missing, the reader MUST NOT guess. It keeps its local object 
 and materializes the remote version as a **new local object with fresh UUIDs**, titled
 `"<title> (conflict <yyyy-MM-dd> <deviceId>)"`. Nothing is ever discarded or overwritten.
 
-### 6.6 Mass-deletion guard
+### 6.6 Producing tombstones
+
+Neither app records erasures today — bopa's exporter writes out whatever ink survived, and
+notable hard-deletes the stroke row. Absence is sufficient when a single device owns the
+file, but a merge cannot distinguish "this stroke was erased here" from "this stroke has not
+reached here yet", and without that distinction the peer's copy simply comes back.
+
+Each save therefore records what stopped existing:
+
+```
+departed  = strokeIDs(previous save) − strokeIDs(now) − ids already tombstoned
+tombstones = existing ++ { (id, deletedAt: now) : id ∈ departed }, sorted by id
+```
+
+An id that is already tombstoned **keeps its original `deletedAt`**. Re-stamping it on every
+save would let an arbitrarily later timestamp win a delete-vs-edit comparison it should lose.
+
+Tombstones older than 30 days may be pruned locally; a tombstone whose `deletedAt` cannot be
+parsed is never pruned, since it cannot be shown to be old enough.
+
+### 6.7 Mass-deletion guard
 
 A flush that would push ≥10 notebook tombstones **and** those tombstones are a strict
 majority of the device's known notebooks must be refused pending explicit user
