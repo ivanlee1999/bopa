@@ -157,11 +157,20 @@ deviceId|createdAt|updatedAt|pen|color|maxPressure|
 bits(size)|bits(top)|bits(bottom)|bits(left)|bits(right)|pointsData
 ```
 
-joined with `|`, where `bits(f)` is the IEEE-754 32-bit pattern of `f` as a decimal integer
-(`Float.bitPattern` in Swift, `java.lang.Float.floatToIntBits` in Kotlin). Bit patterns are
-used because the two languages' default float *printing* does not agree, while their bit
-patterns are identical by definition. For an image, the same shape over
+joined with `|`, where `bits(f)` is the IEEE-754 32-bit pattern of `f` as an **unsigned**
+decimal integer (`String(f.bitPattern)` in Swift, where `bitPattern` is already `UInt32`;
+`Integer.toUnsignedString(Float.floatToIntBits(f))` in Kotlin, where `floatToIntBits` is
+signed). Rendering unsigned on both sides matters only for floats with the sign bit set —
+which no vector covers, so the vectors cannot catch getting this wrong. Bit patterns are
+used at all because the two languages' default float *printing* does not agree, while their
+bit patterns are identical by definition. For an image, the same shape over
 `assetId|createdAt|updatedAt|x|y|width|height` (no floats involved).
+
+String comparisons above are by code unit. Swift compares UTF-8 and Kotlin UTF-16; these
+agree for all ASCII, which covers every id, device id and timestamp in the protocol. They
+could differ only for supplementary-plane characters in a `title` that reached the
+last-resort `scalarKey` tiebreak — a path §4 already establishes is unreachable while the
+devices use distinct ids.
 
 ## 5. Merge functions
 

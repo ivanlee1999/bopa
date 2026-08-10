@@ -11,6 +11,12 @@ import Foundation
 /// byte-faithfully; use `NotableDate` to convert.
 
 public struct NotebookManifest: Codable, Equatable, Sendable {
+    enum CodingKeys: String, CodingKey {
+        case version, notebookId, title, pageIds, openPageId, parentFolderId
+        case defaultBackground, defaultBackgroundType, linkedExternalUri
+        case createdAt, updatedAt, serverTimestamp, deletedPageIds, updatedBy
+    }
+
     public var version: Int
     public var notebookId: String
     public var title: String
@@ -23,6 +29,10 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
     public var createdAt: String
     public var updatedAt: String
     public var serverTimestamp: String
+    /// Pages removed here, so a peer that still lists them does not re-add them on merge.
+    public var deletedPageIds: [CouchTombstone]
+    /// Which device last wrote this notebook. Breaks scalar ties in the merge.
+    public var updatedBy: String
 
     public init(
         version: Int = 1,
@@ -36,8 +46,12 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         linkedExternalUri: String? = nil,
         createdAt: String,
         updatedAt: String,
-        serverTimestamp: String
+        serverTimestamp: String,
+        deletedPageIds: [CouchTombstone] = [],
+        updatedBy: String = ""
     ) {
+        self.deletedPageIds = deletedPageIds
+        self.updatedBy = updatedBy
         self.version = version
         self.notebookId = notebookId
         self.title = title
@@ -50,6 +64,25 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.serverTimestamp = serverTimestamp
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        notebookId = try c.decode(String.self, forKey: .notebookId)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        pageIds = try c.decodeIfPresent([String].self, forKey: .pageIds) ?? []
+        openPageId = try c.decodeIfPresent(String.self, forKey: .openPageId)
+        parentFolderId = try c.decodeIfPresent(String.self, forKey: .parentFolderId)
+        defaultBackground = try c.decodeIfPresent(String.self, forKey: .defaultBackground) ?? "blank"
+        defaultBackgroundType =
+            try c.decodeIfPresent(String.self, forKey: .defaultBackgroundType) ?? "native"
+        linkedExternalUri = try c.decodeIfPresent(String.self, forKey: .linkedExternalUri)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
+        serverTimestamp = try c.decodeIfPresent(String.self, forKey: .serverTimestamp) ?? updatedAt
+        deletedPageIds = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedPageIds) ?? []
+        updatedBy = try c.decodeIfPresent(String.self, forKey: .updatedBy) ?? ""
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -66,10 +99,17 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(serverTimestamp, forKey: .serverTimestamp)
+        try c.encode(deletedPageIds, forKey: .deletedPageIds)
+        try c.encode(updatedBy, forKey: .updatedBy)
     }
 }
 
 public struct PageFile: Codable, Equatable, Sendable {
+    enum CodingKeys: String, CodingKey {
+        case version, id, notebookId, background, backgroundType, parentFolderId, scroll
+        case createdAt, updatedAt, strokes, images, deletedStrokes, updatedBy
+    }
+
     public var version: Int
     public var id: String
     public var notebookId: String?
@@ -81,6 +121,12 @@ public struct PageFile: Codable, Equatable, Sendable {
     public var updatedAt: String
     public var strokes: [StrokeDTO]
     public var images: [ImageDTO]
+    /// Strokes erased here, kept so a peer that still holds them does not bring them back on the
+    /// next merge (`docs/couch-sync-protocol.md` §6.6). Absent from files written before CouchDB
+    /// sync and ignored by WebDAV readers, which parse with unknown keys allowed.
+    public var deletedStrokes: [CouchTombstone]
+    /// Which device last wrote this page. Breaks scalar ties in the merge.
+    public var updatedBy: String
 
     public init(
         version: Int = 1,
@@ -93,7 +139,9 @@ public struct PageFile: Codable, Equatable, Sendable {
         createdAt: String,
         updatedAt: String,
         strokes: [StrokeDTO] = [],
-        images: [ImageDTO] = []
+        images: [ImageDTO] = [],
+        deletedStrokes: [CouchTombstone] = [],
+        updatedBy: String = ""
     ) {
         self.version = version
         self.id = id
@@ -106,6 +154,25 @@ public struct PageFile: Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.strokes = strokes
         self.images = images
+        self.deletedStrokes = deletedStrokes
+        self.updatedBy = updatedBy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        id = try c.decode(String.self, forKey: .id)
+        notebookId = try c.decodeIfPresent(String.self, forKey: .notebookId)
+        background = try c.decodeIfPresent(String.self, forKey: .background) ?? "blank"
+        backgroundType = try c.decodeIfPresent(String.self, forKey: .backgroundType) ?? "native"
+        parentFolderId = try c.decodeIfPresent(String.self, forKey: .parentFolderId)
+        scroll = try c.decodeIfPresent(Int.self, forKey: .scroll) ?? 0
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
+        strokes = try c.decodeIfPresent([StrokeDTO].self, forKey: .strokes) ?? []
+        images = try c.decodeIfPresent([ImageDTO].self, forKey: .images) ?? []
+        deletedStrokes = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedStrokes) ?? []
+        updatedBy = try c.decodeIfPresent(String.self, forKey: .updatedBy) ?? ""
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -121,6 +188,8 @@ public struct PageFile: Codable, Equatable, Sendable {
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(strokes, forKey: .strokes)
         try c.encode(images, forKey: .images)
+        try c.encode(deletedStrokes, forKey: .deletedStrokes)
+        try c.encode(updatedBy, forKey: .updatedBy)
     }
 }
 
