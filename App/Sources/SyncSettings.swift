@@ -5,10 +5,15 @@ import SwiftUI
 
 /// WebDAV connection settings. Server URL + username live in UserDefaults; the password
 /// lives in the Keychain.
-struct SyncSettings {
+struct SyncSettings: Equatable {
     static let serverKey = "sync.serverURL"
     static let usernameKey = "sync.username"
     static let keychainAccount = "dev.ivan.bopa.webdav"
+
+    /// Posted by `save()`. Views holding a loaded copy re-read on this rather than on a
+    /// sheet's `onDismiss`: the settings form writes in its own `onDisappear`, which SwiftUI
+    /// runs *after* the presenter's dismiss handler, so reloading there reads stale values.
+    static let didChangeNotification = Notification.Name("dev.ivan.bopa.syncSettingsDidChange")
 
     var serverURL: String
     var username: String
@@ -25,6 +30,7 @@ struct SyncSettings {
         UserDefaults.standard.set(serverURL, forKey: Self.serverKey)
         UserDefaults.standard.set(username, forKey: Self.usernameKey)
         Keychain.save(account: Self.keychainAccount, value: password)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
     }
 
     var isConfigured: Bool {

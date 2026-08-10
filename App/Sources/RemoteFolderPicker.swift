@@ -241,6 +241,46 @@ final class RemoteFolderBrowserModel: ObservableObject {
     }
 }
 
+// MARK: - Shared UI
+
+/// Breadcrumb trail over the literal path, shared by the folder picker (Settings) and the
+/// server browser (sidebar). The trailing crumb is disabled because it is where you already are.
+struct RemoteBreadcrumbBar: View {
+    let breadcrumbs: [RemoteFolderBrowserModel.Crumb]
+    let path: String
+    let pathAccessibilityIdentifier: String
+    let go: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(Array(breadcrumbs.enumerated()), id: \.element.id) { index, crumb in
+                        if index > 0 {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Button(crumb.name) { go(crumb.path) }
+                            .font(.subheadline)
+                            .disabled(crumb.path == path)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            Text(path)
+                .font(.footnote.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .padding(.horizontal, 16)
+                .accessibilityIdentifier(pathAccessibilityIdentifier)
+        }
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+}
+
 // MARK: - UI
 
 /// Browses the WebDAV share and writes the chosen folder back into `SyncSettings.serverURL`.
@@ -343,32 +383,10 @@ struct RemoteFolderPicker: View {
     }
 
     private var pathBar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    ForEach(Array(model.breadcrumbs.enumerated()), id: \.element.id) { index, crumb in
-                        if index > 0 {
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        Button(crumb.name) { Task { await model.go(to: crumb.path) } }
-                            .font(.subheadline)
-                            .disabled(crumb.path == model.path)
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
-            Text(model.path)
-                .font(.footnote.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.head)
-                .padding(.horizontal, 16)
-                .accessibilityIdentifier("folderPicker.currentPath")
-        }
-        .padding(.vertical, 8)
-        .background(.bar)
+        RemoteBreadcrumbBar(
+            breadcrumbs: model.breadcrumbs, path: model.path,
+            pathAccessibilityIdentifier: "folderPicker.currentPath",
+            go: { path in Task { await model.go(to: path) } })
     }
 
     private var folderRows: some View {
