@@ -44,7 +44,18 @@ struct SyncSettings: Equatable {
     }
 
     var isConfigured: Bool {
-        URL(string: serverURL)?.scheme?.hasPrefix("http") == true
+        Self.isServerAddress(serverURL)
+    }
+
+    /// Whether a server address has been saved, without loading the whole settings object.
+    /// `load()` reads the Keychain, which is too much to do from a SwiftUI body that re-renders
+    /// on every store change — the sidebar's sync button only needs to know if syncing is possible.
+    static var isServerConfigured: Bool {
+        isServerAddress(UserDefaults.standard.string(forKey: serverKey) ?? "")
+    }
+
+    static func isServerAddress(_ string: String) -> Bool {
+        URL(string: string)?.scheme?.hasPrefix("http") == true
     }
 
     /// Transport for the sync engine, rooted at the *resolved* base (see `syncBaseURL`) rather than

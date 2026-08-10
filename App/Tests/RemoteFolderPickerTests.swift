@@ -190,6 +190,23 @@ final class SyncSettingsBrowsingTests: XCTestCase {
         XCTAssertNil(SyncSettings(serverURL: "ftp://h.example/x", username: "u", password: "p").hostRootURL)
     }
 
+    /// The sidebar's sync button gates on this without loading the Keychain, so it has to agree
+    /// with `isConfigured` — which is the same predicate, applied to the same string.
+    func testIsServerAddressMatchesIsConfigured() {
+        let cases = ["https://h.example/dav", "http://h.example", "ftp://h.example/x", "h.example", ""]
+        for serverURL in cases {
+            let settings = SyncSettings(serverURL: serverURL, username: "u", password: "p")
+            XCTAssertEqual(
+                SyncSettings.isServerAddress(serverURL), settings.isConfigured,
+                "disagreed on \(serverURL)")
+        }
+        XCTAssertTrue(SyncSettings.isServerAddress("https://h.example/dav"))
+        // A bare host is browsable (the picker assumes https) but is not yet a configured server.
+        XCTAssertFalse(SyncSettings.isServerAddress("h.example"))
+        XCTAssertFalse(SyncSettings.isServerAddress("ftp://h.example/x"))
+        XCTAssertFalse(SyncSettings.isServerAddress(""))
+    }
+
 }
 
 // MARK: - Sync root resolution
