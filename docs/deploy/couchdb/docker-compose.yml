@@ -1,0 +1,43 @@
+services:
+  couchdb:
+    image: couchdb:3.5
+    container_name: couchdb
+    restart: unless-stopped
+
+    environment:
+      # Admin account, created on FIRST boot only. Changing these later does nothing —
+      # the account lives in the data volume from then on.
+      COUCHDB_USER: ${COUCHDB_ADMIN_USER}
+      COUCHDB_PASSWORD: ${COUCHDB_ADMIN_PASSWORD}
+      # Erlang cookie. Irrelevant for a single node, but CouchDB warns without it, and
+      # pinning it keeps the logs quiet.
+      ERL_FLAGS: -setcookie "${COUCHDB_ERLANG_COOKIE}"
+
+    ports:
+      # Bound to the LAN interface only. Public access goes through the reverse proxy on
+      # 443 so that TLS terminates there — never publish 5984 to the internet directly.
+      - "5984:5984"
+
+    volumes:
+      - ./data:/opt/couchdb/data
+      # Mount the file, not the directory: the entrypoint writes its own docker.ini into
+      # local.d/ to carry COUCHDB_USER/COUCHDB_PASSWORD, and a directory mount would leave
+      # that admin password sitting in this folder on the host.
+      #
+      # And NOT read-only: the entrypoint chowns and chmods everything under /opt/couchdb
+      # before starting, which fails on a read-only mount and kills the container with exit 1
+      # and no log output at all. The cost is that the host file's owner becomes uid 5984.
+      - ./config/10-sync.ini:/opt/couchdb/etc/local.d/10-sync.ini
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5984/_up"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

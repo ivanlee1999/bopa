@@ -88,7 +88,10 @@ public struct CouchDBClient: Sendable {
             headers: ["Content-Type": "application/json"], body: data))
 
         switch response.status {
-        case 201, 202:
+        // 201 for a create, 202 when the write is only accepted — and **200**, which is what a
+        // tombstone write actually returns. Rejecting 200 made every notebook deletion fail
+        // against a real server while passing against a mock that always answered 201.
+        case 200, 201, 202:
             guard let result = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
                   let newRev = result["rev"] as? String
             else { throw CouchError.malformedResponse("PUT \(documentID) returned no rev") }
@@ -183,7 +186,7 @@ public struct CouchDBClient: Sendable {
             query: rev.map { [HTTPQueryItem("rev", $0)] } ?? [],
             headers: ["Content-Type": contentType], body: data))
         switch response.status {
-        case 201, 202:
+        case 200, 201, 202:
             guard let result = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
                   let newRev = result["rev"] as? String
             else { throw CouchError.malformedResponse("attachment PUT returned no rev") }
