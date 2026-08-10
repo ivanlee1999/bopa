@@ -233,9 +233,31 @@ final class CouchSyncControllerTests: XCTestCase {
         controller.stop()
         XCTAssertFalse(controller.isRunning)
 
+        // A request already in flight when stop lands still completes, so allow for one more —
+        // what must not happen is the count continuing to climb.
         let afterStop = engine.pullCalls.count
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(engine.pullCalls.count, afterStop, "stop should really stop it")
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertLessThanOrEqual(
+            engine.pullCalls.count, afterStop + 1, "stop should really stop it")
+    }
+
+    /// A long poll is meant to block until something happens. When it does not — a proxy that
+    /// answers immediately, a server ignoring the timeout — re-issuing at once turns the loop into
+    /// a hot spin against the server.
+    func testAnImmediatelyReturningFeedDoesNotBecomeAHotLoop() async throws {
+        let engine = EngineSpy()  // returns an empty report instantly
+        let sleeper = FakeSleeper(allowedTicks: 3)
+        let controller = makeController(engine: engine, sleeper: sleeper)
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(100))
+        controller.stop()
+
+        // Bounded by the sleeper's ticks rather than by how fast the machine is.
+        XCTAssertLessThanOrEqual(
+            engine.pullCalls.count, 5,
+            "an idle feed should pace itself, got \(engine.pullCalls.count) requests")
+        XCTAssertFalse(sleeper.recorded.isEmpty, "it should have waited between empty results")
     }
 
     func testUnauthorizedIsReportedAsCredentialsRatherThanAsBeingOffline() async throws {
