@@ -8,6 +8,9 @@
 #   ui     BopaUITests only (~2.5 min — touch synthesis is slow by nature)
 #   full   everything; same coverage CI runs on every push/PR
 #
+# RECORD=1 re-records the snapshot reference images instead of comparing
+# (after an intentional visual change). Eyeball the diff before committing.
+#
 # Known flake: very occasionally a simulator run dies with "Early unexpected
 # exit ... before establishing connection". That is the test runner crashing
 # before attaching — infrastructure, not the code under test. Rerun once
@@ -16,6 +19,13 @@ set -euo pipefail
 
 TIER="${1:-quick}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# SnapshotTesting reads SNAPSHOT_TESTING_RECORD from the test process; xcodebuild
+# only forwards env vars carrying the TEST_RUNNER_ prefix into that process.
+if [ -n "${RECORD:-}" ]; then
+  export SNAPSHOT_TESTING_RECORD=all
+  export TEST_RUNNER_SNAPSHOT_TESTING_RECORD=all
+fi
 
 run_kit() {
   echo "==> NotableKit (swift test)"
