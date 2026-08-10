@@ -10,14 +10,31 @@ public struct HTTPRequest: Sendable {
     /// Server-absolute path (e.g. "/notable/notebooks/<id>/manifest.json"), resolved against
     /// the transport's base URL.
     public var path: String
+    /// Query items, kept as an ordered array rather than a dictionary so requests are reproducible
+    /// in tests. Carried separately from `path` because path encoding escapes "?".
+    public var query: [HTTPQueryItem]
     public var headers: [String: String]
     public var body: Data?
 
-    public init(method: String, path: String, headers: [String: String] = [:], body: Data? = nil) {
+    public init(
+        method: String, path: String, query: [HTTPQueryItem] = [],
+        headers: [String: String] = [:], body: Data? = nil
+    ) {
         self.method = method
         self.path = path
+        self.query = query
         self.headers = headers
         self.body = body
+    }
+}
+
+public struct HTTPQueryItem: Sendable, Equatable {
+    public var name: String
+    public var value: String
+
+    public init(_ name: String, _ value: String) {
+        self.name = name
+        self.value = value
     }
 }
 
@@ -70,7 +87,7 @@ public struct URLSessionTransport: HTTPTransport {
     /// Resolves a server-absolute request path against `baseURL`. Exposed so the composition can be
     /// asserted without a network: it is where a base URL whose path is wrong (say, one that already
     /// ends in the shared folder) turns into a request for the wrong tree.
-    public func url(for path: String) throws -> URL {
+    public func url(for path: String, query: [HTTPQueryItem] = []) throws -> URL {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
             throw WebDAVError.badURL(baseURL.absoluteString)
         }
@@ -81,12 +98,15 @@ public struct URLSessionTransport: HTTPTransport {
             throw WebDAVError.badURL(path)
         }
         components.percentEncodedPath = basePath + encoded
+        if !query.isEmpty {
+            components.queryItems = query.map { URLQueryItem(name: $0.name, value: $0.value) }
+        }
         guard let url = components.url else { throw WebDAVError.badURL(path) }
         return url
     }
 
     public func send(_ request: HTTPRequest) async throws -> HTTPResponse {
-        let url = try url(for: request.path)
+        let url = try url(for: request.path, query: request.query)
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = request.method
