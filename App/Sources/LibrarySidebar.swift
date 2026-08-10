@@ -51,8 +51,10 @@ struct LibrarySidebar: View {
     @EnvironmentObject private var store: NotebookStore
     @Binding var selection: LibrarySelection?
 
-    /// Only for the row's subtitle — the browser itself re-reads the settings when it opens.
-    @State private var settings = SyncSettings.load()
+    /// Just the row's subtitle, not the whole settings struct: the sidebar has no use for the
+    /// credentials, and holding them here would keep the Keychain password in memory for the
+    /// life of the library. The browser loads the full settings when it opens.
+    @State private var serverPathDisplay = SyncSettings.loadRemotePathDisplay()
 
     var body: some View {
         List(selection: $selection) {
@@ -85,9 +87,9 @@ struct LibrarySidebar: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("bopa")
-        .onAppear { settings = SyncSettings.load() }
+        .onAppear { serverPathDisplay = SyncSettings.loadRemotePathDisplay() }
         .onReceive(NotificationCenter.default.publisher(for: SyncSettings.didChangeNotification)) { _ in
-            settings = SyncSettings.load()
+            serverPathDisplay = SyncSettings.loadRemotePathDisplay()
         }
     }
 
@@ -98,7 +100,7 @@ struct LibrarySidebar: View {
             Label("Server", systemImage: "externaldrive.connected.to.line.below")
                 .lineLimit(1)
             Spacer(minLength: 4)
-            Text(settings.remotePathDisplay)
+            Text(serverPathDisplay)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

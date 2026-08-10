@@ -187,6 +187,34 @@ final class SyncSettingsBrowsingTests: XCTestCase {
     func testNonHTTPSchemeIsRejected() {
         XCTAssertNil(SyncSettings(serverURL: "ftp://h.example/x", username: "u", password: "p").hostRootURL)
     }
+
+    /// The sidebar's subtitle source. It must agree with the full settings' own display text
+    /// while reading only the server URL — that is what keeps the Keychain out of the sidebar.
+    func testLoadRemotePathDisplayReadsOnlyTheServerURL() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "SyncSettingsBrowsingTests.display"))
+        defer { defaults.removePersistentDomain(forName: "SyncSettingsBrowsingTests.display") }
+
+        defaults.removeObject(forKey: SyncSettings.serverKey)
+        XCTAssertEqual(SyncSettings.loadRemotePathDisplay(defaults: defaults), "Not set")
+
+        for (url, expected) in [
+            ("https://h.example/onyx", "/onyx"),
+            ("https://h.example", "/"),
+            ("https://h.example/Mes%20documents", "/Mes documents"),
+            // Non-empty but unusable: still "Not set", which is why the server browser
+            // distinguishes "no address" from "address that doesn't parse" itself.
+            ("ftp://h.example/x", "Not set"),
+        ] {
+            defaults.set(url, forKey: SyncSettings.serverKey)
+            XCTAssertEqual(
+                SyncSettings.loadRemotePathDisplay(defaults: defaults), expected,
+                "wrong subtitle for \(url)")
+            XCTAssertEqual(
+                SyncSettings.loadRemotePathDisplay(defaults: defaults),
+                SyncSettings(serverURL: url, username: "u", password: "p").remotePathDisplay,
+                "diverged from the full settings for \(url)")
+        }
+    }
 }
 
 // MARK: - Browser model

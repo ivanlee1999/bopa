@@ -22,10 +22,19 @@ struct ServerBrowserView: View {
     var body: some View {
         Group {
             if settings.hostRootURL == nil {
+                // An address that is present but unusable is a different problem from no
+                // address at all: "add your WebDAV address" reads as a no-op to someone who
+                // can see one already typed in, and sends them looking in the wrong place.
                 ContentUnavailableView {
-                    Label("No server yet", systemImage: "externaldrive.badge.questionmark")
+                    Label(
+                        hasServerAddress ? "Server address isn’t usable" : "No server yet",
+                        systemImage: hasServerAddress
+                            ? "exclamationmark.triangle" : "externaldrive.badge.questionmark")
                 } description: {
-                    Text("Add your WebDAV address, username and password to browse the server.")
+                    Text(hasServerAddress
+                        ? "“\(settings.serverURL)” isn’t an address bopa can reach. It needs an "
+                            + "http:// or https:// host, like https://example.com/dav."
+                        : "Add your WebDAV address, username and password to browse the server.")
                 } actions: {
                     Button("Open sync settings") { showingSettings = true }
                         .buttonStyle(.borderedProminent)
@@ -71,6 +80,11 @@ struct ServerBrowserView: View {
         .onReceive(NotificationCenter.default.publisher(for: SyncSettings.didChangeNotification)) { _ in
             reload()
         }
+    }
+
+    /// Something is typed in the address field, whether or not it parses.
+    private var hasServerAddress: Bool {
+        !settings.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func reload() {

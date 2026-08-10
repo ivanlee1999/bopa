@@ -86,6 +86,14 @@ extension SyncSettings {
         hostRootURL == nil ? "Not set" : remotePath
     }
 
+    /// `remotePathDisplay` for views that only need to show where sync points. Derived from
+    /// the server URL alone, so it never reads — and so never holds — the Keychain password.
+    static func loadRemotePathDisplay(defaults: UserDefaults = .standard) -> String {
+        SyncSettings(
+            serverURL: defaults.string(forKey: serverKey) ?? "",
+            username: "", password: "").remotePathDisplay
+    }
+
     /// A host plus Basic-auth credentials are the minimum needed to PROPFIND anything.
     var canBrowse: Bool {
         hostRootURL != nil && !username.isEmpty && !password.isEmpty
