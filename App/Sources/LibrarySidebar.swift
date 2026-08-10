@@ -50,7 +50,12 @@ struct FolderNode: Identifiable, Hashable {
 /// carries its item count and a provenance glyph (on server / local only).
 struct LibrarySidebar: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var coordinator: SyncCoordinator
     @Binding var selection: LibrarySelection?
+
+    /// Cached rather than read per render: `SyncSettings.load()` touches the Keychain. Refreshed on
+    /// the settings notification, since the form saves in its own `onDisappear`.
+    @State private var serverConfigured = SyncSettings.isServerConfigured
 
     var body: some View {
         List(selection: $selection) {
@@ -77,12 +82,16 @@ struct LibrarySidebar: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("bopa")
-        // Outside the List, not a Section in it. As rows — even selection-disabled ones, even under
-        // a "Key" header — these read as two more things to tap, and tapping them does nothing.
+        // Outside the List, not Sections in it. The legend rows are not tappable, and a real
+        // control sitting among selectable folder rows would be selectable too — the footer is
+        // where both belong.
         .safeAreaInset(edge: .bottom) {
-            if store.hasSyncedAtLeastOnce {
-                legend
-            }
+            footer
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: SyncSettings.didChangeNotification)
+        ) { _ in
+            serverConfigured = SyncSettings.isServerConfigured
         }
     }
 
@@ -101,19 +110,70 @@ struct LibrarySidebar: View {
         }
     }
 
+    /// Pinned under the tree: the sync control, then what the badges mean.
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            syncControl
+            if store.hasSyncedAtLeastOnce {
+                legend
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 10)
+        .background(.bar)
+    }
+
+    /// Manual sync, next to the tree it refreshes rather than buried in the settings sheet.
+    /// `syncNow` is the same call that sheet makes: it bails on its own if a run is already in
+    /// flight, so a double tap costs nothing.
+    private var syncControl: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                Task { await coordinator.syncNow(store: store) }
+            } label: {
+                HStack(spacing: 6) {
+                    if coordinator.isSyncing {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Syncing…")
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text("Sync now")
+                    }
+                }
+                .font(.subheadline.weight(.medium))
+            }
+            .disabled(!serverConfigured || coordinator.isSyncing)
+            .accessibilityIdentifier("sidebar.syncNow")
+
+            // The status capsule fades after ~3s, so the outcome of the last run would otherwise be
+            // gone by the time you look for it. An unconfigured server explains the dead button.
+            if let detail = syncDetail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var syncDetail: String? {
+        guard serverConfigured else { return "Add a server in Settings to sync." }
+        // The button already says "Syncing…"; repeating it under itself says nothing.
+        return coordinator.isSyncing ? nil : coordinator.statusDetail
+    }
+
     /// What the badges on rows and covers mean. Only once a sync has happened — before that there
     /// are no glyphs to explain.
     private var legend: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Divider()
             legendRow(.onServer, text: "On server")
             legendRow(.localOnly, text: "Local only")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 10)
-        .padding(.top, 4)
-        .background(.bar)
         .accessibilityElement(children: .combine)
     }
 
