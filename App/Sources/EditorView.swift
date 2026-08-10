@@ -7,6 +7,7 @@ import SwiftUI
 struct EditorView: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var handwriting: HandwritingSettings
+    @Environment(\.scenePhase) private var scenePhase
     let notebookId: String
 
     @State private var pageId: String?
@@ -142,6 +143,12 @@ struct EditorView: View {
         }
         .onAppear { if pageId == nil { openInitialPage() } }
         .onDisappear { saveNow() }
+        // Leaving the app does not pop the editor, so the debounced save has to be flushed
+        // here too — otherwise switching apps or locking the iPad within two seconds of the
+        // last stroke loses it.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { saveNow() }
+        }
         .alert(
             "Couldn’t save this page", isPresented: .constant(saveError != nil),
             presenting: saveError
@@ -333,7 +340,13 @@ struct EditorCanvasView: UIViewRepresentable {
         undoController.attach(container.pageUndoManager)
 
         let picker = context.coordinator.toolPicker
-        if CommandLine.arguments.contains("--uitest-reset-tool") {
+        if CommandLine.arguments.contains("--uitest-select-eraser") {
+            // The tool picker is system UI a UI test cannot reliably drive; erasing is
+            // reached by relaunching with this argument instead.
+            let eraser = PKEraserTool(.bitmap)
+            picker.selectedTool = eraser
+            canvas.tool = eraser
+        } else if CommandLine.arguments.contains("--uitest-reset-tool") {
             // PKToolPicker persists the last-selected tool per app; a leftover eraser
             // makes drawing tests silently no-op. Tests opt into a known pen.
             picker.selectedTool = PKInkingTool(.pen, color: .black, width: 5)

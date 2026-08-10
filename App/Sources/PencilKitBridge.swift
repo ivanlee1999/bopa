@@ -87,15 +87,68 @@ enum PencilKitBridge {
     // MARK: PencilKit -> Notable
 
     static func strokeDTOs(from drawing: PKDrawing) -> [StrokeDTO] {
-        drawing.strokes.compactMap { dto(from: $0) }
+        drawing.strokes.flatMap { dtos(from: $0) }
     }
 
+    /// One DTO per surviving piece of a stroke.
+    ///
+    /// The eraser does not shorten a stroke: PencilKit keeps the whole path and records the
+    /// rubbed-out parts in `mask`. The Notable wire format has no mask, so the surviving
+    /// parametric ranges are resampled into separate strokes — otherwise erasing saves
+    /// nothing. A fully erased stroke yields no DTO.
+    static func dtos(from stroke: PKStroke) -> [StrokeDTO] {
+        guard stroke.mask != nil else { return [dto(from: stroke)].compactMap { $0 } }
+        let path = stroke.path
+        let ranges = stroke.maskedPathRanges
+        // A masked stroke's renderBounds covers the mask rather than the surviving ink, so
+        // every branch below derives its own box from the points it exports.
+        guard path.count > 1 else {
+            // A single-point stroke (a dot) is erased whole or not at all.
+            guard !ranges.isEmpty else { return [] }
+            return [dto(from: stroke, controlPoints: Array(path), bounds: nil)].compactMap { $0 }
+        }
+        return ranges.compactMap { range in
+            // Untouched by this mask: keep the authored control points exactly.
+            let points = range.lowerBound <= 0 && range.upperBound >= CGFloat(path.count - 1)
+                ? Array(path)
+                : sampled(path, in: range)
+            guard points.count > 1 else { return nil }
+            return dto(from: stroke, controlPoints: points, bounds: nil)
+        }
+    }
+
+    /// Parametric samples across `range`: one per original control point, plus the exact
+    /// endpoints (the eraser cuts between control points).
+    private static func sampled(
+        _ path: PKStrokePath, in range: ClosedRange<CGFloat>
+    ) -> [PKStrokePoint] {
+        var values: [CGFloat] = []
+        var value = range.lowerBound
+        while value < range.upperBound - 0.001 {
+            values.append(value)
+            value += 1
+        }
+        values.append(range.upperBound)
+        return values.map { path.interpolatedPoint(at: $0) }
+    }
+
+    /// The whole stroke as one DTO, ignoring any eraser mask — use `dtos(from:)` to export
+    /// a stroke that may have been erased into.
     static func dto(from stroke: PKStroke) -> StrokeDTO? {
+        dto(from: stroke, controlPoints: Array(stroke.path), bounds: stroke.renderBounds)
+    }
+
+    /// - Parameter bounds: the stroke's render bounds when the whole stroke is exported;
+    ///   nil for an erased segment, whose box is derived from the sampled points instead
+    ///   (`renderBounds` covers the mask, not this one piece of the path).
+    private static func dto(
+        from stroke: PKStroke, controlPoints: [PKStrokePoint], bounds: CGRect?
+    ) -> StrokeDTO? {
         let transform = stroke.transform
-        let controlPoints = Array(stroke.path)
         guard !controlPoints.isEmpty else { return nil }
 
         let maxWidth = max(controlPoints.map(\.size.width).max() ?? 1, 0.5)
+        let startTime = controlPoints[0].timeOffset
 
         var points: [NotableStrokePoint] = []
         points.reserveCapacity(controlPoints.count)
@@ -116,11 +169,13 @@ enum PencilKitBridge {
                 pressure: min(max(pressure, 0), 1),
                 tiltX: min(max(tiltX, -90), 90),
                 tiltY: min(max(tiltY, -90), 90),
-                dt: UInt16(min(max((sp.timeOffset * 1000).rounded(), 0), 65534))))
+                // Rebased on the segment's own start, so a piece cut out of the middle of a
+                // stroke still begins at t=0 (and stays inside dt's 16-bit range).
+                dt: UInt16(min(max(((sp.timeOffset - startTime) * 1000).rounded(), 0), 65534))))
         }
 
         guard let blob = try? SBStrokeCodec.encode(points) else { return nil }
-        let bounds = stroke.renderBounds
+        let bounds = bounds ?? Self.bounds(of: controlPoints, transform: transform)
         let now = NotableDate.format(Date())
         return StrokeDTO(
             id: UUID().uuidString.lowercased(),
@@ -134,6 +189,21 @@ enum PencilKitBridge {
             pointsData: blob.base64EncodedString(),
             createdAt: now,
             updatedAt: now)
+    }
+
+    /// Ink box around a run of points: the path's extent grown by half the widest point.
+    private static func bounds(
+        of controlPoints: [PKStrokePoint], transform: CGAffineTransform
+    ) -> CGRect {
+        let locations = controlPoints.map { $0.location.applying(transform) }
+        let xs = locations.map(\.x)
+        let ys = locations.map(\.y)
+        let inset = max(controlPoints.map(\.size.width).max() ?? 1, 0.5) / 2
+        return CGRect(
+            x: (xs.min() ?? 0) - inset,
+            y: (ys.min() ?? 0) - inset,
+            width: (xs.max() ?? 0) - (xs.min() ?? 0) + inset * 2,
+            height: (ys.max() ?? 0) - (ys.min() ?? 0) + inset * 2)
     }
 }
 
