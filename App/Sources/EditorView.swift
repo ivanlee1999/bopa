@@ -233,7 +233,9 @@ struct EditorView: View {
         guard var page else { return }
         let scroll = max(0, Int(scrollState.pageY.rounded()))
         guard dirty || scroll != page.scroll else { return }
-        page.strokes = PencilKitBridge.strokeDTOs(from: drawing)
+        // `page.strokes` is the set we last loaded or wrote, so identity chains forward across
+        // repeated saves: an untouched stroke keeps its id and its exact bytes.
+        page.strokes = PencilKitBridge.strokeDTOs(from: drawing, source: page.strokes)
         page.scroll = scroll
         self.page = page
         do {

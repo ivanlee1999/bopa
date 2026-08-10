@@ -86,8 +86,43 @@ enum PencilKitBridge {
 
     // MARK: PencilKit -> Notable
 
-    static func strokeDTOs(from drawing: PKDrawing) -> [StrokeDTO] {
-        drawing.strokes.flatMap { dtos(from: $0) }
+    /// Re-exports a drawing, reusing the original DTO for any stroke the user did not touch.
+    ///
+    /// `source` is the page's strokes as they were loaded. PencilKit preserves
+    /// `path.creationDate` through an untouched stroke, and import seeds it from `dto.createdAt`
+    /// (see `stroke(from:)`), so it re-identifies strokes across the round trip.
+    ///
+    /// This matters for two reasons. Identity: minting a fresh id per stroke per save made a page
+    /// merely opened read as 100% changed, churning its ETag and making any content comparison —
+    /// including conflict detection — worthless. Fidelity: re-encoding pushes every stroke through
+    /// quantisation and a pressure→width→pressure round trip, so repeatedly opening a BOOX page
+    /// used to degrade ink the user never touched.
+    static func strokeDTOs(from drawing: PKDrawing, source: [StrokeDTO] = []) -> [StrokeDTO] {
+        // Multi-map: two strokes *can* share a creation date, and handing both the same id would
+        // be worse than re-encoding one. Entries are consumed on match, so each is claimed once.
+        var byCreation: [Date: [StrokeDTO]] = [:]
+        for dto in source {
+            guard let created = NotableDate.parse(dto.createdAt) else { continue }
+            byCreation[created, default: []].append(dto)
+        }
+
+        return drawing.strokes.flatMap { stroke -> [StrokeDTO] in
+            // Carry the original over only when nothing about the stroke changed:
+            // - a mask means the eraser cut into it, and reusing the original DTO there would
+            //   save the rubbed-out ink straight back;
+            // - a non-identity transform means it was moved (lasso).
+            // Either way the geometry really did change, so it goes through `dtos(from:)`, which
+            // also expands a part-erased stroke into its surviving pieces.
+            let created = stroke.path.creationDate
+            if stroke.mask == nil, stroke.transform.isIdentity,
+               var candidates = byCreation[created], !candidates.isEmpty
+            {
+                let original = candidates.removeFirst()
+                byCreation[created] = candidates
+                return [original]
+            }
+            return dtos(from: stroke)
+        }
     }
 
     /// One DTO per surviving piece of a stroke.

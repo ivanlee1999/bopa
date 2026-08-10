@@ -32,7 +32,7 @@ struct BopaApp: App {
                         // short; the engine writes the manifest last, so a truncated run leaves
                         // the server recoverable on the next one.
                         syncCoordinator.stopAutoSync()
-                        Task { await syncCoordinator.syncNow(store: store) }
+                        Task { await syncCoordinator.syncIfAutomatic(store: store) }
                     default:
                         syncCoordinator.stopAutoSync()
                     }

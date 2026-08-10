@@ -29,6 +29,14 @@ final class SyncCoordinator: ObservableObject {
     /// would be reverted by the next autosave and then uploaded as the winner.
     @Published var openNotebookId: String?
 
+    /// Notebooks changed on both devices and awaiting a decision. Nothing has been transferred for
+    /// these. Derived from the last run and deliberately not persisted.
+    @Published private(set) var conflicts: [NotebookConflict] = []
+
+    func conflict(for notebookId: String) -> NotebookConflict? {
+        conflicts.first { $0.notebookId == notebookId }
+    }
+
     /// When the most recent sync attempt started, successful or not. This is the
     /// staleness clock: counting attempts (not successes) means an unreachable server
     /// is retried at most once per interval instead of on every scene activation.
@@ -86,7 +94,49 @@ final class SyncCoordinator: ObservableObject {
         guard !isSyncing else { return }
         let settings = loadSettings()
         guard settings.isConfigured else { return }
+        // Claimed here, synchronously, before any await: that is the whole single-flight guard.
+        status = .syncing
+        await performRun(store: store, settings: settings)
+    }
 
+    /// Applies a conflict decision and syncs it, holding the in-flight slot across both.
+    ///
+    /// Doing this as "rebaseline, then call syncNow" is unsafe: a poll already running would make
+    /// `syncNow` bail silently, and worse, that run loaded the sync state *before* the rebaseline
+    /// and rewrites it on completion — quietly undoing the decision. So wait for any run to finish
+    /// first, then keep the slot for the whole operation. Notable holds its sync mutex across the
+    /// same two steps for the same reason.
+    func applyResolution(
+        store: NotebookStore, _ body: @escaping (SyncEngine) async throws -> Void
+    ) async throws {
+        let settings = loadSettings()
+        guard let transport = settings.makeTransport() else {
+            throw WebDAVError.badURL(settings.serverURL)
+        }
+        // Claim the slot synchronously *before* the decision and hold it through the sync that
+        // carries it out, so a poll cannot start in between and write pre-decision sync state
+        // back over the rebaseline. A poll that is already running is a known gap — see the
+        // KNOWN ISSUE note on `ConflictResolutionView`.
+        guard !isSyncing else { throw ResolutionBusy() }
+        status = .syncing
+        do {
+            try await body(SyncEngine(transport: transport, rootURL: store.rootURL))
+        } catch {
+            status = .idle
+            throw error
+        }
+        await performRun(store: store, settings: settings)
+    }
+
+    /// A sync was already running, so the decision was not applied. Surfaced to the user rather
+    /// than swallowed, because silently doing nothing is what made this hard to diagnose.
+    struct ResolutionBusy: LocalizedError {
+        var errorDescription: String? {
+            "A sync is in progress. Try again in a moment."
+        }
+    }
+
+    private func performRun(store: NotebookStore, settings: SyncSettings) async {
         lastAttemptAt = now()
         status = .syncing
 
@@ -95,6 +145,9 @@ final class SyncCoordinator: ObservableObject {
         let uploadOnly = openNotebookId.map { Set([$0]) } ?? []
         let report = await performSync(settings, store.rootURL, uploadOnly)
         let finishedAt = now()
+        // Recomputed from scratch every run, never persisted: a conflict is a fact about the two
+        // current copies, so a stale flag would be worse than none.
+        conflicts = report.conflicts
         if Self.isFailure(report) {
             status = .failure(report.errors.joined(separator: "; "), finishedAt)
         } else {
@@ -104,12 +157,21 @@ final class SyncCoordinator: ObservableObject {
         }
     }
 
-    /// Foreground trigger: syncs only when configured and the last attempt is older
-    /// than `staleInterval` (60s by default).
+    /// Foreground trigger: syncs only when automatic sync is on, the server is configured, and the
+    /// last attempt is older than `staleInterval` (60s by default).
     func syncIfStale(store: NotebookStore) async {
+        guard isAutomaticEnabled() else { return }
         if let last = lastAttemptAt, now().timeIntervalSince(last) < staleInterval {
             return
         }
+        await syncNow(store: store)
+    }
+
+    /// Any sync bopa decides to do on its own — on launch, on backgrounding, when an editor
+    /// closes. Gated on the setting, because "Sync automatically: off" promises that bopa only
+    /// syncs when asked, and a launch is not asking.
+    func syncIfAutomatic(store: NotebookStore) async {
+        guard isAutomaticEnabled() else { return }
         await syncNow(store: store)
     }
 
@@ -195,9 +257,13 @@ final class SyncCoordinator: ObservableObject {
         var parts: [String] = []
         if !report.uploaded.isEmpty { parts.append("↑\(report.uploaded.count)") }
         if !report.downloaded.isEmpty { parts.append("↓\(report.downloaded.count)") }
+        if !report.merged.isEmpty { parts.append("⇄\(report.merged.count)") }
         if !report.skipped.isEmpty { parts.append("=\(report.skipped.count)") }
         if !report.deletedLocally.isEmpty { parts.append("🗑\(report.deletedLocally.count)") }
-        if !report.conflicts.isEmpty { parts.append("⚠︎ conflicts: \(report.conflicts.joined(separator: ", "))") }
+        if !report.conflicts.isEmpty {
+            let n = report.conflicts.count
+            parts.append("⚠︎ \(n) notebook\(n == 1 ? "" : "s") need\(n == 1 ? "s" : "") you")
+        }
         if !report.errors.isEmpty { parts.append("errors: \(report.errors.joined(separator: "; "))") }
         guard parts.isEmpty else { return parts.joined(separator: "  ") }
         return emptyRunSummary(for: report.remoteTree)

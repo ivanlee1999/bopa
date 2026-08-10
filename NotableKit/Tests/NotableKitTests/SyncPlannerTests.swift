@@ -36,13 +36,26 @@ final class SyncPlannerTests: XCTestCase {
             .upload(ifMatch: nil))
     }
 
-    func testRemoteChangedLocalNewerUploadsWithFreshEtag() {
+    /// Both sides moved since the last common sync. Picking the newer clock here is precisely
+    /// what used to destroy the other device's work, so it must reconcile instead — even though
+    /// local is comfortably newer.
+    func testBothSidesMovedReconcilesInsteadOfPickingAWinner() {
         XCTAssertEqual(
             SyncPlanner.decide(
                 localUpdatedAt: 30_000, syncedLocalUpdatedAt: 10_000,
                 storedEtag: "\"e1\"", remoteChanged: true,
                 remote: RemoteManifestInfo(updatedAt: 20_000, etag: "\"e2\"")),
-            .upload(ifMatch: "\"e2\""))
+            .reconcile)
+    }
+
+    /// Only the remote moved, so there is nothing to weigh it against — plain download.
+    func testOnlyRemoteMovedStillDownloads() {
+        XCTAssertEqual(
+            SyncPlanner.decide(
+                localUpdatedAt: 10_000, syncedLocalUpdatedAt: 10_000,
+                storedEtag: "\"e1\"", remoteChanged: true,
+                remote: RemoteManifestInfo(updatedAt: 30_000, etag: "\"e2\"")),
+            .download)
     }
 
     func testRemoteChangedRemoteNewerDownloads() {
@@ -54,19 +67,34 @@ final class SyncPlannerTests: XCTestCase {
             .download)
     }
 
-    func testRemoteChangedWithinToleranceSkips() {
+    /// A sub-second tie is not proof the pages match. Skipping would record "in sync" and make
+    /// every future conditional GET 304 over pages that actually differ.
+    func testTimestampTieReconciles() {
+        XCTAssertEqual(
+            SyncPlanner.decide(
+                localUpdatedAt: 10_500, syncedLocalUpdatedAt: 10_500,
+                storedEtag: "\"e1\"", remoteChanged: true,
+                remote: RemoteManifestInfo(updatedAt: 10_000, etag: "\"e2\"")),
+            .reconcile)
+    }
+
+    /// Never synced but present on both sides: we have no basis for calling either one the
+    /// parent, so it goes to reconciliation rather than a coin flip.
+    func testNeverSyncedWithRemotePresentReconciles() {
         XCTAssertEqual(
             SyncPlanner.decide(
                 localUpdatedAt: 10_500, syncedLocalUpdatedAt: nil,
                 storedEtag: nil, remoteChanged: true,
                 remote: RemoteManifestInfo(updatedAt: 10_000, etag: "\"e2\"")),
-            .skip)
+            .reconcile)
     }
 
+    /// An unparsable remote timestamp with no local movement: nothing to compare, so our copy
+    /// is the only defensible answer.
     func testRemoteChangedNoTimestampUploads() {
         XCTAssertEqual(
             SyncPlanner.decide(
-                localUpdatedAt: 10_000, syncedLocalUpdatedAt: nil,
+                localUpdatedAt: 10_000, syncedLocalUpdatedAt: 10_000,
                 storedEtag: nil, remoteChanged: true,
                 remote: RemoteManifestInfo(updatedAt: nil, etag: "\"e2\"")),
             .upload(ifMatch: "\"e2\""))

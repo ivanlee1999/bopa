@@ -49,6 +49,23 @@ struct ProvenanceBadge: View {
     }
 }
 
+/// Marks a notebook that changed on both devices and is waiting on a decision.
+///
+/// Deliberately outranks the provenance glyph on a cover: "on server" is information, this is a
+/// thing to do, and until it is done the notebook will not sync in either direction.
+struct ConflictCoverBadge: View {
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.orange)
+            .accessibilityLabel("Changed on both devices — needs you to choose")
+            .padding(5)
+            .background(.regularMaterial, in: Circle())
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.08)))
+            .padding(6)
+    }
+}
+
 /// Same glyph on a frosted disc, for laying over a notebook cover thumbnail.
 struct ProvenanceCoverBadge: View {
     let provenance: SyncProvenance

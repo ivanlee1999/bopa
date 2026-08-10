@@ -132,16 +132,110 @@ final class SyncEngineTests: XCTestCase {
             atPath: rootURL.appendingPathComponent("notebooks/nb1/pages/p9.json").path))
     }
 
-    func testConflictLastWriterWinsUploadWhenLocalNewer() async throws {
+    // MARK: Divergence
+
+    /// **The test this whole feature exists for.** Both sides edited the same notebook. Whichever
+    /// clock is newer, neither copy may be touched: the run reports a conflict and leaves the
+    /// local file and the server file exactly as they were.
+    func testBothSidesChangedMovesNothingAndReportsAConflict() async throws {
         try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
         _ = await engine().sync()
 
-        // Both sides change; local is newer.
-        try seedRemoteNotebook(id: "nb1", title: "Remote change", pageIds: ["p1"], updatedAt: "2026-08-02T10:10:00Z")
-        try writeLocalNotebook(id: "nb1", title: "Local change", pageIds: ["p1"], updatedAt: "2026-08-02T10:20:00Z")
+        try seedRemoteNotebook(
+            id: "nb1", title: "Remote change", pageIds: ["p1"], updatedAt: "2026-08-02T10:10:00Z")
+        try writeLocalNotebook(
+            id: "nb1", title: "Local change", pageIds: ["p1"], updatedAt: "2026-08-02T10:20:00Z")
+        let remoteBefore = try XCTUnwrap(server.fileData("/notable/notebooks/nb1/manifest.json"))
 
         let report = await engine().sync()
 
+        XCTAssertEqual(report.conflicts.map(\.notebookId), ["nb1"])
+        XCTAssertTrue(report.uploaded.isEmpty, "uploaded during a conflict")
+        XCTAssertTrue(report.downloaded.isEmpty, "downloaded during a conflict")
+        XCTAssertEqual(try localManifest("nb1").title, "Local change", "local copy was modified")
+        XCTAssertEqual(
+            server.fileData("/notable/notebooks/nb1/manifest.json"), remoteBefore,
+            "server copy was modified")
+    }
+
+    /// Local newer, remote newer — the direction must not change the answer. Before this, one of
+    /// these silently uploaded and the other silently downloaded.
+    func testBothSidesChangedConflictsRegardlessOfWhichIsNewer() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+
+        try writeLocalNotebook(
+            id: "nb1", title: "Local change", pageIds: ["p1"], updatedAt: "2026-08-02T10:10:00Z")
+        try seedRemoteNotebook(
+            id: "nb1", title: "Remote change", pageIds: ["p1"], updatedAt: "2026-08-02T10:20:00Z")
+
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.conflicts.map(\.notebookId), ["nb1"])
+        XCTAssertEqual(try localManifest("nb1").title, "Local change")
+    }
+
+    /// A conflict is re-reported until it is settled — the flag is derived, never persisted.
+    func testConflictIsReportedAgainOnTheNextRun() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+        try seedRemoteNotebook(
+            id: "nb1", title: "Remote", pageIds: ["p1"], updatedAt: "2026-08-02T10:10:00Z")
+        try writeLocalNotebook(
+            id: "nb1", title: "Local", pageIds: ["p1"], updatedAt: "2026-08-02T10:20:00Z")
+
+        _ = await engine().sync()
+        let second = await engine().sync()
+
+        XCTAssertEqual(second.conflicts.map(\.notebookId), ["nb1"])
+    }
+
+    /// Different pages edited on each side is the everyday case for one person on two devices.
+    /// It is not a conflict and must merge with no prompt.
+    func testIndependentPageEditsMergeWithoutAConflict() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1", "p2"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+
+        // The BOOX rewrites p2 only; we rewrite p1 only. Manifest structure is untouched.
+        try seedRemotePage(notebook: "nb1", pageId: "p2", updatedAt: "2026-08-02T10:10:00Z")
+        try bumpRemoteManifestClock("nb1", to: "2026-08-02T10:10:00Z")
+        try writeLocalPage(notebook: "nb1", pageId: "p1", updatedAt: "2026-08-02T10:20:00Z")
+        try bumpLocalManifestClock("nb1", to: "2026-08-02T10:20:00Z")
+
+        let report = await engine().sync()
+
+        XCTAssertTrue(report.conflicts.isEmpty, "independent pages should not conflict")
+        XCTAssertEqual(report.merged, ["nb1"])
+        // p2 came down, p1 went up.
+        XCTAssertEqual(try localPageUpdatedAt("nb1", "p2"), "2026-08-02T10:10:00Z")
+        let uploaded = try JSONDecoder().decode(
+            PageFile.self,
+            from: XCTUnwrap(server.fileData("/notable/notebooks/nb1/pages/p1.json")))
+        XCTAssertEqual(uploaded.updatedAt, "2026-08-02T10:20:00Z")
+    }
+
+    /// A server that does not return ETags cannot tell us a page moved, so it must never make us
+    /// invent a conflict — matching Notable.
+    func testPageWithNoSyncRowIsNotAConflict() async throws {
+        // Never synced: no page rows exist, so nothing can be called changed on both sides.
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:20:00Z")
+        try seedRemoteNotebook(
+            id: "nb1", title: "Nb", pageIds: ["p1"], updatedAt: "2026-08-02T10:10:00Z")
+
+        let report = await engine().sync()
+
+        XCTAssertTrue(report.conflicts.first?.pageIds.isEmpty ?? true)
+    }
+
+    // MARK: Resolution
+
+    func testKeepMineUploadsOnTheNextRun() async throws {
+        try await stageSamePageConflict()
+
+        try await engine().resolveNotebook(notebookId: "nb1", resolution: .keepMine)
+        let report = await engine().sync()
+
+        XCTAssertTrue(report.conflicts.isEmpty, "still conflicted after resolving")
         XCTAssertEqual(report.uploaded, ["nb1"])
         let remote = try JSONDecoder().decode(
             NotebookManifest.self,
@@ -149,17 +243,29 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(remote.title, "Local change")
     }
 
-    func testConflictLastWriterWinsDownloadWhenRemoteNewer() async throws {
+    /// Taking the server copy applies immediately — there is no rebaseline that reliably makes the
+    /// next run choose the remote side, so this one transfers on the spot.
+    func testUseRemoteReplacesTheLocalCopyAndSettles() async throws {
+        try await stageSamePageConflict()
+
+        try await engine().resolveNotebook(notebookId: "nb1", resolution: .useRemote)
+
+        XCTAssertEqual(try localManifest("nb1").title, "Remote change")
+        let report = await engine().sync()
+        XCTAssertTrue(report.conflicts.isEmpty, "still conflicted after resolving")
+        XCTAssertEqual(try localManifest("nb1").title, "Remote change", "the next sync undid it")
+    }
+
+    /// Sets up the canonical both-sides edit and leaves it conflicted.
+    private func stageSamePageConflict() async throws {
         try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
         _ = await engine().sync()
-
-        try writeLocalNotebook(id: "nb1", title: "Local change", pageIds: ["p1"], updatedAt: "2026-08-02T10:10:00Z")
-        try seedRemoteNotebook(id: "nb1", title: "Remote change", pageIds: ["p1"], updatedAt: "2026-08-02T10:20:00Z")
-
+        try seedRemoteNotebook(
+            id: "nb1", title: "Remote change", pageIds: ["p1"], updatedAt: "2026-08-02T10:10:00Z")
+        try writeLocalNotebook(
+            id: "nb1", title: "Local change", pageIds: ["p1"], updatedAt: "2026-08-02T10:20:00Z")
         let report = await engine().sync()
-
-        XCTAssertEqual(report.downloaded, ["nb1"])
-        XCTAssertEqual(try localManifest("nb1").title, "Remote change")
+        XCTAssertEqual(report.conflicts.map(\.notebookId), ["nb1"], "fixture did not conflict")
     }
 
     func testRemoteTombstoneDeletesLocalNotebook() async throws {
@@ -215,11 +321,12 @@ final class SyncEngineTests: XCTestCase {
 
         let report = await engine().sync()
 
-        // Conditional GET sees a change; same manifest updatedAt (10:00) => local newer =>
-        // upload with FRESH etag => succeeds. So instead force a mid-flight rotation:
-        // this scenario documents that a *stale* If-Match yields .conflicts, tested below
-        // via direct client call.
-        XCTAssertEqual(report.uploaded, ["nb1"])
+        // The rotated ETag makes the remote read as changed while the manifests still agree
+        // structurally, so this is an independent-edit merge, not a conflict: our page goes up and
+        // nothing is lost. The 412 contract itself is exercised directly below, because the engine
+        // no longer has a path that produces one from an ordinary run.
+        XCTAssertEqual(report.merged, ["nb1"])
+        XCTAssertTrue(report.conflicts.isEmpty)
 
         let dav = WebDAVClient(transport: server)
         do {
@@ -604,6 +711,50 @@ final class SyncEngineTests: XCTestCase {
         let report = await engine().sync(uploadOnly: ["nb1"])
 
         XCTAssertEqual(report.downloaded, ["nb2"])
+    }
+
+    // MARK: Divergence fixtures
+
+    /// Rewrites one page on the server, standing in for the BOOX editing just that page.
+    private func seedRemotePage(notebook: String, pageId: String, updatedAt: String) throws {
+        let page = PageFile(
+            id: pageId, notebookId: notebook,
+            createdAt: "2026-08-01T00:00:00Z", updatedAt: updatedAt)
+        server.setFile(
+            "/notable/notebooks/\(notebook)/pages/\(pageId).json", try JSONEncoder().encode(page))
+    }
+
+    private func writeLocalPage(notebook: String, pageId: String, updatedAt: String) throws {
+        let page = PageFile(
+            id: pageId, notebookId: notebook,
+            createdAt: "2026-08-01T00:00:00Z", updatedAt: updatedAt)
+        try JSONEncoder().encode(page).write(
+            to: rootURL.appendingPathComponent("notebooks/\(notebook)/pages/\(pageId).json"))
+    }
+
+    /// Moves a manifest clock without touching structure, so the notebook reads as changed while
+    /// staying structurally identical to the other side.
+    private func bumpRemoteManifestClock(_ id: String, to updatedAt: String) throws {
+        var manifest = try JSONDecoder().decode(
+            NotebookManifest.self,
+            from: XCTUnwrap(server.fileData("/notable/notebooks/\(id)/manifest.json")))
+        manifest.updatedAt = updatedAt
+        server.setFile(
+            "/notable/notebooks/\(id)/manifest.json", try JSONEncoder().encode(manifest))
+    }
+
+    private func bumpLocalManifestClock(_ id: String, to updatedAt: String) throws {
+        let url = rootURL.appendingPathComponent("notebooks/\(id)/manifest.json")
+        var manifest = try JSONDecoder().decode(
+            NotebookManifest.self, from: Data(contentsOf: url))
+        manifest.updatedAt = updatedAt
+        try JSONEncoder().encode(manifest).write(to: url)
+    }
+
+    private func localPageUpdatedAt(_ id: String, _ pageId: String) throws -> String {
+        let data = try Data(
+            contentsOf: rootURL.appendingPathComponent("notebooks/\(id)/pages/\(pageId).json"))
+        return try JSONDecoder().decode(PageFile.self, from: data).updatedAt
     }
 
     private func localAsset(_ id: String, _ relative: String) -> URL {
