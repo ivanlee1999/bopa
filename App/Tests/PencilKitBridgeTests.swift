@@ -113,6 +113,162 @@ final class PencilKitBridgeTests: XCTestCase {
         XCTAssertLessThanOrEqual(dto.top, dto.bottom)
     }
 
+    // MARK: - Eraser
+
+    /// A horizontal stroke from (0,100) to (100,100), 11 control points one parametric
+    /// step apart — the shape the eraser tests cut pieces out of.
+    private func straightStroke(
+        transform: CGAffineTransform = .identity,
+        mask: UIBezierPath? = nil,
+        ink: PKInk = PKInk(.pen, color: .black)
+    ) -> PKStroke {
+        let controlPoints = (0...10).map { i -> PKStrokePoint in
+            PKStrokePoint(
+                location: CGPoint(x: CGFloat(i) * 10, y: 100),
+                timeOffset: TimeInterval(i) * 0.01,
+                size: CGSize(width: 5, height: 5),
+                opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        return PKStroke(
+            ink: ink,
+            path: PKStrokePath(controlPoints: controlPoints, creationDate: Date()),
+            transform: transform,
+            mask: mask)
+    }
+
+    /// A band tall enough to cover the test stroke, spanning `x` horizontally.
+    private func mask(keepingX x: ClosedRange<CGFloat>) -> UIBezierPath {
+        UIBezierPath(rect: CGRect(x: x.lowerBound, y: 50, width: x.upperBound - x.lowerBound, height: 100))
+    }
+
+    func testEraserTrimsTheSavedStroke() throws {
+        // Rub out everything past x=45. PencilKit keeps the full path and records a mask;
+        // the saved stroke must be the surviving piece, not the original.
+        let stroke = straightStroke(mask: mask(keepingX: -10...45))
+        let dtos = PencilKitBridge.dtos(from: stroke)
+        XCTAssertEqual(dtos.count, 1)
+
+        let points = try dtos[0].decodedPoints()
+        XCTAssertEqual(points.first?.x ?? 0, 0, accuracy: 0.03)
+        XCTAssertEqual(points.last?.x ?? 0, 45, accuracy: 0.03)
+        // Bounding box follows the surviving ink, not the mask.
+        XCTAssertEqual(dtos[0].left, -2.5, accuracy: 0.03)
+        XCTAssertEqual(dtos[0].right, 47.5, accuracy: 0.03)
+    }
+
+    func testEraserSplitsAStrokeIntoSurvivingSegments() throws {
+        // Erase the middle: two separate strokes must be saved.
+        let holes = mask(keepingX: -10...22)
+        holes.append(mask(keepingX: 68...128))
+        let dtos = PencilKitBridge.dtos(from: straightStroke(mask: holes))
+        XCTAssertEqual(dtos.count, 2)
+
+        let first = try dtos[0].decodedPoints()
+        let second = try dtos[1].decodedPoints()
+        XCTAssertEqual(first.first?.x ?? 0, 0, accuracy: 0.03)
+        XCTAssertEqual(first.last?.x ?? 0, 22, accuracy: 0.03)
+        XCTAssertEqual(second.first?.x ?? 0, 68, accuracy: 0.03)
+        XCTAssertEqual(second.last?.x ?? 0, 100, accuracy: 0.03)
+        // Each piece is a stroke in its own right: its clock starts at zero.
+        XCTAssertEqual(second.first?.dt, 0)
+        XCTAssertEqual(dtos[0].size, dtos[1].size)
+    }
+
+    func testFullyErasedStrokeIsNotSaved() {
+        let elsewhere = UIBezierPath(rect: CGRect(x: 500, y: 500, width: 10, height: 10))
+        XCTAssertTrue(PencilKitBridge.dtos(from: straightStroke(mask: elsewhere)).isEmpty)
+    }
+
+    func testUntouchedStrokeKeepsItsAuthoredPoints() throws {
+        // A mask that covers the whole stroke (the eraser passed nearby, hit nothing).
+        let covering = UIBezierPath(rect: CGRect(x: -500, y: -500, width: 2000, height: 2000))
+        let dtos = PencilKitBridge.dtos(from: straightStroke(mask: covering))
+        XCTAssertEqual(dtos.count, 1)
+        XCTAssertEqual(try dtos[0].decodedPoints().count, 11)
+    }
+
+    /// The lasso moves a selection by setting a transform rather than rewriting the path,
+    /// so the export has to bake it in or the stroke saves back at its old position.
+    func testLassoMoveIsSavedAtTheNewPosition() throws {
+        let moved = straightStroke(transform: CGAffineTransform(translationX: 30, y: 20))
+        let dto = try XCTUnwrap(PencilKitBridge.dtos(from: moved).first)
+        let points = try dto.decodedPoints()
+        XCTAssertEqual(points.first?.x ?? 0, 30, accuracy: 0.03)
+        XCTAssertEqual(points.last?.x ?? 0, 130, accuracy: 0.03)
+        XCTAssertEqual(points.first?.y ?? 0, 120, accuracy: 0.03)
+    }
+
+    func testErasingAfterALassoMoveUsesDrawingCoordinates() throws {
+        // Selection moved +200 in x, then erased past x=245.
+        let moved = CGAffineTransform(translationX: 200, y: 0)
+        let dtos = PencilKitBridge.dtos(
+            from: straightStroke(transform: moved, mask: mask(keepingX: 190...245)))
+        XCTAssertEqual(dtos.count, 1)
+        let points = try dtos[0].decodedPoints()
+        XCTAssertEqual(points.first?.x ?? 0, 200, accuracy: 0.03)
+        XCTAssertEqual(points.last?.x ?? 0, 245, accuracy: 0.03)
+
+        // The same mask in the stroke's pre-move coordinates erases nothing of it.
+        let untouched = PencilKitBridge.dtos(
+            from: straightStroke(transform: moved, mask: mask(keepingX: -10...45)))
+        XCTAssertTrue(untouched.isEmpty)
+    }
+
+    func testDrawingExportAppliesErasureToEveryStroke() {
+        let drawing = PKDrawing(strokes: [
+            straightStroke(),
+            straightStroke(mask: mask(keepingX: -10...45)),
+            straightStroke(mask: UIBezierPath(rect: CGRect(x: 500, y: 500, width: 10, height: 10))),
+        ])
+        // Intact + trimmed + fully erased.
+        XCTAssertEqual(PencilKitBridge.strokeDTOs(from: drawing).count, 2)
+    }
+
+    /// Every ink the tool picker can hand us must survive a save; an unmapped ink would
+    /// silently drop the stroke.
+    func testAllToolPickerInksExportAfterErasing() throws {
+        let inkTypes: [PKInk.InkType] = [
+            .pen, .pencil, .marker, .fountainPen, .watercolor, .crayon, .monoline,
+        ]
+        for inkType in inkTypes {
+            let stroke = straightStroke(
+                mask: mask(keepingX: -10...45), ink: PKInk(inkType, color: .red))
+            let dtos = PencilKitBridge.dtos(from: stroke)
+            XCTAssertEqual(dtos.count, 1, "\(inkType) should export one stroke")
+            let dto = try XCTUnwrap(dtos.first)
+            XCTAssertEqual(dto.color, UIColor.red.argb, "\(inkType) should keep its color")
+            XCTAssertEqual(
+                try dto.decodedPoints().last?.x ?? 0, 45, accuracy: 0.03,
+                "\(inkType) should be trimmed by the eraser")
+        }
+    }
+
+    @MainActor
+    func testErasedPageRoundTripsThroughTheStore() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bopa-test-\(UUID().uuidString)")
+        let store = NotebookStore(rootURL: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let manifest = try store.createNotebook(title: "Erase")
+        let pageId = try XCTUnwrap(manifest.pageIds.first)
+        var page = try store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+
+        // Two strokes drawn, then the eraser takes the tail off one and all of the other.
+        let erasedAway = UIBezierPath(rect: CGRect(x: 500, y: 500, width: 10, height: 10))
+        let drawing = PKDrawing(strokes: [
+            straightStroke(mask: mask(keepingX: -10...45)),
+            straightStroke(mask: erasedAway),
+        ])
+        page.strokes = PencilKitBridge.strokeDTOs(from: drawing)
+        try store.savePage(page)
+
+        let reloaded = try store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+        XCTAssertEqual(reloaded.strokes.count, 1)
+        let points = try reloaded.strokes[0].decodedPoints()
+        XCTAssertEqual(points.last?.x ?? 0, 45, accuracy: 0.03)
+    }
+
     @MainActor
     func testStoreCreateSaveLoadCycle() throws {
         let tmp = FileManager.default.temporaryDirectory

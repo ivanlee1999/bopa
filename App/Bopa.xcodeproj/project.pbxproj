@@ -20,6 +20,7 @@
 		5677850903A70C8887A2C384 /* NotableKit in Frameworks */ = {isa = PBXBuildFile; productRef = EAF3412FA66289006396A938 /* NotableKit */; };
 		60E3A5838850A4ADDF75230D /* DrawingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */; };
 		612A95F1BE606CBF723DF683 /* RotationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7CA46ABC2CDD559A3FFAECE /* RotationUITests.swift */; };
+		6282E4AF4D9D4C81DBA588C4 /* EraserUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 007E2190A23B0021DB3B5752 /* EraserUITests.swift */; };
 		669C9BEFB7448981118F2DB1 /* ServerBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7079102757F82D89F8EECEAE /* ServerBrowserView.swift */; };
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
 		836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */; };
@@ -57,6 +58,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		007E2190A23B0021DB3B5752 /* EraserUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EraserUITests.swift; sourceTree = "<group>"; };
 		067F82B43BDD4E6D982DBA40 /* BopaTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BopaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		13EC02E525247FA06BC975D5 /* BopaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BopaApp.swift; sourceTree = "<group>"; };
 		16D436CB210A8416B43424AF /* BopaUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BopaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -138,6 +140,7 @@
 			children = (
 				1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */,
 				3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */,
+				007E2190A23B0021DB3B5752 /* EraserUITests.swift */,
 				C7CA46ABC2CDD559A3FFAECE /* RotationUITests.swift */,
 			);
 			path = UITests;
@@ -303,6 +306,7 @@
 			files = (
 				A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */,
 				60E3A5838850A4ADDF75230D /* DrawingUITests.swift in Sources */,
+				6282E4AF4D9D4C81DBA588C4 /* EraserUITests.swift in Sources */,
 				612A95F1BE606CBF723DF683 /* RotationUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
