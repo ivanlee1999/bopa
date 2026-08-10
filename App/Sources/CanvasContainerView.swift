@@ -20,8 +20,15 @@ final class CanvasContainerView: UIView {
     private let paperView = PaperTemplateView()
     private let backgroundImageView = UIImageView()
     private var imageViews: [UIImageView] = []
-    private var didSetInitialZoom = false
     private var pendingScrollY: CGFloat?
+    /// The view's width at the last layout pass, so a rotation (or a Split View resize) can
+    /// be told apart from the ordinary layout passes that happen at the same width. Zero
+    /// until the first real layout, i.e. before the zoom is known.
+    private var laidOutWidth: CGFloat = 0
+    /// Whether the page is currently zoomed to exactly fill the view's width. Only in that
+    /// state does a width change re-fit the page — someone who zoomed in to write keeps
+    /// their zoom across a rotation.
+    private var isFitToWidth = true
 
     /// Whether the first layout zooms the page to fit the view's width (otherwise 1:1).
     var fitWidthOnOpen = true
@@ -65,19 +72,64 @@ final class CanvasContainerView: UIView {
         super.layoutSubviews()
         canvas.frame = bounds
         paperView.frame = bounds
-        if !didSetInitialZoom, bounds.width > 0 {
-            didSetInitialZoom = true
-            let fit = bounds.width / pageWidth
-            if fit < 1 {
-                canvas.minimumZoomScale = min(canvas.minimumZoomScale, fit)
-                if fitWidthOnOpen { canvas.zoomScale = fit }
+        if bounds.width > 0, bounds.width != laidOutWidth {
+            let isFirstLayout = laidOutWidth == 0
+            laidOutWidth = bounds.width
+            if isFirstLayout {
+                applyInitialZoom()
+            } else {
+                adjustZoomForNewWidth()
             }
         }
-        if didSetInitialZoom, let pendingScrollY {
+        if laidOutWidth > 0, let pendingScrollY {
             self.pendingScrollY = nil
             applyScroll(pageY: pendingScrollY)
         }
         updateContentGeometry()
+    }
+
+    /// The zoom at which the page exactly fills the view's width, capped at 1:1 — a page is
+    /// never blown up just because the window is wide.
+    private var fitWidthZoom: CGFloat {
+        guard bounds.width > 0, pageWidth > 0 else { return 1 }
+        return min(bounds.width / pageWidth, 1)
+    }
+
+    private func applyInitialZoom() {
+        let fit = fitWidthZoom
+        canvas.minimumZoomScale = min(canvas.minimumZoomScale, fit)
+        if fitWidthOnOpen {
+            canvas.zoomScale = fit
+            isFitToWidth = true
+        } else {
+            isFitToWidth = canvas.zoomScale == fit
+        }
+    }
+
+    /// Re-fits the page after the view's width changes — a rotation, or a Split View /
+    /// Stage Manager resize. Without this the zoom stays at the old width's fit: turning
+    /// the iPad to landscape leaves the page marooned in a band of empty space, and turning
+    /// it back to portrait overflows the page off-screen with the minimum zoom still set
+    /// from the wider layout, so it cannot be pinched back into view.
+    private func adjustZoomForNewWidth() {
+        let fit = fitWidthZoom
+        // Never leave the user unable to zoom out far enough to see the whole page width.
+        canvas.minimumZoomScale = min(canvas.minimumZoomScale, fit)
+        // The offset is in (zoomed) view points, so re-derive it from the page-space
+        // position: rotating should keep you where you were writing, not jump the page.
+        let anchorY = canvas.contentOffset.y / max(canvas.zoomScale, 0.01)
+        // A zoomed-in page keeps its zoom (you were writing at that size); only the
+        // minimum above changes, so the narrower screen can still be pinched back to fit.
+        if isFitToWidth {
+            canvas.zoomScale = fit
+        }
+        applyScroll(pageY: anchorY)
+    }
+
+    /// Called by the canvas delegate whenever the zoom changes. Remembers whether the page
+    /// is still fitted to the width, which is what the next width change preserves.
+    func canvasZoomDidChange() {
+        isFitToWidth = abs(canvas.zoomScale - fitWidthZoom) < 0.005
     }
 
     /// Sets the ruled/dotted/grid paper drawn on the sheet. A PDF-backed page passes
@@ -124,11 +176,25 @@ final class CanvasContainerView: UIView {
     /// pass (zoomScale is not final until then).
     func setInitialScroll(pageY: CGFloat) {
         let y = max(0, pageY)
-        if didSetInitialZoom {
+        if laidOutWidth > 0 {
             applyScroll(pageY: y)
         } else {
             pendingScrollY = y
         }
+    }
+
+    /// Centres the page when the view is wider than the zoomed page — a zoomed-out page, or
+    /// a landscape window wider than the 1:1 page. Done with contentInset rather than by
+    /// moving views, so the ink (which lives in the canvas's own coordinate space) travels
+    /// with the paper: every content view below is positioned from `contentOffset` too.
+    private func centerPageHorizontally() {
+        let slack = max((bounds.width - pageWidth * canvas.zoomScale) / 2, 0).rounded()
+        guard canvas.contentInset.left != slack else { return }
+        canvas.contentInset.left = slack
+        canvas.contentInset.right = slack
+        // With the page narrower than the view there is nothing to scroll to sideways, so
+        // pin it to the centred position rather than leaving it wherever it was.
+        if slack > 0 { canvas.contentOffset.x = -slack }
     }
 
     private func applyScroll(pageY: CGFloat) {
@@ -141,6 +207,7 @@ final class CanvasContainerView: UIView {
     /// page images) aligned with the canvas content: page coordinates scaled by zoom,
     /// translated by the scroll offset.
     func updateContentGeometry() {
+        centerPageHorizontally()
         let scale = canvas.zoomScale
         let offset = canvas.contentOffset
         pageSheet.frame = CGRect(

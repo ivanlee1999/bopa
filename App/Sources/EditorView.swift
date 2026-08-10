@@ -529,6 +529,7 @@ struct EditorCanvasView: UIViewRepresentable {
         }
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            container?.canvasZoomDidChange()
             container?.updateContentGeometry()
             parent.scrollState.pageY =
                 scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
