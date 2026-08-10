@@ -528,9 +528,25 @@ Each phase lands as a PR (bopa: branch off `main` here; notable: its own branch)
 > | Sync engine | ✅ `CouchSyncEngine.swift` (+ `MockCouchServer`) | ✅ `CouchSyncEngine.kt` (+ `FakeCouch`) |
 > | Verified against real CouchDB | ✅ 9 integration tests | ✅ 9 integration tests |
 > | Cross-app interop proof | ✅ `scripts/couch-interop.sh` — passes end to end | ✅ steps 1 and 3 |
-> | Storage mapping | ✅ `CouchMapping.swift` | ⬜ (needs a `deleted_stroke` Room table) |
-> | Local-store adapter + app wiring | ⬜ | ⬜ |
-> | Server on the NAS | ⬜ (stack ready: `docs/deploy/couchdb`) | — |
+> | Storage mapping | ✅ `CouchMapping.swift` | ✅ inside `RoomCouchStore.kt` |
+> | Local-store adapter | ✅ `FileCouchStore.swift` | ✅ `RoomCouchStore.kt` (+ `deleted_stroke`, schema v38) |
+> | Erasure recorded on save | ✅ `NotebookStore.savePage` | ✅ `PageDataManager.removeStrokesFromDb` |
+> | App wiring (sync-on-save, feed loop, settings) | ✅ `SyncBackendHost` + `CouchSyncController` | ⬜ |
+> | End-to-end against real CouchDB | ✅ 3 app-level tests | ⬜ |
+> | Server on the NAS | ⬜ (stack ready and tested: `docs/deploy/couchdb`) | — |
+>
+> **Known gaps to close before this replaces WebDAV**
+>
+> - *notable* does not record notebook-level page deletions or image erasures, so it always
+>   emits empty `deletedPageIds` / `deletedImages`. Union merge makes an empty list inert, so a
+>   peer's tombstones survive — but a page deleted **on the BOOX** will not stick on the iPad.
+> - *notable* has no `updatedBy` column, so a document loaded from Room reports the local
+>   device. Observable only as the tiebreak between two writes in the same millisecond, but it
+>   means a pulled-then-repushed document changes hands without a real edit.
+> - *notable* stores `pen` as an enum, so an unrecognized pen name cannot round-trip verbatim
+>   the way bopa keeps it; it falls back to `BALLPEN`, which keeps the ink rather than dropping
+>   the stroke.
+> - Standalone quick pages (`notebookId == null`) are still not synced by either app.
 >
 > Both engines are proven against a real CouchDB 3.5, and `scripts/couch-interop.sh` proves
 > they interoperate: notable writes a page, bopa merges its own stroke in, notable reads the
