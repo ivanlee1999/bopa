@@ -20,6 +20,15 @@ new logic gets a unit test in `NotableKit/Tests` or `App/Tests` (both cheap
 enough to run constantly). Add a UI test only when the behavior genuinely needs
 touch synthesis — keep that suite small and interaction-focused.
 
+**Visual changes** are covered by snapshot tests (swift-snapshot-testing) in the
+fast tier — template rendering in `NotableKit/Tests`, stroke/ink rendering in
+`App/Tests` — so "does it still look right" does not require the UI tier either.
+Reference images live in `__Snapshots__/` next to the tests and are committed.
+After an *intentional* visual change: `RECORD=1 ./scripts/test.sh quick`
+re-records them; inspect the image diff before committing. A snapshot test that
+fails on an unrelated change is a real regression, not noise — the tolerances
+already absorb cross-machine antialiasing drift.
+
 Known flake: a simulator run occasionally dies with "Early unexpected exit …
 before establishing connection". That's the runner crashing before attaching,
 not a product failure — rerun once before investigating.
