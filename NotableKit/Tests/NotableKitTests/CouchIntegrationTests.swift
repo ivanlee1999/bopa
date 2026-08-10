@@ -207,6 +207,63 @@ final class CouchIntegrationTests: XCTestCase {
         XCTAssertEqual(onServer?.body.strokes.map(\.id).sorted(), expected)
     }
 
+    /// The closest thing to two real devices: two notebook directories on disk, the real
+    /// storage adapter, and a real server between them.
+    func testTwoRealDirectoriesConvergeThroughRealCouchDB() async throws {
+        let ipadRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bopa-int-ipad-\(UUID().uuidString)", isDirectory: true)
+        let booxRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bopa-int-boox-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: ipadRoot)
+            try? FileManager.default.removeItem(at: booxRoot)
+        }
+
+        let ipadStore = FileCouchStore(rootURL: ipadRoot, deviceID: "ipad")
+        let booxStore = FileCouchStore(rootURL: booxRoot, deviceID: "boox")
+        let ipad = CouchSyncEngine(client: client, store: ipadStore, deviceID: "ipad")
+        let boox = CouchSyncEngine(client: client, store: booxStore, deviceID: "boox")
+
+        let notebookDocID = notebookID("shared")
+        let pageDocID = pageID("shared")
+        let notebookUUID = CouchDocID.split(notebookDocID)!.id
+        let pageUUID = CouchDocID.split(pageDocID)!.id
+
+        try ipadStore.apply(notebookDocID, .notebook(CouchNotebook(
+            title: "shared notes", pageIds: [pageUUID],
+            createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "ipad")))
+        try ipadStore.apply(pageDocID, .page(CouchPage(
+            notebookId: notebookUUID, strokes: [stroke("s-ipad", at: 1, device: "ipad")],
+            createdAt: stamp(0), updatedAt: stamp(5), updatedBy: "ipad")))
+        await ipad.markDirty(ipadStore.allDocumentIDs())
+        let pushed = await ipad.flush()
+        XCTAssertTrue(pushed.failures.isEmpty, "push failed: \(pushed.failures)")
+
+        _ = try await boox.pull()
+        guard case .page(let received)? = try booxStore.load(pageDocID) else {
+            return XCTFail("the page never reached the second directory")
+        }
+        XCTAssertEqual(received.strokes.map(\.id), ["s-ipad"])
+        // It really is a file on the other disk, not just engine state.
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: booxRoot.appendingPathComponent(
+                "notebooks/\(notebookUUID)/pages/\(pageUUID).json").path))
+
+        var edited = received
+        edited.strokes.append(stroke("s-boox", at: 9, device: "boox"))
+        edited.updatedAt = stamp(9)
+        edited.updatedBy = "boox"
+        try booxStore.apply(pageDocID, .page(edited))
+        await boox.markDirty([pageDocID])
+        _ = await boox.flush()
+        _ = try await ipad.pull()
+
+        guard case .page(let merged)? = try ipadStore.load(pageDocID) else {
+            return XCTFail("the merge never landed back on the first disk")
+        }
+        XCTAssertEqual(merged.strokes.map(\.id).sorted(), ["s-boox", "s-ipad"])
+    }
+
     func testErasureSurvivesARoundTripThroughRealCouchDB() async throws {
         let id = pageID("erase")
         let ipadStore = FakeLocalStore()
