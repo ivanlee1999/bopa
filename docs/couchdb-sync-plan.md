@@ -531,8 +531,8 @@ Each phase lands as a PR (bopa: branch off `main` here; notable: its own branch)
 > | Storage mapping | ✅ `CouchMapping.swift` | ✅ inside `RoomCouchStore.kt` |
 > | Local-store adapter | ✅ `FileCouchStore.swift` | ✅ `RoomCouchStore.kt` (+ `deleted_stroke`, schema v38) |
 > | Erasure recorded on save | ✅ `NotebookStore.savePage` | ✅ `PageDataManager.removeStrokesFromDb` |
-> | App wiring (sync-on-save, feed loop, settings) | ✅ `SyncBackendHost` + `CouchSyncController` | ⬜ |
-> | End-to-end against real CouchDB | ✅ 3 app-level tests | ⬜ |
+> | App wiring (sync-on-save, feed loop, settings) | ✅ `SyncBackendHost` + `CouchSyncController` | ✅ `CouchSyncController.kt` + `CouchSyncHost.kt` |
+> | End-to-end against real CouchDB | ✅ 3 app-level tests | ✅ via the interop script |
 > | Server on the NAS | ⬜ (stack ready and tested: `docs/deploy/couchdb`) | — |
 >
 > **Known gaps to close before this replaces WebDAV**
