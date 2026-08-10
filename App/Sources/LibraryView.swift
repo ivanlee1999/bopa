@@ -67,6 +67,7 @@ private struct FolderContentsView: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var handwriting: HandwritingSettings
     @EnvironmentObject private var coordinator: SyncCoordinator
+    @EnvironmentObject private var backendHost: SyncBackendHost
     let folderId: String?
     @Binding var selection: LibrarySelection?
     let openNotebook: (String) -> Void
@@ -146,7 +147,7 @@ private struct FolderContentsView: View {
         // Presented rather than pushed, for the same reason as the editor.
         .sheet(isPresented: $showingSyncSettings) {
             NavigationStack {
-                SettingsView()
+                SettingsView(backendHost: backendHost)
             }
         }
         .sheet(item: $resolvingConflict) { conflict in
@@ -196,6 +197,9 @@ private struct FolderContentsView: View {
         ) {
             Button("Delete", role: .destructive) {
                 if let id = deletingNotebookId {
+                    // Recorded before the files go, and persisted, so the tombstone still gets
+                    // pushed if this happened offline or the app is killed before the next sync.
+                    backendHost.noteDeleted(notebookId: id)
                     try? store.deleteNotebook(id: id)
                 }
             }

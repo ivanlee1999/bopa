@@ -5,6 +5,7 @@ struct BopaApp: App {
     @StateObject private var store = NotebookStore()
     @StateObject private var syncCoordinator = SyncCoordinator()
     @StateObject private var handwriting = HandwritingSettings()
+    @StateObject private var backendHost = SyncBackendHost()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -21,27 +22,36 @@ struct BopaApp: App {
                 .environmentObject(store)
                 .environmentObject(syncCoordinator)
                 .environmentObject(handwriting)
+                .environmentObject(backendHost)
+                .task {
+                    // Attached here rather than in init: SwiftUI creates the scene's state
+                    // objects independently, so the host cannot take them as constructor
+                    // arguments.
+                    backendHost.attach(store: store, coordinator: syncCoordinator)
+                }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     switch phase {
                     case .active:
-                        Task { await syncCoordinator.syncIfStale(store: store) }
-                        syncCoordinator.startAutoSync(store: store)
+                        backendHost.becameActive()
                     case .background:
-                        // Stop the clock first, then take one last pass so work made in this
-                        // session is on the server before the app is suspended. iOS may cut this
-                        // short; the engine writes the manifest last, so a truncated run leaves
-                        // the server recoverable on the next one.
-                        syncCoordinator.stopAutoSync()
-                        Task { await syncCoordinator.syncIfAutomatic(store: store) }
+                        backendHost.enteredBackground()
                     default:
-                        syncCoordinator.stopAutoSync()
+                        backendHost.willResignActive()
                     }
                 }
-                // Local edits need no polling to be noticed — only a pause to be worth pushing.
+                // WebDAV learns about edits here; CouchDB hears through the store's per-document
+                // signal instead, which says which documents changed rather than just that
+                // something did.
                 .onReceive(NotificationCenter.default.publisher(
                     for: NotebookStore.didChangeLocallyNotification)
                 ) { _ in
-                    syncCoordinator.noteEdited(store: store)
+                    backendHost.noteEdited()
+                }
+                .onReceive(NotificationCenter.default.publisher(
+                    for: CouchSettings.didChangeNotification)
+                ) { _ in
+                    backendHost.configure()
+                    if scenePhase == .active { backendHost.becameActive() }
                 }
             }
         }
