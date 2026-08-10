@@ -22,8 +22,26 @@ struct BopaApp: App {
                 .environmentObject(syncCoordinator)
                 .environmentObject(handwriting)
                 .onChange(of: scenePhase, initial: true) { _, phase in
-                    guard phase == .active else { return }
-                    Task { await syncCoordinator.syncIfStale(store: store) }
+                    switch phase {
+                    case .active:
+                        Task { await syncCoordinator.syncIfStale(store: store) }
+                        syncCoordinator.startAutoSync(store: store)
+                    case .background:
+                        // Stop the clock first, then take one last pass so work made in this
+                        // session is on the server before the app is suspended. iOS may cut this
+                        // short; the engine writes the manifest last, so a truncated run leaves
+                        // the server recoverable on the next one.
+                        syncCoordinator.stopAutoSync()
+                        Task { await syncCoordinator.syncNow(store: store) }
+                    default:
+                        syncCoordinator.stopAutoSync()
+                    }
+                }
+                // Local edits need no polling to be noticed — only a pause to be worth pushing.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NotebookStore.didChangeLocallyNotification)
+                ) { _ in
+                    syncCoordinator.noteEdited(store: store)
                 }
             }
         }

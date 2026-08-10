@@ -17,6 +17,7 @@ struct EditorView: View {
     @State private var dirty = false
     @State private var saveTask: Task<Void, Never>?
     @State private var loadError: String?
+    @State private var saveError: String?
     @StateObject private var undoController = CanvasUndoController()
     @State private var scrollState = CanvasScrollState()
 
@@ -141,6 +142,14 @@ struct EditorView: View {
         }
         .onAppear { if pageId == nil { openInitialPage() } }
         .onDisappear { saveNow() }
+        .alert(
+            "Couldn’t save this page", isPresented: .constant(saveError != nil),
+            presenting: saveError
+        ) { _ in
+            Button("OK") { saveError = nil }
+        } message: { error in
+            Text("Your strokes are still here and bopa will try again. \(error)")
+        }
     }
 
     private func openInitialPage() {
@@ -220,8 +229,14 @@ struct EditorView: View {
         page.strokes = PencilKitBridge.strokeDTOs(from: drawing)
         page.scroll = scroll
         self.page = page
-        try? store.savePage(page)
-        dirty = false
+        do {
+            try store.savePage(page)
+            dirty = false
+        } catch {
+            // Leave `dirty` set so the next flush retries. Clearing it on a failed write — which
+            // is what `try?` did — silently discarded the strokes that failed to land.
+            saveError = String(describing: error)
+        }
     }
 }
 

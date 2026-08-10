@@ -12,12 +12,15 @@ final class SyncCoordinatorTests: XCTestCase {
     @MainActor
     private final class SyncSpy {
         private(set) var callCount = 0
+        /// The `uploadOnly` set each run was handed, newest last.
+        private(set) var uploadOnlyPerCall: [Set<String>] = []
         var result = SyncReport()
         var blocking = false
         private var gates: [CheckedContinuation<Void, Never>] = []
 
-        func run() async -> SyncReport {
+        func run(uploadOnly: Set<String> = []) async -> SyncReport {
             callCount += 1
+            uploadOnlyPerCall.append(uploadOnly)
             if blocking {
                 await withCheckedContinuation { gates.append($0) }
             }
@@ -27,6 +30,27 @@ final class SyncCoordinatorTests: XCTestCase {
         func releaseAll() {
             gates.forEach { $0.resume() }
             gates.removeAll()
+        }
+    }
+
+    /// Stands in for `Task.sleep` so the poll loop runs at test speed. Returns immediately for
+    /// `allowedTicks` calls, then throws to end the loop — otherwise a bug would spin forever.
+    private final class FakeSleeper: @unchecked Sendable {
+        private let lock = NSLock()
+        private var remaining: Int
+        private(set) var calls = 0
+
+        init(allowedTicks: Int) { self.remaining = allowedTicks }
+
+        struct Stop: Error {}
+
+        func sleep(_ seconds: TimeInterval) async throws {
+            try lock.withLock {
+                calls += 1
+                guard remaining > 0 else { throw Stop() }
+                remaining -= 1
+            }
+            await Task.yield()
         }
     }
 
@@ -52,13 +76,20 @@ final class SyncCoordinatorTests: XCTestCase {
     private func makeCoordinator(
         spy: SyncSpy,
         clock: Clock? = nil,
-        settings: SyncSettings? = nil
+        settings: SyncSettings? = nil,
+        automatic: Bool = true,
+        sleeper: FakeSleeper? = nil
     ) -> SyncCoordinator {
         let settings = settings ?? configuredSettings()
         return SyncCoordinator(
             now: { clock?.now ?? Date() },
             loadSettings: { settings },
-            performSync: { _, _ in await spy.run() })
+            isAutomaticEnabled: { automatic },
+            sleeper: { seconds in
+                guard let sleeper else { throw FakeSleeper.Stop() }
+                try await sleeper.sleep(seconds)
+            },
+            performSync: { _, _, uploadOnly in await spy.run(uploadOnly: uploadOnly) })
     }
 
     /// Spins the main actor until `condition` holds (bounded so a bug fails the
@@ -145,7 +176,7 @@ final class SyncCoordinatorTests: XCTestCase {
 
         let coordinator = SyncCoordinator(
             loadSettings: { self.configuredSettings() },
-            performSync: { _, rootURL in
+            performSync: { _, rootURL, _ in
                 // Simulate the engine downloading a notebook into the local tree.
                 let now = NotableDate.format(Date())
                 let manifest = NotebookManifest(
@@ -278,6 +309,132 @@ final class SyncCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.statusDetail, "↑1")
         XCTAssertTrue(coordinator.lastRunFoundNothing)
+    }
+
+    // MARK: - Automatic sync
+
+    func testPollLoopSyncsOnEachTick() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let sleeper = FakeSleeper(allowedTicks: 3)
+        let coordinator = makeCoordinator(spy: spy, sleeper: sleeper)
+
+        coordinator.startAutoSync(store: store)
+        await spinUntil { spy.callCount == 3 }
+
+        XCTAssertEqual(spy.callCount, 3)
+    }
+
+    func testStartAutoSyncIsIdempotent() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let sleeper = FakeSleeper(allowedTicks: 1)
+        let coordinator = makeCoordinator(spy: spy, sleeper: sleeper)
+
+        coordinator.startAutoSync(store: store)
+        coordinator.startAutoSync(store: store)   // second call must not add a loop
+        await spinUntil { spy.callCount == 1 }
+
+        XCTAssertEqual(spy.callCount, 1, "a second start spawned another loop")
+        XCTAssertTrue(coordinator.isAutoSyncRunning)
+    }
+
+    func testStopAutoSyncEndsThePolling() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(spy: spy, sleeper: FakeSleeper(allowedTicks: 100))
+
+        coordinator.startAutoSync(store: store)
+        await spinUntil { spy.callCount >= 1 }
+        coordinator.stopAutoSync()
+        let afterStop = spy.callCount
+        for _ in 0..<200 { await Task.yield() }
+
+        XCTAssertFalse(coordinator.isAutoSyncRunning)
+        XCTAssertEqual(spy.callCount, afterStop, "loop kept running after stop")
+    }
+
+    /// The toggle gates automatic runs only — "Sync now" must still work when it is off.
+    func testAutomaticDisabledSuppressesPollingButNotManualSync() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(
+            spy: spy, automatic: false, sleeper: FakeSleeper(allowedTicks: 5))
+
+        coordinator.startAutoSync(store: store)
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertEqual(spy.callCount, 0, "polled while automatic sync was off")
+
+        await coordinator.syncNow(store: store)
+        XCTAssertEqual(spy.callCount, 1)
+    }
+
+    func testNoteEditedDoesNothingWhenAutomaticIsOff() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(
+            spy: spy, automatic: false, sleeper: FakeSleeper(allowedTicks: 5))
+
+        coordinator.noteEdited(store: store)
+        for _ in 0..<200 { await Task.yield() }
+
+        XCTAssertEqual(spy.callCount, 0)
+    }
+
+    /// Writing is continuous; pushing must not be. Successive edits collapse into one sync.
+    func testRepeatedEditsCoalesceIntoASinglePush() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(spy: spy, sleeper: FakeSleeper(allowedTicks: 100))
+
+        coordinator.noteEdited(store: store)
+        coordinator.noteEdited(store: store)
+        coordinator.noteEdited(store: store)
+        await spinUntil { spy.callCount == 1 }
+        for _ in 0..<200 { await Task.yield() }
+
+        XCTAssertEqual(spy.callCount, 1, "each edit pushed separately")
+    }
+
+    // MARK: - Open notebook exclusion
+
+    func testOpenNotebookIsHandedToTheEngineAsUploadOnly() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(spy: spy)
+        coordinator.openNotebookId = "nb-open"
+
+        await coordinator.syncNow(store: store)
+
+        XCTAssertEqual(spy.uploadOnlyPerCall, [["nb-open"]])
+    }
+
+    func testNoOpenNotebookMeansNoExclusions() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(spy: spy)
+
+        await coordinator.syncNow(store: store)
+
+        XCTAssertEqual(spy.uploadOnlyPerCall, [[]])
+    }
+
+    /// The set is captured before the run starts: closing the editor mid-sync must not let a
+    /// download land on the notebook this run already decided to protect.
+    func testExclusionIsFixedForTheDurationOfARun() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        spy.blocking = true
+        let coordinator = makeCoordinator(spy: spy)
+        coordinator.openNotebookId = "nb-open"
+
+        let run = Task { await coordinator.syncNow(store: store) }
+        await spinUntil { spy.callCount == 1 }
+        coordinator.openNotebookId = nil          // editor closes mid-run
+        spy.releaseAll()
+        await run.value
+
+        XCTAssertEqual(spy.uploadOnlyPerCall, [["nb-open"]])
     }
 
     func testPopulatedTreeKeepsTheOriginalWording() async {

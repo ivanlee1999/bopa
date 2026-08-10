@@ -255,4 +255,56 @@ final class NotebookStoreTests: XCTestCase {
         let second = NotebookStore(rootURL: rootURL)
         XCTAssertEqual(second.folders.map(\.title), ["Persisted"])
     }
+
+    // MARK: Saving against a manifest that moved underneath
+
+    /// The data-loss path this guards: `store.notebooks` is only as fresh as the last `refresh()`,
+    /// and sync writes manifests from another thread throughout a run. Saving a page used to write
+    /// the cached manifest back, resurrecting a stale `pageIds` — and the next upload's orphan
+    /// cleanup then deletes from the server every page that array omits.
+    func testSavePageDoesNotResurrectAStalePageList() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        let page = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+
+        // A sync lands a manifest with an extra page while the editor holds the old one.
+        var downloaded = notebook
+        downloaded.pageIds = notebook.pageIds + ["page-from-boox"]
+        downloaded.updatedAt = "2026-08-09T10:00:00Z"
+        try writeManifestDirectly(downloaded)
+
+        try store.savePage(page)
+
+        let onDisk = try manifestOnDisk(notebook.notebookId)
+        XCTAssertEqual(
+            onDisk.pageIds, downloaded.pageIds,
+            "saving a page dropped a page the sync engine had just added")
+    }
+
+    func testAddPageBuildsOnTheManifestFromDisk() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        var downloaded = notebook
+        downloaded.pageIds = notebook.pageIds + ["page-from-boox"]
+        try writeManifestDirectly(downloaded)
+
+        let added = try store.addPage(to: notebook.notebookId)
+
+        let onDisk = try manifestOnDisk(notebook.notebookId)
+        XCTAssertEqual(onDisk.pageIds, downloaded.pageIds + [added.id])
+    }
+
+    /// Writes straight to disk, bypassing the store — standing in for the sync engine.
+    private func writeManifestDirectly(_ manifest: NotebookManifest) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        try encoder.encode(manifest).write(
+            to: rootURL.appendingPathComponent("notebooks/\(manifest.notebookId)/manifest.json"),
+            options: .atomic)
+    }
+
+    private func manifestOnDisk(_ id: String) throws -> NotebookManifest {
+        let data = try Data(
+            contentsOf: rootURL.appendingPathComponent("notebooks/\(id)/manifest.json"))
+        return try JSONDecoder().decode(NotebookManifest.self, from: data)
+    }
 }

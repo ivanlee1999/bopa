@@ -6,6 +6,7 @@ import SwiftUI
 /// folder card — moves the same selection, so the two columns never disagree.
 struct LibraryView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var coordinator: SyncCoordinator
     @State private var selection: LibrarySelection? = .root
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var openNotebook: OpenNotebook?
@@ -29,6 +30,18 @@ struct LibraryView: View {
         // NavigationStack, and a stack nested in a split-view column swallows its pushes.
         // Presenting also gives the canvas the whole screen, which is what you want when
         // you are writing.
+        // While a notebook is open the editor, not the disk, holds the truth about it — so sync
+        // may push it but must never write to it. Cleared on dismiss, which is also when
+        // EditorView's onDisappear has just flushed, so the next run reconciles it for real.
+        .onChange(of: openNotebook) { previous, target in
+            coordinator.openNotebookId = target?.id
+            // Closing lifts the exclusion, so sync straight away rather than leaving whatever the
+            // BOOX changed sitting until the next poll. Waiting for the edit-driven push would
+            // only cover the case where you actually drew something.
+            if previous != nil, target == nil {
+                Task { await coordinator.syncNow(store: store) }
+            }
+        }
         .fullScreenCover(item: $openNotebook) { target in
             NavigationStack {
                 EditorView(notebookId: target.id)

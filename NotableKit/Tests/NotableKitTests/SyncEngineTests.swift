@@ -533,6 +533,79 @@ final class SyncEngineTests: XCTestCase {
         }, "asset re-fetched on a second sync")
     }
 
+    // MARK: Upload-only (the open notebook)
+
+    /// The failure this mode exists to prevent: a download landing under an open editor is
+    /// reverted by the next autosave and then uploaded as the winner, so remote work vanishes
+    /// from both sides. Deferring the download costs nothing — it happens on the next run.
+    func testUploadOnlyNotebookIsNeverDownloadedOverEvenWhenRemoteIsNewer() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+        try seedRemoteNotebook(
+            id: "nb1", title: "From BOOX", pageIds: ["p1"], updatedAt: "2026-08-09T10:00:00Z")
+
+        let report = await engine().sync(uploadOnly: ["nb1"])
+
+        XCTAssertFalse(report.downloaded.contains("nb1"), "downloaded over the open notebook")
+        XCTAssertTrue(report.skipped.contains("nb1"))
+        // Local manifest untouched: still the local title, not the remote one.
+        let local = try JSONDecoder().decode(
+            NotebookManifest.self,
+            from: Data(contentsOf: rootURL.appendingPathComponent("notebooks/nb1/manifest.json")))
+        XCTAssertEqual(local.title, "Nb")
+    }
+
+    /// Deferral must not be mistaken for "in sync", or the download would be stranded forever
+    /// once the notebook is closed.
+    func testDeferredDownloadHappensOnTheNextRunOnceClosed() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+        try seedRemoteNotebook(
+            id: "nb1", title: "From BOOX", pageIds: ["p1"], updatedAt: "2026-08-09T10:00:00Z")
+        _ = await engine().sync(uploadOnly: ["nb1"])
+
+        let report = await engine().sync()   // editor closed
+
+        XCTAssertEqual(report.downloaded, ["nb1"])
+        let local = try JSONDecoder().decode(
+            NotebookManifest.self,
+            from: Data(contentsOf: rootURL.appendingPathComponent("notebooks/nb1/manifest.json")))
+        XCTAssertEqual(local.title, "From BOOX")
+    }
+
+    /// The point of upload-only rather than skip-entirely: your work still reaches the server
+    /// while you are writing.
+    func testUploadOnlyNotebookStillUploadsLocalChanges() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+
+        let report = await engine().sync(uploadOnly: ["nb1"])
+
+        XCTAssertEqual(report.uploaded, ["nb1"])
+        XCTAssertNotNil(server.fileData("/notable/notebooks/nb1/manifest.json"))
+    }
+
+    /// A remote-only notebook has no local copy to protect, but materialising one under an open
+    /// editor would be just as surprising — defer it too.
+    func testUploadOnlyDefersARemoteOnlyNotebook() async throws {
+        try seedRemoteNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-09T10:00:00Z")
+
+        let report = await engine().sync(uploadOnly: ["nb1"])
+
+        XCTAssertTrue(report.downloaded.isEmpty)
+        XCTAssertTrue(report.skipped.contains("nb1"))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("notebooks/nb1/manifest.json").path))
+    }
+
+    func testUploadOnlyOnlyAffectsTheNamedNotebook() async throws {
+        try seedRemoteNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-09T10:00:00Z")
+        try seedRemoteNotebook(id: "nb2", pageIds: ["p1"], updatedAt: "2026-08-09T10:00:00Z")
+
+        let report = await engine().sync(uploadOnly: ["nb1"])
+
+        XCTAssertEqual(report.downloaded, ["nb2"])
+    }
+
     private func localAsset(_ id: String, _ relative: String) -> URL {
         rootURL.appendingPathComponent("notebooks/\(id)/\(relative)")
     }
