@@ -83,8 +83,12 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         docs[documentID] = Doc(rev: newRev, deleted: deleted, json: json, seq: seqCounter)
 
         let result: [String: Any] = ["ok": true, "id": documentID, "rev": newRev]
+        // Real CouchDB answers 200 for a tombstone write and 201 for a live one. The mock said
+        // 201 for both, which hid a client that rejected every deletion — hence this asymmetry
+        // being modelled rather than smoothed over.
         return HTTPResponse(
-            status: 201, body: (try? JSONSerialization.data(withJSONObject: result)) ?? Data())
+            status: deleted ? 200 : 201,
+            body: (try? JSONSerialization.data(withJSONObject: result)) ?? Data())
     }
 
     private func conflict() -> HTTPResponse {
