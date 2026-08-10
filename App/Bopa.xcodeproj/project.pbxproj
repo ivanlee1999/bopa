@@ -67,7 +67,7 @@
 		3D8D206021F65D447A23CFD5 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		467920EDEC849CD5B59CA33B /* NotableKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NotableKit; path = ../NotableKit; sourceTree = SOURCE_ROOT; };
 		4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
-		51065DC8A1BE9070F3A77ADB /* Bopa.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bopa.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		51065DC8A1BE9070F3A77ADB /* Bopa.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Bopa.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		59B5B24D30EBF003DBBA84C9 /* RemoteFolderPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFolderPicker.swift; sourceTree = "<group>"; };
 		5C1F470FDAB39308F0A7795F /* NotebookStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStore.swift; sourceTree = "<group>"; };
 		5C708E78695B6C125620979F /* RemoteFolderPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFolderPickerTests.swift; sourceTree = "<group>"; };
@@ -82,7 +82,7 @@
 		DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettings.swift; sourceTree = "<group>"; };
 		E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandwritingSettings.swift; sourceTree = "<group>"; };
 		E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridge.swift; sourceTree = "<group>"; };
-		FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		FF6E3D1C4AFC7669DC53F4AE /* SyncProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProvenance.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -246,7 +246,6 @@
 						TestTargetID = 83B1D95569B22B0B76DD7FC1;
 					};
 					83B1D95569B22B0B76DD7FC1 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -543,7 +542,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 357RJB33ZU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -569,7 +568,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 357RJB33ZU;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
