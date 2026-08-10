@@ -396,6 +396,64 @@ final class SyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(spy.callCount, 1, "each edit pushed separately")
     }
 
+    // MARK: - Conflict resolution wiring
+
+    /// The decision must be applied *and* followed by a sync, in that order and without a poll
+    /// slipping between them — a run that started earlier holds pre-decision sync state and would
+    /// write it back over the rebaseline.
+    func testApplyResolutionRunsTheDecisionThenSyncs() async throws {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(spy: spy)
+        var order: [String] = []
+
+        try await coordinator.applyResolution(store: store) { _ in
+            order.append("decision")
+        }
+
+        order.append("after")
+        XCTAssertEqual(order, ["decision", "after"])
+        XCTAssertEqual(spy.callCount, 1, "the decision was not followed by a sync")
+    }
+
+    /// A resolution while a sync is running is refused loudly rather than silently dropped.
+    func testApplyResolutionRefusesWhileASyncIsInFlight() async throws {
+        let store = makeStore()
+        let spy = SyncSpy()
+        spy.blocking = true
+        let coordinator = makeCoordinator(spy: spy)
+
+        let first = Task { await coordinator.syncNow(store: store) }
+        await spinUntil { spy.callCount == 1 }
+
+        do {
+            try await coordinator.applyResolution(store: store) { _ in
+                XCTFail("decision ran during an in-flight sync")
+            }
+            XCTFail("expected the resolution to be refused")
+        } catch {
+            XCTAssertTrue(error is SyncCoordinator.ResolutionBusy)
+        }
+
+        spy.releaseAll()
+        await first.value
+    }
+
+    func testApplyResolutionPropagatesAFailedDecision() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(spy: spy)
+        struct Boom: Error {}
+
+        do {
+            try await coordinator.applyResolution(store: store) { _ in throw Boom() }
+            XCTFail("expected the decision's error to surface")
+        } catch {
+            XCTAssertTrue(error is Boom)
+        }
+        XCTAssertEqual(spy.callCount, 0, "synced despite the decision failing")
+    }
+
     // MARK: - Open notebook exclusion
 
     func testOpenNotebookIsHandedToTheEngineAsUploadOnly() async {

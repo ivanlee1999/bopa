@@ -39,7 +39,7 @@ struct LibraryView: View {
             // BOOX changed sitting until the next poll. Waiting for the edit-driven push would
             // only cover the case where you actually drew something.
             if previous != nil, target == nil {
-                Task { await coordinator.syncNow(store: store) }
+                Task { await coordinator.syncIfAutomatic(store: store) }
             }
         }
         .fullScreenCover(item: $openNotebook) { target in
@@ -66,6 +66,7 @@ struct LibraryView: View {
 private struct FolderContentsView: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var handwriting: HandwritingSettings
+    @EnvironmentObject private var coordinator: SyncCoordinator
     let folderId: String?
     @Binding var selection: LibrarySelection?
     let openNotebook: (String) -> Void
@@ -84,6 +85,7 @@ private struct FolderContentsView: View {
     @State private var deletingNotebookId: String?
     @State private var showingDeleteNotebook = false
     @State private var showingSyncSettings = false
+    @State private var resolvingConflict: NotebookConflict?
 
     private var subfolders: [FolderDTO] { store.folders(in: folderId) }
     private var notebooks: [NotebookManifest] { store.notebooks(in: folderId) }
@@ -146,6 +148,9 @@ private struct FolderContentsView: View {
             NavigationStack {
                 SettingsView()
             }
+        }
+        .sheet(item: $resolvingConflict) { conflict in
+            ConflictResolutionView(conflict: conflict)
         }
         .alert("New notebook", isPresented: $showingNewNotebook) {
             TextField("Title", text: $newNotebookTitle)
@@ -258,7 +263,13 @@ private struct FolderContentsView: View {
 
     private func notebookCard(_ notebook: NotebookManifest) -> some View {
         Button {
-            openNotebook(notebook.notebookId)
+            // A conflicted notebook opens the chooser, not the editor — editing a copy whose fate
+            // is undecided would just add a third version. Notable does the same on the BOOX.
+            if let conflict = coordinator.conflict(for: notebook.notebookId) {
+                resolvingConflict = conflict
+            } else {
+                openNotebook(notebook.notebookId)
+            }
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 cover(for: notebook)
@@ -326,8 +337,12 @@ private struct FolderContentsView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08)))
         .overlay(alignment: .topTrailing) {
-            ProvenanceCoverBadge(
-                provenance: store.provenance(ofNotebook: notebook.notebookId))
+            if coordinator.conflict(for: notebook.notebookId) != nil {
+                ConflictCoverBadge()
+            } else {
+                ProvenanceCoverBadge(
+                    provenance: store.provenance(ofNotebook: notebook.notebookId))
+            }
         }
         .shadow(color: .black.opacity(0.10), radius: 5, y: 3)
     }

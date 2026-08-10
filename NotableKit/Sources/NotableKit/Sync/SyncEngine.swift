@@ -1,15 +1,80 @@
 import Foundation
 
+/// Per-page facts committed at the last successful transfer of that page.
+///
+/// This is what makes lossless merging possible: with it, edits to *different* pages of one
+/// notebook are provably independent and need no prompt, and only a page changed on both sides is
+/// a real conflict. Notable keeps the same row per page (`page_sync_state`).
+public struct PageSyncState: Codable, Equatable, Sendable {
+    /// The page's local `updatedAt` when we last committed a transfer of it, epoch ms.
+    public var syncedLocalUpdatedAt: Int64
+    public var etag: String?
+
+    public init(syncedLocalUpdatedAt: Int64, etag: String?) {
+        self.syncedLocalUpdatedAt = syncedLocalUpdatedAt
+        self.etag = etag
+    }
+}
+
 /// Per-notebook facts committed at the end of each successful transfer, used by the planner
 /// next time. Persisted locally (never uploaded).
 public struct NotebookSyncState: Codable, Equatable, Sendable {
     public var localUpdatedAtAtSync: Int64   // epoch ms
     public var etag: String?
+    public var pages: [String: PageSyncState]
 
-    public init(localUpdatedAtAtSync: Int64, etag: String?) {
+    public init(
+        localUpdatedAtAtSync: Int64, etag: String?, pages: [String: PageSyncState] = [:]
+    ) {
         self.localUpdatedAtAtSync = localUpdatedAtAtSync
         self.etag = etag
+        self.pages = pages
     }
+
+    /// Lenient so a state file written before per-page tracking existed still loads — those
+    /// notebooks simply start with no page rows, which reads as "never synced per page" and is
+    /// therefore never a conflict.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        localUpdatedAtAtSync = try c.decode(Int64.self, forKey: .localUpdatedAtAtSync)
+        etag = try c.decodeIfPresent(String.self, forKey: .etag)
+        pages = try c.decodeIfPresent([String: PageSyncState].self, forKey: .pages) ?? [:]
+    }
+}
+
+/// One notebook that changed on both sides in a way bopa will not resolve on its own.
+///
+/// Nothing is transferred for a notebook in this state — neither copy is touched until the user
+/// chooses. Recomputed from scratch every sync, so it is safe to lose (Notable treats its
+/// equivalent flag the same way).
+public struct NotebookConflict: Equatable, Sendable, Identifiable {
+    public var notebookId: String
+    /// Pages edited on both sides since the last common sync.
+    public var pageIds: [String]
+    /// The manifests disagree about structure (pages added/removed/reordered, title, folder,
+    /// paper defaults). A structural conflict is settled for the whole notebook at once.
+    public var structural: Bool
+
+    public var id: String { notebookId }
+
+    public init(notebookId: String, pageIds: [String], structural: Bool) {
+        self.notebookId = notebookId
+        self.pageIds = pageIds
+        self.structural = structural
+    }
+}
+
+/// How the user settled one conflicted page. Mirrors Notable's `PageConflictResolution`.
+public enum PageResolution: Sendable, Equatable {
+    case keepMine
+    case useRemote
+    case skip
+}
+
+/// How the user settled a structurally conflicted notebook.
+public enum NotebookResolution: Sendable, Equatable {
+    case keepMine
+    case useRemote
 }
 
 public struct SyncReport: Equatable, Sendable {
@@ -29,8 +94,16 @@ public struct SyncReport: Equatable, Sendable {
     public var uploaded: [String] = []
     public var downloaded: [String] = []
     public var skipped: [String] = []
+    /// Notebooks whose two sides changed independently and were combined without asking — pages
+    /// edited here went up, pages edited there came down. Reported separately from `skipped`
+    /// because a merge really did move data.
+    public var merged: [String] = []
     public var deletedLocally: [String] = []
-    public var conflicts: [String] = []     // 412s: concurrent writer won, re-plan next sync
+    /// Notebooks changed on both sides that need the user to choose. Nothing was transferred for
+    /// these — both copies are exactly as they were.
+    public var conflicts: [NotebookConflict] = []
+    /// 412s: a concurrent writer won the race. Not a semantic conflict — re-plan next sync.
+    public var preconditionFailures: [String] = []
     public var errors: [String] = []        // "notebookId: message"
     public var remoteTree: RemoteTreeState = .unknown
 
@@ -154,7 +227,7 @@ public actor SyncEngine {
                     break
                 }
             } catch WebDAVError.preconditionFailed {
-                report.conflicts.append(id)
+                report.preconditionFailures.append(id)
             } catch {
                 report.errors.append("\(id): \(error)")
             }
@@ -209,6 +282,19 @@ public actor SyncEngine {
             uploadOnly: uploadOnly)
 
         switch action {
+        case .reconcile:
+            guard let data = remoteManifestData,
+                  let remoteManifest = try? JSONDecoder().decode(NotebookManifest.self, from: data)
+            else {
+                // An unreadable remote manifest is structural by definition — we cannot prove the
+                // two agree, so we must not guess.
+                report.conflicts.append(
+                    NotebookConflict(notebookId: id, pageIds: [], structural: true))
+                return
+            }
+            try await reconcileDiverged(
+                id, local: localManifest, remote: remoteManifest,
+                remoteManifestData: data, remoteEtag: remoteInfo?.etag, report: &report)
         case .upload(let ifMatch):
             try await upload(id, ifMatch: ifMatch, report: &report)
             report.uploaded.append(id)
@@ -226,7 +312,8 @@ public actor SyncEngine {
             // download on every future sync.
             state[id] = NotebookSyncState(
                 localUpdatedAtAtSync: localUpdatedAt,
-                etag: remoteInfo?.etag ?? stored?.etag)
+                etag: remoteInfo?.etag ?? stored?.etag,
+                pages: stored?.pages ?? [:])
             report.skipped.append(id)
         case .skipUploadOnly, .skipDownloadOnly:
             // A transfer was deliberately suppressed by a one-directional mode. Recording
@@ -235,6 +322,143 @@ public actor SyncEngine {
             // transfer it. Leave the state untouched.
             report.skipped.append(id)
         }
+    }
+
+    // MARK: - Divergence
+
+    /// Both sides moved since the last common sync. Work out whether that is a real clash.
+    ///
+    /// Edits to *different* pages are not a conflict and are merged with no prompt — the common
+    /// case for one person on two devices. Only a page changed on both sides, or a manifest whose
+    /// structure disagrees, needs the user. When it does, **nothing is transferred**: both copies
+    /// stay exactly as they are and the sync state is left untouched, so the same conclusion is
+    /// reached again next run until it is settled.
+    private func reconcileDiverged(
+        _ id: String,
+        local: NotebookManifest,
+        remote: NotebookManifest,
+        remoteManifestData: Data,
+        remoteEtag: String?,
+        report: inout SyncReport
+    ) async throws {
+        let structural = Self.structurallyDiverges(local: local, remote: remote)
+        let remoteEtags = (try? await dav.list(NotableSyncPaths.pagesDir(id)))
+            .map { Self.pageEtags(from: $0) } ?? [:]
+
+        var conflicted: [String] = []
+        var toDownload: [String] = []
+        var toUpload: [String] = []
+        for pageId in local.pageIds where remote.pageIds.contains(pageId) {
+            // No row means we have never committed this page, so we have no basis to call it
+            // changed — matching Notable, which never invents a conflict from missing state.
+            guard let row = state[id]?.pages[pageId] else { continue }
+            let localDirty = localPageUpdatedAt(id, pageId).map {
+                $0 > row.syncedLocalUpdatedAt        // strict: both sides of this are our own clock
+            } ?? false
+            // A server that omits ETags can never produce a conflict, by design.
+            let remoteMoved = remoteEtags[pageId].map { $0 != row.etag } ?? false
+
+            switch (localDirty, remoteMoved) {
+            case (true, true): conflicted.append(pageId)
+            case (false, true): toDownload.append(pageId)
+            case (true, false): toUpload.append(pageId)
+            case (false, false): break
+            }
+        }
+
+        guard conflicted.isEmpty, !structural else {
+            report.conflicts.append(
+                NotebookConflict(
+                    notebookId: id, pageIds: conflicted.sorted(), structural: structural))
+            return
+        }
+
+        // Nothing actually differs — the manifest ETag moved without the content following it
+        // (a rewrite with identical bytes, or a server that rotates ETags on touch). Adopt the new
+        // ETag and stop: re-publishing an identical manifest would just rotate it again and make
+        // every future sync repeat this.
+        if toDownload.isEmpty, toUpload.isEmpty {
+            state[id] = NotebookSyncState(
+                localUpdatedAtAtSync: epochMs(local.updatedAt) ?? 0,
+                etag: remoteEtag ?? state[id]?.etag,
+                pages: state[id]?.pages ?? [:])
+            report.skipped.append(id)
+            return
+        }
+
+        // Independent edits: take both sides. Pages first, manifest last, as everywhere else.
+        for pageId in toDownload {
+            let page = try await dav.get(NotableSyncPaths.pageFile(id, pageId))
+            try page.data.write(to: localPageURL(id, pageId), options: .atomic)
+            recordPageState(id, pageId, etag: page.etag)
+        }
+        for pageId in toUpload {
+            guard let data = try? Data(contentsOf: localPageURL(id, pageId)) else { continue }
+            let etag = try await dav.put(
+                NotableSyncPaths.pageFile(id, pageId), data: data,
+                ifMatch: state[id]?.pages[pageId]?.etag)
+            recordPageState(id, pageId, etag: etag)
+        }
+
+        // The manifests agree structurally, so either is correct; keep the newer clock so the
+        // merged result reads as at least as fresh as both inputs on the next comparison.
+        var merged = local
+        if let localMs = epochMs(local.updatedAt), let remoteMs = epochMs(remote.updatedAt),
+           remoteMs > localMs
+        {
+            merged.updatedAt = remote.updatedAt
+        }
+        let mergedData = try JSONEncoder().encode(merged)
+        let newEtag = try await dav.put(
+            NotableSyncPaths.manifestFile(id), data: mergedData, ifMatch: remoteEtag)
+        try mergedData.write(to: localManifestURL(id), options: .atomic)
+        if let mergedMs = epochMs(merged.updatedAt) {
+            state[id]?.localUpdatedAtAtSync = mergedMs
+            state[id]?.etag = newEtag
+        }
+        report.merged.append(id)
+    }
+
+    /// The manifest fields that must agree for two copies to be mergeable page by page.
+    ///
+    /// `updatedAt` and `openPageId` are deliberately excluded: they differ on every independent
+    /// edit and on merely opening a notebook, and neither says anything about structure. This list
+    /// matches Notable's `structurallyDiverges` exactly — if the two clients disagree here they
+    /// will disagree about what is a conflict.
+    static func structurallyDiverges(local: NotebookManifest, remote: NotebookManifest) -> Bool {
+        local.pageIds != remote.pageIds
+            || local.title != remote.title
+            || local.parentFolderId != remote.parentFolderId
+            || local.defaultBackground != remote.defaultBackground
+            || local.defaultBackgroundType != remote.defaultBackgroundType
+            || local.linkedExternalUri != remote.linkedExternalUri
+            || local.createdAt != remote.createdAt
+    }
+
+    /// `pageId -> etag` from a listing of the pages directory. Notable stages uploads as
+    /// `<pageId>.json.<uuid>.tmp`, so anything that is not exactly `<pageId>.json` is ignored
+    /// rather than mistaken for a page.
+    static func pageEtags(from resources: [DavResource]) -> [String: String] {
+        var result: [String: String] = [:]
+        for res in resources where !res.isCollection && res.name.hasSuffix(".json") {
+            let pageId = String(res.name.dropLast(".json".count))
+            guard !pageId.isEmpty, !pageId.contains("."), let etag = res.etag else { continue }
+            result[pageId] = etag
+        }
+        return result
+    }
+
+    private func localPageUpdatedAt(_ id: String, _ pageId: String) -> Int64? {
+        guard let data = try? Data(contentsOf: localPageURL(id, pageId)),
+              let page = try? JSONDecoder().decode(PageFile.self, from: data)
+        else { return nil }
+        return epochMs(page.updatedAt)
+    }
+
+    private func recordPageState(_ id: String, _ pageId: String, etag: String?) {
+        guard let updatedAt = localPageUpdatedAt(id, pageId) else { return }
+        state[id, default: NotebookSyncState(localUpdatedAtAtSync: 0, etag: nil)]
+            .pages[pageId] = PageSyncState(syncedLocalUpdatedAt: updatedAt, etag: etag)
     }
 
     // MARK: - Upload
@@ -249,10 +473,18 @@ public actor SyncEngine {
 
         // Pages first, manifest last: a concurrent reader never sees a manifest that
         // references missing pages.
+        //
+        // Guarded by the ETag we last saw for that page, so a page changed underneath us 412s
+        // instead of being silently flattened. A page we have never committed has no ETag to guard
+        // with and goes up unguarded — that is a first upload, not a race. A 412 propagates out of
+        // `upload` before the manifest is published, so a failed run commits nothing.
         for pageId in manifest.pageIds {
             let url = localPageURL(id, pageId)
             guard let data = try? Data(contentsOf: url) else { continue }
-            try await dav.put(NotableSyncPaths.pageFile(id, pageId), data: data)
+            let etag = try await dav.put(
+                NotableSyncPaths.pageFile(id, pageId), data: data,
+                ifMatch: state[id]?.pages[pageId]?.etag)
+            recordPageState(id, pageId, etag: etag)
         }
 
         // Orphan cleanup, mirroring Notable v0.2.6. The path is always rebuilt from the pages dir
@@ -282,7 +514,9 @@ public actor SyncEngine {
                 .first { $0.name == "manifest.json" }?.etag
         }
         if let localUpdatedAt = epochMs(manifest.updatedAt) {
-            state[id] = NotebookSyncState(localUpdatedAtAtSync: localUpdatedAt, etag: newEtag)
+            state[id] = NotebookSyncState(
+                localUpdatedAtAtSync: localUpdatedAt, etag: newEtag,
+                pages: state[id]?.pages ?? [:])
         }
     }
 
@@ -306,6 +540,7 @@ public actor SyncEngine {
         for pageId in manifest.pageIds {
             let page = try await dav.get(NotableSyncPaths.pageFile(id, pageId))
             try page.data.write(to: localPageURL(id, pageId), options: .atomic)
+            recordPageState(id, pageId, etag: page.etag)
         }
 
         // Remove local pages no longer in the manifest.
@@ -328,7 +563,8 @@ public actor SyncEngine {
         try manifestData.write(to: localManifestURL(id), options: .atomic)
 
         if let updatedAt = epochMs(manifest.updatedAt) {
-            state[id] = NotebookSyncState(localUpdatedAtAtSync: updatedAt, etag: etag)
+            state[id] = NotebookSyncState(
+                localUpdatedAtAtSync: updatedAt, etag: etag, pages: state[id]?.pages ?? [:])
         }
     }
 
@@ -466,6 +702,78 @@ public actor SyncEngine {
             }
         }
         return (serverFolderIds, sawRemoteFile)
+    }
+
+    // MARK: - Conflict resolution
+
+    /// Settles one conflicted page by *rebaselining*, not by transferring.
+    ///
+    /// Choosing a side is expressed as an adjustment to what we believe the last common state was,
+    /// so the very next ordinary sync sees an unambiguous one-sided change and moves it with all
+    /// the usual guards. Notable resolves the same way, which is why the two agree on the outcome.
+    public func resolvePage(
+        notebookId: String, pageId: String, resolution: PageResolution
+    ) async throws {
+        guard resolution != .skip else { return }
+        if state.isEmpty { loadState() }
+        guard var row = state[notebookId]?.pages[pageId] else { return }
+
+        switch resolution {
+        case .keepMine:
+            // Adopt the server's current ETag so the page no longer reads as remotely changed,
+            // while leaving our own anchor behind so it still reads as locally dirty -> upload.
+            let etags = (try? await dav.list(NotableSyncPaths.pagesDir(notebookId)))
+                .map { Self.pageEtags(from: $0) } ?? [:]
+            row.etag = etags[pageId]
+        case .useRemote:
+            // Mark our copy as not-dirty and the remote as changed -> download.
+            row.syncedLocalUpdatedAt = localPageUpdatedAt(notebookId, pageId)
+                ?? row.syncedLocalUpdatedAt
+            row.etag = nil
+        case .skip:
+            return
+        }
+        state[notebookId]?.pages[pageId] = row
+        saveState()
+    }
+
+    /// Settles a structurally conflicted notebook.
+    ///
+    /// Taking the server copy is done here and now — rebaselining into it is not possible, because
+    /// any anchor that makes our copy read as "not moved" also leaves the timestamp comparison
+    /// free to pick our side again. Keeping ours *is* a rebaseline, so the ordinary upload path
+    /// does the work with all its usual guards. Notable splits the two the same way.
+    public func resolveNotebook(
+        notebookId: String, resolution: NotebookResolution
+    ) async throws {
+        if state.isEmpty { loadState() }
+        guard state[notebookId] != nil else { return }
+
+        switch resolution {
+        case .useRemote:
+            var report = SyncReport()
+            let result = try await dav.get(NotableSyncPaths.manifestFile(notebookId))
+            try await downloadContent(
+                notebookId, manifestData: result.data, etag: result.etag, report: &report)
+        case .keepMine:
+            // Adopt the server's current ETags as our base — manifest and every page — while
+            // keeping the old local anchor, so our copy still reads as dirty and is uploaded next
+            // run, now guarded by ETags that will not 412.
+            let manifestEtag = (try? await dav.list(NotableSyncPaths.notebookDir(notebookId)))?
+                .first { $0.name == "manifest.json" }?.etag
+            let pageEtags = (try? await dav.list(NotableSyncPaths.pagesDir(notebookId)))
+                .map { Self.pageEtags(from: $0) } ?? [:]
+            state[notebookId]?.etag = manifestEtag
+            for (pageId, etag) in pageEtags {
+                if state[notebookId]?.pages[pageId] != nil {
+                    state[notebookId]?.pages[pageId]?.etag = etag
+                } else {
+                    state[notebookId]?.pages[pageId] = PageSyncState(
+                        syncedLocalUpdatedAt: 0, etag: etag)
+                }
+            }
+        }
+        saveState()
     }
 
     // MARK: - Tombstones

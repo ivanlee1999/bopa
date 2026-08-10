@@ -295,4 +295,130 @@ final class PencilKitBridgeTests: XCTestCase {
         let updated = try XCTUnwrap(store.manifest(id: manifest.notebookId))
         XCTAssertGreaterThanOrEqual(updated.updatedAt, manifest.updatedAt)
     }
+
+    // MARK: Stroke identity across a save
+
+    /// The whole point: a page opened and saved without drawing must come back **identical**.
+    /// Minting a fresh id per stroke per save made every page read as 100% changed, which churns
+    /// its ETag and makes per-page conflict detection fire constantly on nothing.
+    func testUntouchedStrokesSurviveASaveByteForByte() throws {
+        let original = try (0..<3).map { _ in try makeNotableStroke() }
+        let drawing = PencilKitBridge.drawing(from: original)
+
+        let resaved = PencilKitBridge.strokeDTOs(from: drawing, source: original)
+
+        XCTAssertEqual(resaved, original, "an untouched page did not round-trip identically")
+    }
+
+    /// Identity has to chain: save twice, still the same ids and bytes.
+    func testIdentitySurvivesRepeatedSaves() throws {
+        let original = try (0..<3).map { _ in try makeNotableStroke() }
+
+        var current = original
+        for _ in 0..<3 {
+            let drawing = PencilKitBridge.drawing(from: current)
+            current = PencilKitBridge.strokeDTOs(from: drawing, source: current)
+        }
+
+        XCTAssertEqual(current, original)
+    }
+
+    /// Without the source, every stroke is re-minted — the old behaviour, kept as the contrast
+    /// so the fix above cannot silently regress into a no-op test.
+    func testWithoutSourceStrokesAreReminted() throws {
+        let original = try (0..<2).map { _ in try makeNotableStroke() }
+        let drawing = PencilKitBridge.drawing(from: original)
+
+        let resaved = PencilKitBridge.strokeDTOs(from: drawing)
+
+        XCTAssertEqual(resaved.count, 2)
+        XCTAssertTrue(
+            Set(resaved.map(\.id)).isDisjoint(with: Set(original.map(\.id))),
+            "ids should be fresh when no source is supplied")
+    }
+
+    func testNewStrokeGetsAFreshIdAndKeepsExistingOnes() throws {
+        let existing = try makeNotableStroke()
+        let addition = try makeNotableStroke()
+        // The canvas now holds the existing stroke plus one just drawn.
+        let drawing = PencilKitBridge.drawing(from: [existing, addition])
+
+        let resaved = PencilKitBridge.strokeDTOs(from: drawing, source: [existing])
+
+        XCTAssertEqual(resaved.count, 2)
+        XCTAssertEqual(resaved[0], existing, "the known stroke changed")
+        XCTAssertNotEqual(resaved[1].id, addition.id, "the new stroke should be minted here")
+    }
+
+    func testErasedStrokeDisappearsAndSurvivorsKeepTheirIds() throws {
+        let kept = try makeNotableStroke()
+        let erased = try makeNotableStroke()
+        let drawing = PencilKitBridge.drawing(from: [kept])   // `erased` rubbed out on the canvas
+
+        let resaved = PencilKitBridge.strokeDTOs(from: drawing, source: [kept, erased])
+
+        XCTAssertEqual(resaved, [kept])
+    }
+
+    /// Two strokes sharing a creation date must not both claim the same source entry — that would
+    /// put a duplicate id in the page, which is worse than re-encoding one of them.
+    func testStrokesSharingACreationDateDoNotCollideOntoOneId() throws {
+        let stamp = NotableDate.format(Date())
+        var first = try makeNotableStroke()
+        var second = try makeNotableStroke()
+        first.createdAt = stamp
+        second.createdAt = stamp
+        let drawing = PencilKitBridge.drawing(from: [first, second])
+
+        let resaved = PencilKitBridge.strokeDTOs(from: drawing, source: [first, second])
+
+        XCTAssertEqual(resaved.count, 2)
+        XCTAssertEqual(Set(resaved.map(\.id)).count, 2, "duplicate stroke id emitted")
+    }
+
+    /// Where identity-preservation meets the eraser: a stroke that was partly rubbed out is
+    /// still the "same" stroke by creation date, so carrying its original DTO over would save
+    /// the erased ink straight back. The mask has to veto the reuse.
+    func testPartlyErasedStrokeIsNotCarriedOverFromSource() throws {
+        let stroke = straightStroke(mask: mask(keepingX: -10...45))
+        // Pretend this stroke came from disk with the creation date PencilKit is carrying.
+        var original = try makeNotableStroke()
+        original.createdAt = NotableDate.format(stroke.path.creationDate)
+        let drawing = PKDrawing(strokes: [stroke])
+
+        let exported = PencilKitBridge.strokeDTOs(from: drawing, source: [original])
+
+        XCTAssertEqual(exported.count, 1)
+        XCTAssertNotEqual(exported[0], original, "the erased stroke was saved back intact")
+        let points = try exported[0].decodedPoints()
+        XCTAssertEqual(points.last?.x ?? 0, 45, accuracy: 0.03, "erasure did not survive the save")
+    }
+
+    /// A fully erased stroke must disappear even when the source still holds it. The surviving
+    /// region is a band the stroke does not reach, matching `testFullyErasedStrokeIsNotSaved`.
+    func testFullyErasedStrokeIsDroppedDespiteASourceEntry() throws {
+        let elsewhere = UIBezierPath(rect: CGRect(x: 500, y: 500, width: 10, height: 10))
+        let stroke = straightStroke(mask: elsewhere)
+        var original = try makeNotableStroke()
+        original.createdAt = NotableDate.format(stroke.path.creationDate)
+
+        let exported = PencilKitBridge.strokeDTOs(
+            from: PKDrawing(strokes: [stroke]), source: [original])
+
+        XCTAssertTrue(exported.isEmpty, "a fully erased stroke came back")
+    }
+
+    /// A lasso-moved stroke genuinely changed, so it must be re-encoded rather than carried over.
+    func testMovedStrokeIsReEncoded() throws {
+        let original = try makeNotableStroke()
+        let imported = try XCTUnwrap(PencilKitBridge.stroke(from: original))
+        var moved = imported
+        moved.transform = CGAffineTransform(translationX: 25, y: 40)
+        let drawing = PKDrawing(strokes: [moved])
+
+        let resaved = PencilKitBridge.strokeDTOs(from: drawing, source: [original])
+
+        XCTAssertEqual(resaved.count, 1)
+        XCTAssertNotEqual(resaved[0].pointsData, original.pointsData, "moved stroke kept old points")
+    }
 }
