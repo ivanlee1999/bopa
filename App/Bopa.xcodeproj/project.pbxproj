@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		0039A71CECB36F833C1E1192 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BE21820564A6CE54CAC908C4 /* Assets.xcassets */; };
 		02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37AA22765996393FB323A60 /* EditorView.swift */; };
+		02578FB9E261C0E5A3A6D96B /* CouchSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A86459981084A1F96E5AAC /* CouchSyncController.swift */; };
+		02EAE8E446983D5557B4FD8B /* CouchSyncControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */; };
 		122E21FD884486D3B1F6AEDC /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */; };
 		29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */; };
 		2CAA8B3BBB4BE8C4120A287E /* PaperTemplateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0BAB6AF0A9B4CD233DD405 /* PaperTemplateView.swift */; };
@@ -88,7 +90,9 @@
 		B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandwritingSettingsTests.swift; sourceTree = "<group>"; };
 		B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
 		BE21820564A6CE54CAC908C4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchSyncControllerTests.swift; sourceTree = "<group>"; };
 		C7CA46ABC2CDD559A3FFAECE /* RotationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationUITests.swift; sourceTree = "<group>"; };
+		D7A86459981084A1F96E5AAC /* CouchSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchSyncController.swift; sourceTree = "<group>"; };
 		DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettings.swift; sourceTree = "<group>"; };
 		E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandwritingSettings.swift; sourceTree = "<group>"; };
 		E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridge.swift; sourceTree = "<group>"; };
@@ -157,6 +161,7 @@
 				13EC02E525247FA06BC975D5 /* BopaApp.swift */,
 				2CE531A38B3D637083298DA9 /* CanvasContainerView.swift */,
 				1F51F41B920291A1DC95CED0 /* ConflictResolutionView.swift */,
+				D7A86459981084A1F96E5AAC /* CouchSyncController.swift */,
 				B37AA22765996393FB323A60 /* EditorView.swift */,
 				E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */,
 				760C1A94995C19FE535F60AB /* LibrarySidebar.swift */,
@@ -179,6 +184,7 @@
 			isa = PBXGroup;
 			children = (
 				74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */,
+				C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */,
 				B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */,
 				B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */,
 				9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */,
@@ -319,6 +325,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				9268909E990BFF4774CFA57A /* CanvasContainerViewTests.swift in Sources */,
+				02EAE8E446983D5557B4FD8B /* CouchSyncControllerTests.swift in Sources */,
 				3BF381E0797979BCF00AEE38 /* HandwritingSettingsTests.swift in Sources */,
 				836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */,
 				C980C9CF1CD6F2E3D8B74DE7 /* PageImageTests.swift in Sources */,
@@ -337,6 +344,7 @@
 				78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */,
 				C10E0057637247CCB7ED659A /* CanvasContainerView.swift in Sources */,
 				E85BA9A56A392DAB893D469A /* ConflictResolutionView.swift in Sources */,
+				02578FB9E261C0E5A3A6D96B /* CouchSyncController.swift in Sources */,
 				02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */,
 				B188FC9BE3CDA7096D52D546 /* HandwritingSettings.swift in Sources */,
 				4283276297678BE54BBF534F /* LibrarySidebar.swift in Sources */,

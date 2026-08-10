@@ -131,6 +131,8 @@ public actor CouchSyncEngine {
         public var failures: [String: String] = [:]
         /// Set when the mass-deletion guard refused the run (protocol §6.6).
         public var blockedByDeletionGuard = false
+
+        public init() {}
     }
 
     public struct PullReport: Equatable, Sendable {
@@ -140,6 +142,8 @@ public actor CouchSyncEngine {
         public var skippedEchoes: [String] = []
         public var conflictCopies: [String] = []
         public var lastSeq: String = "0"
+
+        public init() {}
     }
 
     private let client: CouchDBClient
