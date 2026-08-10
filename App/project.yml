@@ -6,6 +6,9 @@ options:
 packages:
   NotableKit:
     path: ../NotableKit
+  SnapshotTesting:
+    url: https://github.com/pointfreeco/swift-snapshot-testing
+    from: 1.17.0
 targets:
   BopaUITests:
     type: bundle.ui-testing
@@ -23,6 +26,7 @@ targets:
     sources: [Tests]
     dependencies:
       - target: Bopa
+      - package: SnapshotTesting
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
