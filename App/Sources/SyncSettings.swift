@@ -194,11 +194,59 @@ struct SyncSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var settings = SyncSettings.load()
+    @State private var couchSettings = CouchSettings.load()
+    @State private var backend = CouchSettings.backend
     @State private var automatic = SyncSettings.isAutomaticEnabled
     @State private var showingFolderPicker = false
 
+    /// Set by the app so the CouchDB section can drive syncs. Nil in previews and in tests that
+    /// render the form on its own.
+    var backendHost: SyncBackendHost?
+
     var body: some View {
         Form {
+            Section {
+                Picker("Sync with", selection: $backend) {
+                    ForEach(SyncBackend.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: backend) { _, newValue in
+                    CouchSettings.backend = newValue
+                    // Post through the CouchDB channel either way: the app rebuilds whichever
+                    // backend is now selected, and stops the other one.
+                    NotificationCenter.default.post(
+                        name: CouchSettings.didChangeNotification, object: nil)
+                }
+                .accessibilityIdentifier("sync.backend")
+            } footer: {
+                Text(backend == .couchdb
+                    ? "Changes appear on your other device within a second or two, and merge "
+                        + "automatically when you have both been writing offline."
+                    : "Syncs whole notebooks through a shared folder. Slower to notice changes, "
+                        + "and edits made on both devices at once need sorting out by hand.")
+            }
+
+            if backend == .couchdb {
+                CouchSettingsSection(settings: $couchSettings, host: backendHost)
+            } else {
+                webdavSections
+            }
+        }
+        .navigationTitle("Sync")
+        .navigationDestination(isPresented: $showingFolderPicker) {
+            RemoteFolderPicker(settings: $settings)
+        }
+        .onDisappear {
+            settings.save()
+            couchSettings.save()
+        }
+    }
+
+    @ViewBuilder
+    private var webdavSections: some View {
+        Group {
             Section("WebDAV server") {
                 TextField("https://server/dav", text: $settings.serverURL)
                     .textContentType(.URL)
@@ -290,11 +338,6 @@ struct SyncSettingsView: View {
                 }
             }
         }
-        .navigationTitle("Sync")
-        .navigationDestination(isPresented: $showingFolderPicker) {
-            RemoteFolderPicker(settings: $settings)
-        }
-        .onDisappear { settings.save() }
     }
 
     /// Spells out the resolution when the chosen folder *is* the shared tree, so the Folder row and

@@ -147,14 +147,17 @@ final class HandwritingSettings: ObservableObject {
 
 /// Settings root: handwriting preferences, with sync tucked behind a link.
 struct SettingsView: View {
+    /// Passed down so the sync form can trigger syncs on whichever backend is selected.
+    var backendHost: SyncBackendHost?
+
     var body: some View {
         Form {
             HandwritingSettingsSections()
             Section {
                 NavigationLink {
-                    SyncSettingsView()
+                    SyncSettingsView(backendHost: backendHost)
                 } label: {
-                    Label("WebDAV sync", systemImage: "arrow.triangle.2.circlepath")
+                    Label("Sync", systemImage: "arrow.triangle.2.circlepath")
                 }
             }
         }
