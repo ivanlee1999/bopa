@@ -36,6 +36,8 @@ final class CouchSyncController: ObservableObject {
     private let editQuietPeriod: TimeInterval
     private let retryFloor: TimeInterval
     private let retryCeiling: TimeInterval
+    /// Shortest gap between two change-feed requests that both came back with nothing.
+    private let idleFloor: TimeInterval
 
     private let flush: Flush
     private let pull: Pull
@@ -49,6 +51,7 @@ final class CouchSyncController: ObservableObject {
         editQuietPeriod: TimeInterval = 3,
         retryFloor: TimeInterval = 1,
         retryCeiling: TimeInterval = 60,
+        idleFloor: TimeInterval = 0.5,
         now: @escaping @MainActor () -> Date = Date.init,
         sleeper: @escaping Sleeper = { try await Task.sleep(for: .seconds($0)) },
         flush: @escaping Flush,
@@ -57,6 +60,7 @@ final class CouchSyncController: ObservableObject {
         self.editQuietPeriod = editQuietPeriod
         self.retryFloor = retryFloor
         self.retryCeiling = retryCeiling
+        self.idleFloor = idleFloor
         self.now = now
         self.sleeper = sleeper
         self.flush = flush
@@ -100,6 +104,15 @@ final class CouchSyncController: ObservableObject {
                     // Anything the server lacked is now queued; send it without waiting for the
                     // edit timer, which will not fire because the user is not writing.
                     if !report.pushBack.isEmpty { await self.pushNow() }
+
+                    // A long poll is supposed to block until something happens, so an empty
+                    // result should be rare and slow. When it is neither — a proxy that answers
+                    // immediately, a server that ignores the timeout — re-issuing at once turns
+                    // this loop into a hot spin against the server. Pausing only in that case
+                    // costs nothing when the feed behaves.
+                    if report.applied.isEmpty && report.conflictCopies.isEmpty {
+                        try await self.sleeper(self.idleFloor)
+                    }
                 } catch is CancellationError {
                     return
                 } catch {
