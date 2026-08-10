@@ -19,14 +19,10 @@ struct LibraryView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             LibrarySidebar(selection: $selection)
         } detail: {
-            if selection == .server {
-                ServerBrowserView()
-            } else {
-                FolderContentsView(
-                    folderId: selection?.folderId,
-                    selection: $selection,
-                    openNotebook: { openNotebook = OpenNotebook(id: $0) })
-            }
+            FolderContentsView(
+                folderId: selection?.folderId,
+                selection: $selection,
+                openNotebook: { openNotebook = OpenNotebook(id: $0) })
         }
         .navigationSplitViewStyle(.balanced)
         // The editor is presented, not pushed: this view lives inside the app's

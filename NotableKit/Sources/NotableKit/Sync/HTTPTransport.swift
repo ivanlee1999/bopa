@@ -67,18 +67,26 @@ public struct URLSessionTransport: HTTPTransport {
         }
     }
 
-    public func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+    /// Resolves a server-absolute request path against `baseURL`. Exposed so the composition can be
+    /// asserted without a network: it is where a base URL whose path is wrong (say, one that already
+    /// ends in the shared folder) turns into a request for the wrong tree.
+    public func url(for path: String) throws -> URL {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true) else {
             throw WebDAVError.badURL(baseURL.absoluteString)
         }
         let basePath = components.percentEncodedPath.hasSuffix("/")
             ? String(components.percentEncodedPath.dropLast())
             : components.percentEncodedPath
-        guard let encoded = request.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-            throw WebDAVError.badURL(request.path)
+        guard let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            throw WebDAVError.badURL(path)
         }
         components.percentEncodedPath = basePath + encoded
-        guard let url = components.url else { throw WebDAVError.badURL(request.path) }
+        guard let url = components.url else { throw WebDAVError.badURL(path) }
+        return url
+    }
+
+    public func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        let url = try url(for: request.path)
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = request.method

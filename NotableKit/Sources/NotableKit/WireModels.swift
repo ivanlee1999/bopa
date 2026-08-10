@@ -293,8 +293,13 @@ public enum NotableDate {
 
 // MARK: - Server paths
 
-/// Mirrors `SyncPaths.kt`. All paths are relative to the WebDAV base URL.
+/// Mirrors `SyncPaths.kt`. All paths are relative to the WebDAV base URL — which must therefore
+/// name the *parent* of the shared tree, not the tree itself. Both clients append `notable/`
+/// themselves; a base that already ends in it syncs to `<base>/notable/notable`.
 public enum NotableSyncPaths {
+    /// The one folder both clients share, as a bare segment. Callers resolving a user-chosen
+    /// folder against the rule above need the name without the leading slash.
+    public static let rootName = "notable"
     public static let root = "/notable"
     public static let notebooksDir = "/notable/notebooks"
     public static let tombstonesDir = "/notable/deletions"

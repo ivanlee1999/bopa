@@ -129,7 +129,9 @@ final class RemotePathTests: XCTestCase {
     /// the second time you open the picker you start somewhere else.
     func testChosenURLRoundTripsThroughSettings() {
         let host = URL(string: "https://webdav.example.com")!
-        for path in ["/", "/onyx", "/Mes documents/Örebro", "/100% done"] {
+        // "/onyx/notable" is here on purpose: sync resolves it upward, but the picker must still
+        // reopen exactly where the user pressed "Use this folder".
+        for path in ["/", "/onyx", "/onyx/notable", "/Mes documents/Örebro", "/100% done"] {
             let urlString = RemotePath.absoluteURLString(hostRoot: host, path: path)
             let settings = SyncSettings(serverURL: urlString, username: "u", password: "p")
             XCTAssertEqual(settings.remotePath, path, "round trip failed for \(path)")
@@ -188,31 +190,100 @@ final class SyncSettingsBrowsingTests: XCTestCase {
         XCTAssertNil(SyncSettings(serverURL: "ftp://h.example/x", username: "u", password: "p").hostRootURL)
     }
 
-    /// The sidebar's subtitle source. It must agree with the full settings' own display text
-    /// while reading only the server URL — that is what keeps the Keychain out of the sidebar.
-    func testLoadRemotePathDisplayReadsOnlyTheServerURL() throws {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "SyncSettingsBrowsingTests.display"))
-        defer { defaults.removePersistentDomain(forName: "SyncSettingsBrowsingTests.display") }
+}
 
-        defaults.removeObject(forKey: SyncSettings.serverKey)
-        XCTAssertEqual(SyncSettings.loadRemotePathDisplay(defaults: defaults), "Not set")
+// MARK: - Sync root resolution
 
-        for (url, expected) in [
-            ("https://h.example/onyx", "/onyx"),
-            ("https://h.example", "/"),
-            ("https://h.example/Mes%20documents", "/Mes documents"),
-            // Non-empty but unusable: still "Not set", which is why the server browser
-            // distinguishes "no address" from "address that doesn't parse" itself.
-            ("ftp://h.example/x", "Not set"),
-        ] {
-            defaults.set(url, forKey: SyncSettings.serverKey)
+/// `NotableSyncPaths` prefixes every request with "/notable", so the configured folder must be that
+/// tree's parent. Picking the `notable` folder itself used to sync to `<chosen>/notable/notable` —
+/// a tree MKCOL creates on demand, which then reports a clean, empty, completely silent success.
+final class SyncRootResolutionTests: XCTestCase {
+
+    func testSyncBaseDropsExactlyOneNotableSegment() {
+        let cases: [(String, String)] = [
+            ("/onyx/notable", "/onyx"),
+            ("/onyx/Notable", "/onyx"),          // case-insensitive, like the picker's name check
+            ("/onyx/notable/", "/onyx"),
+            ("/notable", "/"),
+            ("/", "/"),
+            ("/onyx", "/onyx"),
+            // One segment only: a genuine nested tree resolves to its parent, not to the root.
+            ("/onyx/notable/notable", "/onyx/notable"),
+            ("/onyx/notables", "/onyx/notables"),
+            ("/onyx/my notable", "/onyx/my notable"),
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(RemotePath.syncBase(input), expected, "syncBase(\(input))")
+        }
+    }
+
+    func testSyncTreeIsIdenticalForBothSpellings() {
+        XCTAssertEqual(RemotePath.syncTree("/onyx"), "/onyx/notable")
+        XCTAssertEqual(RemotePath.syncTree("/onyx/notable"), "/onyx/notable")
+        XCTAssertEqual(RemotePath.syncTree("/onyx/Notable"), "/onyx/notable")
+        XCTAssertEqual(RemotePath.syncTree("/"), "/notable")
+        XCTAssertEqual(RemotePath.syncTree("/notable"), "/notable")
+    }
+
+    func testSyncBaseURLRewritesOnlyThePath() {
+        let cases: [(String, String?)] = [
+            ("https://h.example/onyx/notable", "https://h.example/onyx"),
+            ("https://h.example/notable", "https://h.example"),
+            ("https://h.example:5005/dav/notable", "https://h.example:5005/dav"),
+            ("https://h.example/Mes%20documents/notable", "https://h.example/Mes%20documents"),
+            ("https://h.example/onyx", "https://h.example/onyx"),
+        ]
+        for (input, expected) in cases {
+            let settings = SyncSettings(serverURL: input, username: "u", password: "p")
+            XCTAssertEqual(settings.syncBaseURL?.absoluteString, expected, "syncBaseURL for \(input)")
+        }
+    }
+
+    func testBothSpellingsConvergeOnTheSameTransportBase() {
+        let parent = SyncSettings(serverURL: "https://h.example/onyx", username: "u", password: "p")
+        let tree = SyncSettings(serverURL: "https://h.example/onyx/notable", username: "u", password: "p")
+        XCTAssertEqual(
+            parent.makeTransport()?.baseURL.absoluteString,
+            tree.makeTransport()?.baseURL.absoluteString)
+    }
+
+    /// Resolution must stay a *derived* view. The chosen path is what the picker reopens at and
+    /// what the Folder row shows; a future "simplification" that rewrites it would silently move
+    /// the user one level up every time they opened the picker.
+    func testChosenPathIsUnaffectedByResolution() {
+        let settings = SyncSettings(
+            serverURL: "https://h.example/onyx/notable", username: "u", password: "p")
+        XCTAssertEqual(settings.remotePath, "/onyx/notable")
+        XCTAssertEqual(settings.remotePathDisplay, "/onyx/notable")
+        XCTAssertEqual(settings.syncRemotePath, "/onyx")
+        XCTAssertEqual(settings.syncTreePath, "/onyx/notable")
+        XCTAssertTrue(settings.didResolveSyncRoot)
+
+        let parent = SyncSettings(serverURL: "https://h.example/onyx", username: "u", password: "p")
+        XCTAssertFalse(parent.didResolveSyncRoot)
+    }
+
+    func testUnusableAddressStillYieldsNoTransport() {
+        XCTAssertNil(
+            SyncSettings(serverURL: "ftp://h.example/notable", username: "u", password: "p")
+                .makeTransport())
+        XCTAssertNil(SyncSettings(serverURL: "", username: "u", password: "p").makeTransport())
+    }
+
+    /// The end-to-end guard, and the only test here that would have caught the original bug: it
+    /// asserts the *composed* URL. FakeTransport structurally cannot — it sees the base-relative
+    /// `HTTPRequest.path`, never the base URL it gets concatenated onto.
+    func testBothSpellingsComposeTheSameRequestURLs() throws {
+        for url in ["https://h.example/onyx", "https://h.example/onyx/notable/"] {
+            let transport = try XCTUnwrap(
+                SyncSettings(serverURL: url, username: "u", password: "p").makeTransport(),
+                "no transport for \(url)")
             XCTAssertEqual(
-                SyncSettings.loadRemotePathDisplay(defaults: defaults), expected,
-                "wrong subtitle for \(url)")
+                try transport.url(for: NotableSyncPaths.foldersFile).absoluteString,
+                "https://h.example/onyx/notable/folders.json", "folders.json via \(url)")
             XCTAssertEqual(
-                SyncSettings.loadRemotePathDisplay(defaults: defaults),
-                SyncSettings(serverURL: url, username: "u", password: "p").remotePathDisplay,
-                "diverged from the full settings for \(url)")
+                try transport.url(for: NotableSyncPaths.notebooksDir).absoluteString,
+                "https://h.example/onyx/notable/notebooks", "notebooks dir via \(url)")
         }
     }
 }

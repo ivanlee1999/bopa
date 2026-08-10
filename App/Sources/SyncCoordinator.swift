@@ -119,7 +119,29 @@ final class SyncCoordinator: ObservableObject {
         if !report.deletedLocally.isEmpty { parts.append("🗑\(report.deletedLocally.count)") }
         if !report.conflicts.isEmpty { parts.append("⚠︎ conflicts: \(report.conflicts.joined(separator: ", "))") }
         if !report.errors.isEmpty { parts.append("errors: \(report.errors.joined(separator: "; "))") }
-        return parts.isEmpty ? "Nothing to sync" : parts.joined(separator: "  ")
+        guard parts.isEmpty else { return parts.joined(separator: "  ") }
+        return emptyRunSummary(for: report.remoteTree)
+    }
+
+    /// A run that moved nothing is ambiguous: it means "already in sync" on the right folder and
+    /// "there is nothing here" on the wrong one, and the second is the far more likely reason a
+    /// library looks empty. Naming which one it was is the whole point.
+    static func emptyRunSummary(for tree: SyncReport.RemoteTreeState) -> String {
+        switch tree {
+        case .absent:
+            return "Synced, but the folder was empty — bopa created the shared tree itself."
+        case .empty:
+            return "Synced, but there is nothing in the shared folder yet."
+        case .populated, .unknown:
+            return "Nothing to sync"
+        }
+    }
+
+    /// Whether the last run found a shared tree that looks like nobody else is using it. Drives the
+    /// hint in sync settings; deliberately not a failure, since a genuinely new setup looks the same.
+    var lastRunFoundNothing: Bool {
+        guard case .success(let report, _) = status else { return false }
+        return report.remoteTree == .absent || report.remoteTree == .empty
     }
 }
 
@@ -182,7 +204,11 @@ struct SyncStatusCapsule: View {
             var parts: [String] = []
             if !report.uploaded.isEmpty { parts.append("↑\(report.uploaded.count)") }
             if !report.downloaded.isEmpty { parts.append("↓\(report.downloaded.count)") }
-            return parts.isEmpty ? "Synced" : "Synced: \(parts.joined(separator: " "))"
+            guard parts.isEmpty else { return "Synced: \(parts.joined(separator: " "))" }
+            switch report.remoteTree {
+            case .absent, .empty: return "Synced — the shared folder is empty"
+            case .populated, .unknown: return "Synced"
+            }
         case .failure(let message, _):
             return message
         }

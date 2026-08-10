@@ -1,11 +1,12 @@
 import NotableKit
 import SwiftUI
 
-/// Which node of the library the sidebar has selected. `root` is the library root;
-/// `server` is the WebDAV share itself rather than anything in the local library.
+/// Which node of the library the sidebar has selected. `root` is the library root.
+///
+/// There is deliberately no "server" node: a synced WebDAV folder is not a place of its own, it is
+/// where these folders and notes came from. Its contents appear below like any other.
 enum LibrarySelection: Hashable {
     case root
-    case server
     case folder(String)
 
     var folderId: String? {
@@ -51,11 +52,6 @@ struct LibrarySidebar: View {
     @EnvironmentObject private var store: NotebookStore
     @Binding var selection: LibrarySelection?
 
-    /// Just the row's subtitle, not the whole settings struct: the sidebar has no use for the
-    /// credentials, and holding them here would keep the Keychain password in memory for the
-    /// life of the library. The browser loads the full settings when it opens.
-    @State private var serverPathDisplay = SyncSettings.loadRemotePathDisplay()
-
     var body: some View {
         List(selection: $selection) {
             Section {
@@ -64,9 +60,6 @@ struct LibrarySidebar: View {
                     count: store.totalNotebookCount, provenance: .unknown)
                     .tag(LibrarySelection.root)
                     .accessibilityIdentifier("sidebar.allNotes")
-                serverRow
-                    .tag(LibrarySelection.server)
-                    .accessibilityIdentifier("sidebar.server")
             }
 
             let tree = FolderNode.tree(from: store)
@@ -81,30 +74,15 @@ struct LibrarySidebar: View {
                 }
             }
 
-            if store.hasSyncedAtLeastOnce {
-                legend
-            }
         }
         .listStyle(.sidebar)
         .navigationTitle("bopa")
-        .onAppear { serverPathDisplay = SyncSettings.loadRemotePathDisplay() }
-        .onReceive(NotificationCenter.default.publisher(for: SyncSettings.didChangeNotification)) { _ in
-            serverPathDisplay = SyncSettings.loadRemotePathDisplay()
-        }
-    }
-
-    /// Opens the WebDAV share itself. The right-hand text is the folder sync is pointed at,
-    /// which is the first thing to check when the library looks emptier than the server.
-    private var serverRow: some View {
-        HStack(spacing: 8) {
-            Label("Server", systemImage: "externaldrive.connected.to.line.below")
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            Text(serverPathDisplay)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.head)
+        // Outside the List, not a Section in it. As rows — even selection-disabled ones, even under
+        // a "Key" header — these read as two more things to tap, and tapping them does nothing.
+        .safeAreaInset(edge: .bottom) {
+            if store.hasSyncedAtLeastOnce {
+                legend
+            }
         }
     }
 
@@ -123,14 +101,20 @@ struct LibrarySidebar: View {
         }
     }
 
-    /// Two lines, only once a sync has happened — otherwise there are no glyphs to explain.
-    /// Headed "Key" because unlabelled it reads as two more rows to tap, and it is inert.
+    /// What the badges on rows and covers mean. Only once a sync has happened — before that there
+    /// are no glyphs to explain.
     private var legend: some View {
-        Section("Key") {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider()
             legendRow(.onServer, text: "On server")
             legendRow(.localOnly, text: "Local only")
         }
-        .selectionDisabled()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
+        .padding(.top, 4)
+        .background(.bar)
+        .accessibilityElement(children: .combine)
     }
 
     private func legendRow(_ provenance: SyncProvenance, text: String) -> some View {
