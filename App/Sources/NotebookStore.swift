@@ -6,6 +6,11 @@ import NotableKit
 /// M3 sync engine reduces to reconciling this directory with the WebDAV `/notable` tree.
 @MainActor
 final class NotebookStore: ObservableObject {
+    /// Posted after any local mutation (a page save, a new notebook, a rename, a delete). The app
+    /// listens so automatic sync can push shortly after the writing stops. Deliberately not posted
+    /// by `refresh()`, which sync itself calls — that would be a feedback loop.
+    static let didChangeLocallyNotification = Notification.Name("dev.ivan.bopa.storeDidChange")
+
     @Published private(set) var notebooks: [NotebookManifest] = []
     @Published private(set) var folders: [FolderDTO] = []
     /// What the server held at the end of the last sync; nil until this library has
@@ -43,6 +48,13 @@ final class NotebookStore: ObservableObject {
     }
     private var foldersURL: URL {
         rootURL.appendingPathComponent("folders.json")
+    }
+
+    /// `refresh()` plus the local-change signal. Every mutating method ends here; `refresh()`
+    /// alone is for readers (and for sync, which must not retrigger itself).
+    private func refreshAfterLocalChange() {
+        refresh()
+        NotificationCenter.default.post(name: Self.didChangeLocallyNotification, object: nil)
     }
 
     func refresh() {
@@ -86,7 +98,7 @@ final class NotebookStore: ObservableObject {
             withIntermediateDirectories: true)
         try encoder.encode(page).write(to: pageURL(notebookId: notebookId, pageId: pageId))
         try writeManifest(manifest)
-        refresh()
+        refreshAfterLocalChange()
         return manifest
     }
 
@@ -100,24 +112,37 @@ final class NotebookStore: ObservableObject {
     }
 
     /// Persists a page and bumps the notebook's `updatedAt` (the sync conflict clock).
+    ///
+    /// The manifest is re-read from disk rather than taken from `notebooks`: that array is only as
+    /// fresh as the last `refresh()`, and sync writes manifests from another thread throughout a
+    /// run. Writing a cached copy back would resurrect a stale `pageIds` over a newer one, and the
+    /// next upload's orphan cleanup would then delete the pages it omits.
     func savePage(_ page: PageFile) throws {
-        guard let notebookId = page.notebookId, var manifest = manifest(id: notebookId) else {
-            return
-        }
+        guard let notebookId = page.notebookId,
+              var manifest = readManifestFromDisk(notebookId)
+        else { return }
         var page = page
         let now = NotableDate.format(Date())
         page.updatedAt = now
-        try encoder.encode(page).write(to: pageURL(notebookId: notebookId, pageId: page.id))
+        try encoder.encode(page)
+            .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
         manifest.updatedAt = now
         try writeManifest(manifest)
-        refresh()
+        refreshAfterLocalChange()
+    }
+
+    /// The manifest as it is on disk right now. `manifest(id:)` reads the published snapshot and is
+    /// right for rendering; this is the one to use before writing.
+    private func readManifestFromDisk(_ id: String) -> NotebookManifest? {
+        guard let data = try? Data(contentsOf: manifestURL(id)) else { return nil }
+        return try? decoder.decode(NotebookManifest.self, from: data)
     }
 
     /// Appends a page. Its paper follows the notebook's own default (what Notable does);
     /// `fallbackTemplate` applies only when that default is not a native template —
     /// a PDF-backed notebook's per-page PDF binding is not something we can invent here.
     func addPage(to notebookId: String, fallbackTemplate: NativeTemplate = .blank) throws -> PageFile {
-        guard var manifest = manifest(id: notebookId) else {
+        guard var manifest = readManifestFromDisk(notebookId) else {
             throw CocoaError(.fileNoSuchFile)
         }
         let now = NotableDate.format(Date())
@@ -134,18 +159,21 @@ final class NotebookStore: ObservableObject {
             id: UUID().uuidString.lowercased(), notebookId: notebookId,
             background: fields.background, backgroundType: fields.backgroundType,
             createdAt: now, updatedAt: now)
-        try encoder.encode(page).write(to: pageURL(notebookId: notebookId, pageId: page.id))
+        try encoder.encode(page)
+            .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
         manifest.pageIds.append(page.id)
         manifest.updatedAt = now
         try writeManifest(manifest)
-        refresh()
+        refreshAfterLocalChange()
         return page
     }
 
+    /// Atomic, because the sync engine reads these files from another thread: a torn read makes
+    /// `loadPage` throw, and the editor's error path drops whatever strokes were pending.
     private func writeManifest(_ manifest: NotebookManifest) throws {
         try FileManager.default.createDirectory(
             at: notebookDir(manifest.notebookId), withIntermediateDirectories: true)
-        try encoder.encode(manifest).write(to: manifestURL(manifest.notebookId))
+        try encoder.encode(manifest).write(to: manifestURL(manifest.notebookId), options: .atomic)
     }
 
     // MARK: - Notebook management
@@ -155,7 +183,7 @@ final class NotebookStore: ObservableObject {
         manifest.title = title
         manifest.updatedAt = NotableDate.format(Date())
         try writeManifest(manifest)
-        refresh()
+        refreshAfterLocalChange()
     }
 
     func moveNotebook(id: String, toFolder folderId: String?) throws {
@@ -163,7 +191,7 @@ final class NotebookStore: ObservableObject {
         manifest.parentFolderId = folderId
         manifest.updatedAt = NotableDate.format(Date())
         try writeManifest(manifest)
-        refresh()
+        refreshAfterLocalChange()
     }
 
     /// Removes the local directory and records the id as a pending deletion; the sync
@@ -171,7 +199,7 @@ final class NotebookStore: ObservableObject {
     func deleteNotebook(id: String) throws {
         try FileManager.default.removeItem(at: notebookDir(id))
         PendingDeletions.add(id, root: rootURL)
-        refresh()
+        refreshAfterLocalChange()
     }
 
     // MARK: - Folders
@@ -208,7 +236,7 @@ final class NotebookStore: ObservableObject {
             serverTimestamp: NotableDate.format(Date()))
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try encoder.encode(file).write(to: foldersURL)
-        refresh()
+        refreshAfterLocalChange()
     }
 
     // MARK: - Folder queries

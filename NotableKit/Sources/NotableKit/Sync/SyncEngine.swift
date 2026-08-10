@@ -58,7 +58,13 @@ public actor SyncEngine {
 
     // MARK: - Entry point
 
-    public func sync() async -> SyncReport {
+    /// - Parameter uploadOnly: notebooks that may be pushed but must never be written to. Used for
+    ///   the notebook currently open in the editor: the editor holds authoritative in-memory state
+    ///   that disk does not have, so a download landing under it is reverted by the next autosave
+    ///   and then re-uploaded as the winner — remote work would vanish from both sides. Deferring
+    ///   costs nothing, because `.skipUploadOnly` deliberately leaves sync state untouched, so the
+    ///   download simply happens on the first run after the notebook is closed.
+    public func sync(uploadOnly: Set<String> = []) async -> SyncReport {
         var report = SyncReport()
         loadState()
 
@@ -133,10 +139,17 @@ public actor SyncEngine {
                     serverNotebookIds.insert(id)
                     report.uploaded.append(id)
                 case (false, true):
+                    // Remote-only and excluded: there is no local copy to protect, but creating one
+                    // under an open editor would be just as surprising. Defer it wholesale.
+                    guard !uploadOnly.contains(id) else {
+                        report.skipped.append(id)
+                        break
+                    }
                     try await download(id, report: &report)
                     report.downloaded.append(id)
                 case (true, true):
-                    try await reconcile(id, report: &report)
+                    try await reconcile(
+                        id, uploadOnly: uploadOnly.contains(id), report: &report)
                 case (false, false):
                     break
                 }
@@ -154,7 +167,9 @@ public actor SyncEngine {
 
     // MARK: - Reconciliation
 
-    private func reconcile(_ id: String, report: inout SyncReport) async throws {
+    private func reconcile(
+        _ id: String, uploadOnly: Bool = false, report: inout SyncReport
+    ) async throws {
         guard let localManifest = readLocalManifest(id),
               let localUpdatedAt = epochMs(localManifest.updatedAt)
         else {
@@ -190,7 +205,8 @@ public actor SyncEngine {
             syncedLocalUpdatedAt: stored?.localUpdatedAtAtSync,
             storedEtag: stored?.etag,
             remoteChanged: remoteChanged,
-            remote: remoteInfo)
+            remote: remoteInfo,
+            uploadOnly: uploadOnly)
 
         switch action {
         case .upload(let ifMatch):
@@ -285,9 +301,11 @@ public actor SyncEngine {
         let pagesDir = localNotebookDir(id).appendingPathComponent("pages")
         try FileManager.default.createDirectory(at: pagesDir, withIntermediateDirectories: true)
 
+        // Atomic: the app reads these files on the main thread while this runs, and a torn read
+        // surfaces as "could not open page" over work that is actually fine.
         for pageId in manifest.pageIds {
             let page = try await dav.get(NotableSyncPaths.pageFile(id, pageId))
-            try page.data.write(to: localPageURL(id, pageId))
+            try page.data.write(to: localPageURL(id, pageId), options: .atomic)
         }
 
         // Remove local pages no longer in the manifest.
@@ -307,7 +325,7 @@ public actor SyncEngine {
             report: &report)
 
         // Manifest last: local dir is never a manifest pointing at missing pages.
-        try manifestData.write(to: localManifestURL(id))
+        try manifestData.write(to: localManifestURL(id), options: .atomic)
 
         if let updatedAt = epochMs(manifest.updatedAt) {
             state[id] = NotebookSyncState(localUpdatedAtAtSync: updatedAt, etag: etag)

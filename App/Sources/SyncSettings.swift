@@ -8,7 +8,17 @@ import SwiftUI
 struct SyncSettings: Equatable {
     static let serverKey = "sync.serverURL"
     static let usernameKey = "sync.username"
+    static let automaticKey = "sync.automatic"
     static let keychainAccount = "dev.ivan.bopa.webdav"
+
+    /// Whether bopa syncs on its own. Defaults to **on** — an absent key is not "off", it is a
+    /// user who has never had an opinion, and a note app that only syncs when asked is the thing
+    /// this setting exists to avoid. Kept off `SyncSettings` proper so reading it never touches
+    /// the Keychain.
+    static var isAutomaticEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: automaticKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: automaticKey) }
+    }
 
     /// Posted by `save()`. Views holding a loaded copy re-read on this rather than on a
     /// sheet's `onDismiss`: the settings form writes in its own `onDisappear`, which SwiftUI
@@ -173,6 +183,7 @@ struct SyncSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var settings = SyncSettings.load()
+    @State private var automatic = SyncSettings.isAutomaticEnabled
     @State private var showingFolderPicker = false
 
     var body: some View {
@@ -221,6 +232,23 @@ struct SyncSettingsView: View {
                 .accessibilityIdentifier("sync.browseServer")
             } footer: {
                 Text(folderFooter)
+            }
+            Section {
+                Toggle("Sync automatically", isOn: $automatic)
+                    .onChange(of: automatic) { _, enabled in
+                        SyncSettings.isAutomaticEnabled = enabled
+                        if enabled {
+                            coordinator.startAutoSync(store: store)
+                        } else {
+                            coordinator.stopAutoSync()
+                        }
+                    }
+                    .accessibilityIdentifier("sync.automatic")
+            } footer: {
+                Text(automatic
+                    ? "bopa checks the server every couple of minutes while it is open, and pushes "
+                        + "your changes shortly after you stop writing."
+                    : "bopa only syncs when you tap Sync now.")
             }
             Section {
                 Button {

@@ -14,12 +14,20 @@ final class SyncCoordinator: ObservableObject {
         case failure(String, Date)
     }
 
-    /// Performs one sync run against `rootURL` using `settings`. The default builds a
-    /// `SyncEngine` the same way SyncSettingsView used to.
-    typealias SyncOperation = @MainActor (SyncSettings, URL) async -> SyncReport
+    /// Performs one sync run against `rootURL` using `settings`. `uploadOnly` carries the
+    /// notebooks that must not be written to — see `SyncEngine.sync(uploadOnly:)`.
+    typealias SyncOperation = @MainActor (SyncSettings, URL, Set<String>) async -> SyncReport
+
+    /// Suspends for `seconds`. Injectable so the poll loop is testable without real time.
+    typealias Sleeper = @Sendable (TimeInterval) async throws -> Void
 
     @Published private(set) var status: Status = .idle
     @Published private(set) var lastSyncedAt: Date?
+
+    /// The notebook open in the editor, if any. Excluded from downloads for as long as it is
+    /// open — the editor holds in-memory state that disk does not, so a download landing under it
+    /// would be reverted by the next autosave and then uploaded as the winner.
+    @Published var openNotebookId: String?
 
     /// When the most recent sync attempt started, successful or not. This is the
     /// staleness clock: counting attempts (not successes) means an unreachable server
@@ -27,27 +35,42 @@ final class SyncCoordinator: ObservableObject {
     private(set) var lastAttemptAt: Date?
 
     private let staleInterval: TimeInterval
+    private let pollInterval: TimeInterval
+    private let editQuietPeriod: TimeInterval
     private let now: @MainActor () -> Date
     private let loadSettings: @MainActor () -> SyncSettings
+    private let isAutomaticEnabled: @MainActor () -> Bool
     private let performSync: SyncOperation
+    private let sleeper: Sleeper
+
+    private var pollTask: Task<Void, Never>?
+    private var editPushTask: Task<Void, Never>?
 
     init(
         staleInterval: TimeInterval = 60,
+        pollInterval: TimeInterval = 120,
+        editQuietPeriod: TimeInterval = 20,
         now: @escaping @MainActor () -> Date = Date.init,
         loadSettings: @escaping @MainActor () -> SyncSettings = SyncSettings.load,
+        isAutomaticEnabled: @escaping @MainActor () -> Bool = { SyncSettings.isAutomaticEnabled },
+        sleeper: @escaping Sleeper = { try await Task.sleep(for: .seconds($0)) },
         performSync: SyncOperation? = nil
     ) {
         self.staleInterval = staleInterval
+        self.pollInterval = pollInterval
+        self.editQuietPeriod = editQuietPeriod
         self.now = now
         self.loadSettings = loadSettings
-        self.performSync = performSync ?? { settings, rootURL in
+        self.isAutomaticEnabled = isAutomaticEnabled
+        self.sleeper = sleeper
+        self.performSync = performSync ?? { settings, rootURL, uploadOnly in
             guard let transport = settings.makeTransport() else {
                 var report = SyncReport()
                 report.errors.append("sync: server not configured")
                 return report
             }
             let engine = SyncEngine(transport: transport, rootURL: rootURL)
-            return await engine.sync()
+            return await engine.sync(uploadOnly: uploadOnly)
         }
     }
 
@@ -67,7 +90,10 @@ final class SyncCoordinator: ObservableObject {
         lastAttemptAt = now()
         status = .syncing
 
-        let report = await performSync(settings, store.rootURL)
+        // Read once, here: the editor could close mid-run, and a notebook that was excluded when
+        // the run started must stay excluded for the whole of it.
+        let uploadOnly = openNotebookId.map { Set([$0]) } ?? []
+        let report = await performSync(settings, store.rootURL, uploadOnly)
         let finishedAt = now()
         if Self.isFailure(report) {
             status = .failure(report.errors.joined(separator: "; "), finishedAt)
@@ -85,6 +111,60 @@ final class SyncCoordinator: ObservableObject {
             return
         }
         await syncNow(store: store)
+    }
+
+    // MARK: - Automatic sync
+
+    /// Starts the poll loop. Idempotent — a second call while running is a no-op.
+    ///
+    /// WebDAV has no push, so the only way to learn about the BOOX's edits is to ask. Local edits
+    /// need no polling (see `noteEdited`), which is why the two run on very different clocks.
+    func startAutoSync(store: NotebookStore) {
+        guard pollTask == nil else { return }
+        let interval = pollInterval
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    guard let sleeper = self?.sleeper else { return }
+                    try await sleeper(interval)
+                } catch {
+                    return  // cancelled
+                }
+                guard let self, !Task.isCancelled else { return }
+                guard self.isAutomaticEnabled() else { continue }
+                // A tick landing inside a long run is swallowed by syncNow's own guard.
+                await self.syncNow(store: store)
+            }
+        }
+    }
+
+    func stopAutoSync() {
+        pollTask?.cancel()
+        pollTask = nil
+        editPushTask?.cancel()
+        editPushTask = nil
+    }
+
+    var isAutoSyncRunning: Bool { pollTask != nil }
+
+    /// Signals that something changed locally. Pushes once the editing stops rather than
+    /// immediately: `SyncEngine.upload` re-PUTs *every* page of a notebook, so syncing on each
+    /// autosave would re-send a whole notebook every couple of seconds while someone is writing.
+    /// Repeated calls coalesce — only the last one's timer survives.
+    func noteEdited(store: NotebookStore) {
+        guard isAutomaticEnabled() else { return }
+        editPushTask?.cancel()
+        let quiet = editQuietPeriod
+        editPushTask = Task { [weak self] in
+            do {
+                guard let sleeper = self?.sleeper else { return }
+                try await sleeper(quiet)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            await self.syncNow(store: store)
+        }
     }
 
     /// A run counts as failed only when it produced errors and moved nothing at all;
