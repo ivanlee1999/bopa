@@ -33,8 +33,12 @@ jobs:
       - name: Toolchain
         run: xcodebuild -version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      # jq ships on the current runner images, but the simulator lookup below
+      # depends on it — install it rather than trust that to stay true.
+      - name: Install tools
+        run: |
+          brew install xcodegen
+          command -v jq >/dev/null || brew install jq
 
       # Regenerate from project.yml so CI tests the checked-in config, not a
       # possibly stale project.pbxproj.
@@ -55,7 +59,9 @@ jobs:
             xcrun simctl list devices available >&2
             exit 1
           fi
-          xcrun simctl boot "$udid" || true
+          # Boots if needed, returns immediately if already booted, and fails
+          # here — rather than deep inside xcodebuild — if the boot goes wrong.
+          xcrun simctl bootstatus "$udid" -b
           echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
           xcrun simctl list devices | grep "$udid"
 
