@@ -50,10 +50,18 @@ final class NotebookStore: ObservableObject {
         rootURL.appendingPathComponent("folders.json")
     }
 
+    /// Which device this is, stamped into everything written so the merge can break ties.
+    var deviceID: String = CouchSettings.defaultDeviceID
+
+    /// Called with the CouchDB document ids each mutation touched, so sync can queue exactly
+    /// those rather than re-sending the library.
+    var didChangeDocuments: (([String]) -> Void)?
+
     /// `refresh()` plus the local-change signal. Every mutating method ends here; `refresh()`
     /// alone is for readers (and for sync, which must not retrigger itself).
-    private func refreshAfterLocalChange() {
+    private func refreshAfterLocalChange(documents: [String] = []) {
         refresh()
+        if !documents.isEmpty { didChangeDocuments?(documents) }
         NotificationCenter.default.post(name: Self.didChangeLocallyNotification, object: nil)
     }
 
@@ -98,7 +106,8 @@ final class NotebookStore: ObservableObject {
             withIntermediateDirectories: true)
         try encoder.encode(page).write(to: pageURL(notebookId: notebookId, pageId: pageId))
         try writeManifest(manifest)
-        refreshAfterLocalChange()
+        refreshAfterLocalChange(
+            documents: [CouchDocID.notebook(notebookId), CouchDocID.page(pageId)])
         return manifest
     }
 
@@ -124,11 +133,31 @@ final class NotebookStore: ObservableObject {
         var page = page
         let now = NotableDate.format(Date())
         page.updatedAt = now
+        page.updatedBy = deviceID
+
+        // Whatever is no longer here was erased. Recording it is what stops the other device's
+        // copy of an erased stroke from coming back on the next merge — absence alone cannot be
+        // told apart from "that stroke has not reached this device yet".
+        let previous = readPageFromDisk(notebookId: notebookId, pageId: page.id)
+        page.deletedStrokes = CouchTombstones.derive(
+            previousIDs: Set(previous?.strokes.map(\.id) ?? []),
+            currentIDs: Set(page.strokes.map(\.id)),
+            existing: previous?.deletedStrokes ?? [],
+            deletedAt: now)
+
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
         manifest.updatedAt = now
+        manifest.updatedBy = deviceID
         try writeManifest(manifest)
-        refreshAfterLocalChange()
+        refreshAfterLocalChange(
+            documents: [CouchDocID.page(page.id), CouchDocID.notebook(notebookId)])
+    }
+
+    private func readPageFromDisk(notebookId: String, pageId: String) -> PageFile? {
+        guard let data = try? Data(contentsOf: pageURL(notebookId: notebookId, pageId: pageId))
+        else { return nil }
+        return try? decoder.decode(PageFile.self, from: data)
     }
 
     /// The manifest as it is on disk right now. `manifest(id:)` reads the published snapshot and is
@@ -163,8 +192,10 @@ final class NotebookStore: ObservableObject {
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
         manifest.pageIds.append(page.id)
         manifest.updatedAt = now
+        manifest.updatedBy = deviceID
         try writeManifest(manifest)
-        refreshAfterLocalChange()
+        refreshAfterLocalChange(
+            documents: [CouchDocID.notebook(notebookId), CouchDocID.page(page.id)])
         return page
     }
 
@@ -182,24 +213,30 @@ final class NotebookStore: ObservableObject {
         guard var manifest = manifest(id: id) else { throw CocoaError(.fileNoSuchFile) }
         manifest.title = title
         manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedBy = deviceID
         try writeManifest(manifest)
-        refreshAfterLocalChange()
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
     }
 
     func moveNotebook(id: String, toFolder folderId: String?) throws {
         guard var manifest = manifest(id: id) else { throw CocoaError(.fileNoSuchFile) }
         manifest.parentFolderId = folderId
         manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedBy = deviceID
         try writeManifest(manifest)
-        refreshAfterLocalChange()
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
     }
 
     /// Removes the local directory and records the id as a pending deletion; the sync
     /// engine uploads the tombstone at the start of the next sync (works offline).
     func deleteNotebook(id: String) throws {
+        let pageIds = readManifestFromDisk(id)?.pageIds ?? []
         try FileManager.default.removeItem(at: notebookDir(id))
         PendingDeletions.add(id, root: rootURL)
-        refreshAfterLocalChange()
+        // The pages go with it, so name them too: the engine has to stop tracking them, and a
+        // page left queued would be pushed back under a notebook that no longer exists.
+        refreshAfterLocalChange(
+            documents: [CouchDocID.notebook(id)] + pageIds.map(CouchDocID.page))
     }
 
     // MARK: - Folders
@@ -236,7 +273,7 @@ final class NotebookStore: ObservableObject {
             serverTimestamp: NotableDate.format(Date()))
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try encoder.encode(file).write(to: foldersURL)
-        refreshAfterLocalChange()
+        refreshAfterLocalChange(documents: folders.map { CouchDocID.folder($0.id) })
     }
 
     // MARK: - Folder queries

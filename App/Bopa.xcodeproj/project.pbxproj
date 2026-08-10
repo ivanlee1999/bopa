@@ -25,8 +25,10 @@
 		6282E4AF4D9D4C81DBA588C4 /* EraserUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 007E2190A23B0021DB3B5752 /* EraserUITests.swift */; };
 		669C9BEFB7448981118F2DB1 /* ServerBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7079102757F82D89F8EECEAE /* ServerBrowserView.swift */; };
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
+		7D6787E436578AEE47D227E6 /* NotebookStoreCouchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */; };
 		836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */; };
 		8AA222EE7E1E70A50620353E /* RemoteFolderPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C708E78695B6C125620979F /* RemoteFolderPickerTests.swift */; };
+		91F53EE72E12425656A7AC33 /* CouchSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AFFABA1DDE490CD0E242993 /* CouchSettings.swift */; };
 		9268909E990BFF4774CFA57A /* CanvasContainerViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */; };
 		A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */; };
 		B188FC9BE3CDA7096D52D546 /* HandwritingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */; };
@@ -68,6 +70,7 @@
 		1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareCanvasUITests.swift; sourceTree = "<group>"; };
 		1F51F41B920291A1DC95CED0 /* ConflictResolutionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictResolutionView.swift; sourceTree = "<group>"; };
 		27BB5272061EA302A49313CA /* BackgroundRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundRenderer.swift; sourceTree = "<group>"; };
+		2AFFABA1DDE490CD0E242993 /* CouchSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchSettings.swift; sourceTree = "<group>"; };
 		2B0BAB6AF0A9B4CD233DD405 /* PaperTemplateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperTemplateView.swift; sourceTree = "<group>"; };
 		2CE531A38B3D637083298DA9 /* CanvasContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasContainerView.swift; sourceTree = "<group>"; };
 		2D3EA159F6A8667952EEF771 /* BareCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareCanvas.swift; sourceTree = "<group>"; };
@@ -85,6 +88,7 @@
 		7346F25A719C7EB849AE025F /* Thumbnails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Thumbnails.swift; sourceTree = "<group>"; };
 		74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasContainerViewTests.swift; sourceTree = "<group>"; };
 		760C1A94995C19FE535F60AB /* LibrarySidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySidebar.swift; sourceTree = "<group>"; };
+		895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreCouchTests.swift; sourceTree = "<group>"; };
 		9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageImageTests.swift; sourceTree = "<group>"; };
 		B37AA22765996393FB323A60 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
 		B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandwritingSettingsTests.swift; sourceTree = "<group>"; };
@@ -161,6 +165,7 @@
 				13EC02E525247FA06BC975D5 /* BopaApp.swift */,
 				2CE531A38B3D637083298DA9 /* CanvasContainerView.swift */,
 				1F51F41B920291A1DC95CED0 /* ConflictResolutionView.swift */,
+				2AFFABA1DDE490CD0E242993 /* CouchSettings.swift */,
 				D7A86459981084A1F96E5AAC /* CouchSyncController.swift */,
 				B37AA22765996393FB323A60 /* EditorView.swift */,
 				E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */,
@@ -186,6 +191,7 @@
 				74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */,
 				C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */,
 				B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */,
+				895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */,
 				B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */,
 				9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */,
 				3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */,
@@ -327,6 +333,7 @@
 				9268909E990BFF4774CFA57A /* CanvasContainerViewTests.swift in Sources */,
 				02EAE8E446983D5557B4FD8B /* CouchSyncControllerTests.swift in Sources */,
 				3BF381E0797979BCF00AEE38 /* HandwritingSettingsTests.swift in Sources */,
+				7D6787E436578AEE47D227E6 /* NotebookStoreCouchTests.swift in Sources */,
 				836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */,
 				C980C9CF1CD6F2E3D8B74DE7 /* PageImageTests.swift in Sources */,
 				29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */,
@@ -344,6 +351,7 @@
 				78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */,
 				C10E0057637247CCB7ED659A /* CanvasContainerView.swift in Sources */,
 				E85BA9A56A392DAB893D469A /* ConflictResolutionView.swift in Sources */,
+				91F53EE72E12425656A7AC33 /* CouchSettings.swift in Sources */,
 				02578FB9E261C0E5A3A6D96B /* CouchSyncController.swift in Sources */,
 				02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */,
 				B188FC9BE3CDA7096D52D546 /* HandwritingSettings.swift in Sources */,
