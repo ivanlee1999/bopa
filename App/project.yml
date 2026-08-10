@@ -34,6 +34,12 @@ targets:
     sources: [Sources]
     dependencies:
       - package: NotableKit
+    # Shared (committed) scheme so `xcodebuild test -scheme Bopa` runs the same
+    # targets on CI as it does locally, instead of an auto-created one.
+    scheme:
+      testTargets:
+        - BopaTests
+        - BopaUITests
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
