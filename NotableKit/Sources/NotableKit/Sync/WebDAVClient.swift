@@ -50,10 +50,17 @@ public struct WebDAVClient: Sendable {
     }
 
     /// MKCOL; succeeds silently if the collection already exists (405/301).
-    public func makeCollection(_ path: String) async throws {
+    ///
+    /// Returns whether the collection was actually created (201). "I had to create the shared tree
+    /// myself" is the cheapest signal available that the configured folder is not the one the other
+    /// client is writing to. Servers that answer 200 on create report `false`, which is safe: the
+    /// caller only uses this to soften a message.
+    @discardableResult
+    public func makeCollection(_ path: String) async throws -> Bool {
         let r = try await transport.send(HTTPRequest(method: "MKCOL", path: path))
         switch r.status {
-        case 200, 201, 405, 301: return
+        case 201: return true
+        case 200, 405, 301: return false
         default: throw WebDAVError.unexpectedStatus(r.status, path: path)
         }
     }

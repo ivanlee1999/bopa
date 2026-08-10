@@ -405,4 +405,142 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertFalse(server.filePaths().contains { $0.contains("bopa-remote-index") })
         XCTAssertFalse(server.filePaths().contains { $0.contains(RemoteIndex.fileName) })
     }
+
+    // MARK: Remote tree state
+
+    /// A run against the wrong folder and a healthy no-op both move nothing, so without this the
+    /// two are indistinguishable — which is exactly what makes a misconfigured base URL invisible.
+
+    func testFreshServerReportsAbsentTree() async throws {
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.remoteTree, .absent)
+        XCTAssertTrue(report.uploaded.isEmpty)
+        XCTAssertTrue(report.downloaded.isEmpty)
+        XCTAssertTrue(report.errors.isEmpty)
+    }
+
+    func testSecondSyncOfStillEmptyServerReportsEmpty() async throws {
+        _ = await engine().sync()
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.remoteTree, .empty)
+    }
+
+    func testPopulatedServerReportsPopulated() async throws {
+        try seedRemoteNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.remoteTree, .populated)
+        XCTAssertEqual(report.downloaded, ["nb1"])
+    }
+
+    /// A BOOX that has only ever made folders is a working setup, not a wrong address.
+    func testRemoteFoldersFileAloneCountsAsPopulated() async throws {
+        _ = await engine().sync()   // create the tree so this run is not `.absent`
+        server.setFile(
+            NotableSyncPaths.foldersFile,
+            try JSONEncoder().encode(FoldersFile(
+                folders: [folder("f1")], serverTimestamp: "2026-08-02T10:00:00Z")))
+
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.remoteTree, .populated)
+    }
+
+    func testMakeCollectionDistinguishesCreatedFromExisting() async throws {
+        let dav = WebDAVClient(transport: server)
+
+        let created = try await dav.makeCollection("/some/dir")
+        let again = try await dav.makeCollection("/some/dir")
+
+        XCTAssertTrue(created)
+        XCTAssertFalse(again)
+    }
+
+    // MARK: Assets
+
+    func testDownloadsImagesAndBackgrounds() async throws {
+        try seedRemoteNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        server.setFile("/notable/notebooks/nb1/images/photo.jpg", Data("jpeg-bytes".utf8))
+        server.setFile("/notable/notebooks/nb1/backgrounds/paper.pdf", Data("pdf-bytes".utf8))
+
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.downloaded, ["nb1"])
+        XCTAssertTrue(report.errors.isEmpty)
+        XCTAssertEqual(
+            try Data(contentsOf: localAsset("nb1", "images/photo.jpg")), Data("jpeg-bytes".utf8))
+        XCTAssertEqual(
+            try Data(contentsOf: localAsset("nb1", "backgrounds/paper.pdf")), Data("pdf-bytes".utf8))
+    }
+
+    func testUploadsImagesAndBackgrounds() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        try writeLocalAsset("nb1", "images/photo.jpg", "jpeg-bytes")
+        try writeLocalAsset("nb1", "backgrounds/paper.pdf", "pdf-bytes")
+
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.uploaded, ["nb1"])
+        XCTAssertTrue(report.errors.isEmpty)
+        XCTAssertEqual(
+            server.fileData("/notable/notebooks/nb1/images/photo.jpg"), Data("jpeg-bytes".utf8))
+        XCTAssertEqual(
+            server.fileData("/notable/notebooks/nb1/backgrounds/paper.pdf"), Data("pdf-bytes".utf8))
+    }
+
+    /// Assets are optional. A notebook that never had an image has no such folder, and a 404
+    /// listing must read as "nothing to do" rather than an error.
+    func testNotebookWithoutAssetsSyncsCleanly() async throws {
+        try seedRemoteNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.downloaded, ["nb1"])
+        XCTAssertTrue(report.errors.isEmpty)
+    }
+
+    /// A background that will not transfer must not cost the user their strokes.
+    func testAssetFailureStillLandsTheNotebook() async throws {
+        try seedRemoteNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        server.setFile("/notable/notebooks/nb1/backgrounds/paper.pdf", Data("pdf-bytes".utf8))
+        server.failingPaths = ["/notable/notebooks/nb1/backgrounds/paper.pdf"]
+
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.downloaded, ["nb1"])
+        XCTAssertTrue(report.errors.contains { $0.contains("paper.pdf") }, "\(report.errors)")
+        // Manifest and pages are intact, so the note opens — just without its background.
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("notebooks/nb1/manifest.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: rootURL.appendingPathComponent("notebooks/nb1/pages/p1.json").path))
+    }
+
+    /// Assets already present are left alone — they are immutable blobs keyed by name, so
+    /// re-fetching them every sync would be pure waste.
+    func testExistingAssetsAreNotRefetched() async throws {
+        try seedRemoteNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        server.setFile("/notable/notebooks/nb1/images/photo.jpg", Data("jpeg-bytes".utf8))
+        _ = await engine().sync()
+
+        server.clearRequestLog()
+        _ = await engine().sync()
+
+        XCTAssertFalse(server.requestLog().contains {
+            $0.method == "GET" && $0.path == "/notable/notebooks/nb1/images/photo.jpg"
+        }, "asset re-fetched on a second sync")
+    }
+
+    private func localAsset(_ id: String, _ relative: String) -> URL {
+        rootURL.appendingPathComponent("notebooks/\(id)/\(relative)")
+    }
+
+    private func writeLocalAsset(_ id: String, _ relative: String, _ contents: String) throws {
+        let url = localAsset(id, relative)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(contents.utf8).write(to: url)
+    }
 }
