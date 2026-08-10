@@ -1,9 +1,11 @@
 import NotableKit
 import SwiftUI
 
-/// Which node of the library the sidebar has selected. `root` is the library root.
+/// Which node of the library the sidebar has selected. `root` is the library root;
+/// `server` is the WebDAV share itself rather than anything in the local library.
 enum LibrarySelection: Hashable {
     case root
+    case server
     case folder(String)
 
     var folderId: String? {
@@ -49,6 +51,9 @@ struct LibrarySidebar: View {
     @EnvironmentObject private var store: NotebookStore
     @Binding var selection: LibrarySelection?
 
+    /// Only for the row's subtitle — the browser itself re-reads the settings when it opens.
+    @State private var settings = SyncSettings.load()
+
     var body: some View {
         List(selection: $selection) {
             Section {
@@ -57,6 +62,9 @@ struct LibrarySidebar: View {
                     count: store.totalNotebookCount, provenance: .unknown)
                     .tag(LibrarySelection.root)
                     .accessibilityIdentifier("sidebar.allNotes")
+                serverRow
+                    .tag(LibrarySelection.server)
+                    .accessibilityIdentifier("sidebar.server")
             }
 
             let tree = FolderNode.tree(from: store)
@@ -77,6 +85,25 @@ struct LibrarySidebar: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("bopa")
+        .onAppear { settings = SyncSettings.load() }
+        .onReceive(NotificationCenter.default.publisher(for: SyncSettings.didChangeNotification)) { _ in
+            settings = SyncSettings.load()
+        }
+    }
+
+    /// Opens the WebDAV share itself. The right-hand text is the folder sync is pointed at,
+    /// which is the first thing to check when the library looks emptier than the server.
+    private var serverRow: some View {
+        HStack(spacing: 8) {
+            Label("Server", systemImage: "externaldrive.connected.to.line.below")
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(settings.remotePathDisplay)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+        }
     }
 
     private func row(
@@ -95,8 +122,9 @@ struct LibrarySidebar: View {
     }
 
     /// Two lines, only once a sync has happened — otherwise there are no glyphs to explain.
+    /// Headed "Key" because unlabelled it reads as two more rows to tap, and it is inert.
     private var legend: some View {
-        Section {
+        Section("Key") {
             legendRow(.onServer, text: "On server")
             legendRow(.localOnly, text: "Local only")
         }
