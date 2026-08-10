@@ -514,7 +514,29 @@ that a stroke commit marks docs dirty and the debouncer fires.
 Each phase lands as a PR (bopa: branch off `main` here; notable: its own branch).
 `quick` tier before every commit per the testing standard.
 
-**Phase 0 — Spec + vectors (both repos, ~1 day)**
+> **Status (2026-08-10).** Phase 0 is **done in both repos**, and bopa's engine (phase 3's
+> kit half) is done ahead of order because it defined the contract notable implements.
+> bopa branch `claude/notebook-sync-ipad-boox-02adc8`; notable branch `claude/couchdb-sync`.
+>
+> | Piece | bopa | notable |
+> |---|---|---|
+> | Protocol spec + vectors | ✅ `docs/couch-sync-protocol.md`, `docs/couch-sync-vectors/` | ✅ vectors copied byte-identical |
+> | Merge (vector-driven) | ✅ `CouchMerge.swift` | ✅ `sync/couch/Merge.kt` |
+> | Document models | ✅ `CouchModels.swift` | ✅ `sync/couch/CouchModels.kt` |
+> | Tombstone derivation | ✅ `CouchTombstones.swift` | ⬜ |
+> | CouchDB client | ✅ `CouchDBClient.swift` | ⬜ |
+> | Sync engine | ✅ `CouchSyncEngine.swift` (+ `MockCouchServer`) | ⬜ |
+> | Storage mapping | ✅ `CouchMapping.swift` | ⬜ (needs a `deleted_stroke` Room table) |
+> | Local-store adapter + app wiring | ⬜ | ⬜ |
+> | Server on the NAS | ⬜ | — |
+>
+> Two findings changed the design mid-flight, both recorded in the spec:
+> **(a)** neither app records erasures today, so tombstones must be *derived* by diffing the
+> stroke-id set at save time (§6.6 of the protocol) — notable additionally needs a new table,
+> since it hard-deletes stroke rows; **(b)** the merge tiebreaks had to become total orders
+> and float comparison had to move to IEEE-754 bit patterns, or Swift and Kotlin disagree.
+
+**Phase 0 — Spec + vectors (both repos, ~1 day)** — **done**
 Write `docs/couch-sync-protocol.md` (§3–§5 of this plan, normative), author the
 vector set, add the vector-parity CI check. *Accept: both repos' vector tests exist
 and fail (no impl yet) / are skipped.*
