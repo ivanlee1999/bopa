@@ -37,8 +37,11 @@ struct SyncSettings: Equatable {
         URL(string: serverURL)?.scheme?.hasPrefix("http") == true
     }
 
+    /// Transport for the sync engine, rooted at the *resolved* base (see `syncBaseURL`) rather than
+    /// the raw `serverURL`, so pointing at the `notable` folder itself works as well as pointing at
+    /// its parent.
     func makeTransport() -> URLSessionTransport? {
-        guard isConfigured, let url = URL(string: serverURL) else { return nil }
+        guard isConfigured, let url = syncBaseURL else { return nil }
         return URLSessionTransport(
             baseURL: url,
             username: username.isEmpty ? nil : username,
@@ -86,12 +89,36 @@ extension SyncSettings {
         hostRootURL == nil ? "Not set" : remotePath
     }
 
-    /// `remotePathDisplay` for views that only need to show where sync points. Derived from
-    /// the server URL alone, so it never reads — and so never holds — the Keychain password.
-    static func loadRemotePathDisplay(defaults: UserDefaults = .standard) -> String {
-        SyncSettings(
-            serverURL: defaults.string(forKey: serverKey) ?? "",
-            username: "", password: "").remotePathDisplay
+    // MARK: Sync root resolution
+
+    /// The chosen folder with a trailing `notable` segment resolved away — what the sync transport
+    /// is actually rooted at.
+    ///
+    /// Derived, never stored: a `serverURL` saved before this rule existed heals itself on the next
+    /// sync, without the user re-picking anything.
+    var syncRemotePath: String { RemotePath.syncBase(remotePath) }
+
+    /// The shared tree itself. The same string whether the user picked the parent or the `notable`
+    /// folder, which is what makes it safe to show as "where your notebooks live".
+    var syncTreePath: String { RemotePath.syncTree(remotePath) }
+
+    /// True when the user pointed at the `notable` folder itself and we resolved upward. Drives the
+    /// disclosure text — the resolution should be visible, not magic.
+    var didResolveSyncRoot: Bool { syncRemotePath != remotePath }
+
+    /// `serverURL` with only its path rewritten to `syncRemotePath`.
+    ///
+    /// Built from `parsedComponents` rather than `hostRootURL` so a port, query, fragment or inline
+    /// credentials survive exactly as they do today.
+    var syncBaseURL: URL? {
+        guard var components = parsedComponents else { return nil }
+        let resolved = RemotePath.syncBase(components.path)
+        // `.urlPathAllowed` keeps "/" literal and encodes spaces and non-ASCII as UTF-8 — the same
+        // recipe as RemotePath.absoluteURLString, so "/Mes documents" round-trips.
+        components.percentEncodedPath = resolved == RemotePath.root
+            ? ""
+            : (resolved.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? resolved)
+        return components.url
     }
 
     /// A host plus Basic-auth credentials are the minimum needed to PROPFIND anything.
@@ -184,10 +211,16 @@ struct SyncSettingsView: View {
                 }
                 .disabled(!settings.canBrowse)
                 .accessibilityIdentifier("sync.folderRow")
+
+                NavigationLink {
+                    ServerBrowserView(settings: settings)
+                } label: {
+                    Label("Browse server", systemImage: "externaldrive.connected.to.line.below")
+                }
+                .disabled(!settings.canBrowse)
+                .accessibilityIdentifier("sync.browseServer")
             } footer: {
-                Text(settings.canBrowse
-                    ? "Browse the server to pick the folder bopa and Notable share."
-                    : "Fill in the address, username and password to browse the server.")
+                Text(folderFooter)
             }
             Section {
                 Button {
@@ -205,8 +238,16 @@ struct SyncSettingsView: View {
                 }
                 .disabled(!settings.isConfigured || coordinator.isSyncing)
             } footer: {
-                if let detail = coordinator.statusDetail {
-                    Text(detail)
+                VStack(alignment: .leading, spacing: 6) {
+                    if let detail = coordinator.statusDetail {
+                        Text(detail)
+                    }
+                    // Only meaningful once the root is resolved: it names the tree bopa really
+                    // looked in, which is the one thing the user needs to match on the BOOX.
+                    if coordinator.lastRunFoundNothing {
+                        Text("bopa found nothing in “\(settings.syncTreePath)”. If your BOOX already "
+                            + "has notebooks, point Notable at “\(settings.syncRemotePath)” too.")
+                    }
                 }
             }
         }
@@ -215,5 +256,18 @@ struct SyncSettingsView: View {
             RemoteFolderPicker(settings: $settings)
         }
         .onDisappear { settings.save() }
+    }
+
+    /// Spells out the resolution when the chosen folder *is* the shared tree, so the Folder row and
+    /// the tree bopa syncs never silently disagree.
+    private var folderFooter: String {
+        guard settings.canBrowse else {
+            return "Fill in the address, username and password to browse the server."
+        }
+        return settings.didResolveSyncRoot
+            ? "That is the shared folder itself, so bopa syncs straight to it. Point Notable on the "
+                + "BOOX at “\(settings.syncRemotePath)”."
+            : "Browse the server to pick the folder bopa and Notable share. Notebooks live in "
+                + "“\(settings.syncTreePath)”."
     }
 }

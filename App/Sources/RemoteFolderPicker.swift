@@ -40,6 +40,31 @@ enum RemotePath {
         return root + parts.dropLast().joined(separator: "/")
     }
 
+    /// The folder the sync engine should be rooted at, given the folder the user chose.
+    ///
+    /// `NotableSyncPaths` prefixes every request with "/notable", so the configured folder has to be
+    /// the shared tree's *parent*. Picking the `notable` folder itself is the natural mistake — it is
+    /// right there in the picker — and taking it verbatim syncs to `<chosen>/notable/notable`, which
+    /// MKCOL creates on demand and which then reports a clean, empty, entirely silent success.
+    /// Dropping the segment makes both spellings converge on one tree.
+    ///
+    /// Exactly one segment is dropped, so a genuine `/onyx/notable/notable` resolves to
+    /// `/onyx/notable` rather than collapsing all the way. Matching is case-insensitive, like the
+    /// picker's duplicate-name check: Notable writes lowercase, so `Notable` on a case-insensitive
+    /// server is the same folder.
+    static func syncBase(_ path: String) -> String {
+        let normalized = normalize(path)
+        guard let last = components(normalized).last,
+              last.compare(NotableSyncPaths.rootName, options: .caseInsensitive) == .orderedSame
+        else { return normalized }
+        return parent(normalized)
+    }
+
+    /// Where notebooks actually live for a chosen folder — the same string for both spellings.
+    static func syncTree(_ path: String) -> String {
+        child(syncBase(path), name: NotableSyncPaths.rootName)
+    }
+
     /// Absolute URL string for `path` under `hostRoot` — this is what lands in
     /// `SyncSettings.serverURL`, so it must be percent-encoded and round-trip back through
     /// `SyncSettings.remotePath` unchanged.
@@ -439,14 +464,24 @@ struct RemoteFolderPicker: View {
             .disabled(hostRoot == nil || model.state != .loaded)
             .accessibilityIdentifier("folderPicker.use")
 
-            Text("bopa creates and uses a “notable” subfolder inside the folder you choose. "
-                + "Point Notable on the BOOX at the same folder so both apps share it.")
+            Text(footerText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .padding(16)
         .background(.bar)
+    }
+
+    /// Selecting the `notable` folder itself is handled (it resolves to its parent), but saying so
+    /// beats resolving silently — otherwise the folder the user picked and the tree bopa syncs
+    /// disagree with no explanation anywhere.
+    private var footerText: String {
+        RemotePath.syncBase(model.path) == RemotePath.normalize(model.path)
+            ? "bopa creates and uses a “notable” subfolder inside the folder you choose. "
+                + "Point Notable on the BOOX at the same folder so both apps share it."
+            : "That is the shared folder itself — bopa will sync straight to it. "
+                + "Point Notable on the BOOX at “\(RemotePath.parent(model.path))”."
     }
 
     private var actionErrorBinding: Binding<Bool> {

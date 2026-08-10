@@ -13,12 +13,26 @@ public struct NotebookSyncState: Codable, Equatable, Sendable {
 }
 
 public struct SyncReport: Equatable, Sendable {
+    /// What the shared tree looked like when this run inventoried it.
+    ///
+    /// A run against the wrong folder and a healthy run with nothing to do otherwise produce
+    /// byte-identical empty reports, so "everything is already in sync" is indistinguishable from
+    /// "there is nothing here at all" — which is exactly the confusion a misconfigured base URL
+    /// creates.
+    public enum RemoteTreeState: Sendable, Equatable {
+        case unknown        // the run bailed before it got to the inventory
+        case absent         // we created /notable ourselves: nobody has ever written here
+        case empty          // it existed, but held no notebooks, tombstones or folders.json
+        case populated
+    }
+
     public var uploaded: [String] = []
     public var downloaded: [String] = []
     public var skipped: [String] = []
     public var deletedLocally: [String] = []
     public var conflicts: [String] = []     // 412s: concurrent writer won, re-plan next sync
     public var errors: [String] = []        // "notebookId: message"
+    public var remoteTree: RemoteTreeState = .unknown
 
     public init() {}
 }
@@ -48,8 +62,12 @@ public actor SyncEngine {
         var report = SyncReport()
         loadState()
 
+        // Whether we had to create the shared root is the only evidence available that nobody else
+        // has ever written here, and it has to be captured now: every later step finds the tree in
+        // place regardless.
+        let createdRoot: Bool
         do {
-            try await dav.makeCollection(NotableSyncPaths.root)
+            createdRoot = try await dav.makeCollection(NotableSyncPaths.root)
             try await dav.makeCollection(NotableSyncPaths.notebooksDir)
             try await dav.makeCollection(NotableSyncPaths.tombstonesDir)
         } catch {
@@ -71,7 +89,7 @@ public actor SyncEngine {
         }
 
         // 2. Folder tree (single-file union merge, docs §2).
-        let remoteFolderIds = await syncFolders(&report)
+        let (remoteFolderIds, sawRemoteFoldersFile) = await syncFolders(&report)
 
         // 3. Tombstones: a deletion wins over existence.
         let tombstones = await fetchTombstoneIds(&report)
@@ -97,6 +115,13 @@ public actor SyncEngine {
         }
         remoteIds.subtract(tombstones)
 
+        // A folders.json on its own still counts as populated: a BOOX that has only ever made
+        // folders is a working setup, not a wrong address.
+        report.remoteTree =
+            createdRoot ? .absent
+            : (remoteIds.isEmpty && tombstones.isEmpty && !sawRemoteFoldersFile) ? .empty
+            : .populated
+
         // 5. Reconcile the union. `serverNotebookIds` tracks what the server holds as we
         // go, so a freshly uploaded notebook lands in the remote index right away.
         var serverNotebookIds = remoteIds
@@ -104,11 +129,11 @@ public actor SyncEngine {
             do {
                 switch (localIds.contains(id), remoteIds.contains(id)) {
                 case (true, false):
-                    try await upload(id, ifMatch: nil)
+                    try await upload(id, ifMatch: nil, report: &report)
                     serverNotebookIds.insert(id)
                     report.uploaded.append(id)
                 case (false, true):
-                    try await download(id)
+                    try await download(id, report: &report)
                     report.downloaded.append(id)
                 case (true, true):
                     try await reconcile(id, report: &report)
@@ -155,7 +180,7 @@ public actor SyncEngine {
                     etag: result.etag)
             }
         } catch WebDAVError.notFound {
-            try await upload(id, ifMatch: nil)
+            try await upload(id, ifMatch: nil, report: &report)
             report.uploaded.append(id)
             return
         }
@@ -169,14 +194,15 @@ public actor SyncEngine {
 
         switch action {
         case .upload(let ifMatch):
-            try await upload(id, ifMatch: ifMatch)
+            try await upload(id, ifMatch: ifMatch, report: &report)
             report.uploaded.append(id)
         case .download:
             guard let data = remoteManifestData else {
                 report.errors.append("\(id): download planned but no manifest data")
                 return
             }
-            try await downloadContent(id, manifestData: data, etag: remoteInfo?.etag)
+            try await downloadContent(
+                id, manifestData: data, etag: remoteInfo?.etag, report: &report)
             report.downloaded.append(id)
         case .skip:
             // Both sides agree: commit the freshest facts so the next sync's conditional
@@ -197,7 +223,7 @@ public actor SyncEngine {
 
     // MARK: - Upload
 
-    private func upload(_ id: String, ifMatch: String?) async throws {
+    private func upload(_ id: String, ifMatch: String?, report: inout SyncReport) async throws {
         guard let manifest = readLocalManifest(id),
               let manifestData = try? Data(contentsOf: localManifestURL(id))
         else { throw WebDAVError.notFound(path: "local manifest \(id)") }
@@ -213,15 +239,24 @@ public actor SyncEngine {
             try await dav.put(NotableSyncPaths.pageFile(id, pageId), data: data)
         }
 
-        // Orphan cleanup, mirroring Notable v0.2.6.
+        // Orphan cleanup, mirroring Notable v0.2.6. The path is always rebuilt from the pages dir
+        // rather than reusing `res.path`: a PROPFIND href is server-absolute and carries the
+        // transport's base prefix, while `delete` takes base-relative paths. Passing the href
+        // through would aim the DELETE outside our tree on any base URL that has a path.
         if let remotePages = try? await dav.list(NotableSyncPaths.pagesDir(id)) {
             let valid = Set(manifest.pageIds.map { "\($0).json" })
             for res in remotePages where !res.isCollection && !valid.contains(res.name) {
-                try? await dav.delete(res.path.hasPrefix("/notable/")
-                    ? res.path
-                    : NotableSyncPaths.pagesDir(id) + "/" + res.name)
+                try? await dav.delete(NotableSyncPaths.pagesDir(id) + "/" + res.name)
             }
         }
+
+        // Assets before the manifest, for the same reason as pages. Failures are recorded and
+        // stepped over — a background that will not upload must not cost the user their strokes.
+        await uploadAssets(
+            id, from: localImagesDir(id), to: NotableSyncPaths.imagesDir(id), report: &report)
+        await uploadAssets(
+            id, from: localBackgroundsDir(id), to: NotableSyncPaths.backgroundsDir(id),
+            report: &report)
 
         var newEtag = try await dav.put(
             NotableSyncPaths.manifestFile(id), data: manifestData, ifMatch: ifMatch)
@@ -237,12 +272,15 @@ public actor SyncEngine {
 
     // MARK: - Download
 
-    private func download(_ id: String) async throws {
+    private func download(_ id: String, report: inout SyncReport) async throws {
         let result = try await dav.get(NotableSyncPaths.manifestFile(id))
-        try await downloadContent(id, manifestData: result.data, etag: result.etag)
+        try await downloadContent(
+            id, manifestData: result.data, etag: result.etag, report: &report)
     }
 
-    private func downloadContent(_ id: String, manifestData: Data, etag: String?) async throws {
+    private func downloadContent(
+        _ id: String, manifestData: Data, etag: String?, report: inout SyncReport
+    ) async throws {
         let manifest = try JSONDecoder().decode(NotebookManifest.self, from: manifestData)
         let pagesDir = localNotebookDir(id).appendingPathComponent("pages")
         try FileManager.default.createDirectory(at: pagesDir, withIntermediateDirectories: true)
@@ -259,11 +297,95 @@ public actor SyncEngine {
             try? FileManager.default.removeItem(at: pagesDir.appendingPathComponent(file))
         }
 
+        // Page images and PDF/image backgrounds. Without these a notebook written on the BOOX
+        // opens as blank paper — BackgroundRenderer resolves them by name under the notebook dir
+        // and degrades silently to nil when they are missing.
+        await downloadAssets(
+            id, from: NotableSyncPaths.imagesDir(id), to: localImagesDir(id), report: &report)
+        await downloadAssets(
+            id, from: NotableSyncPaths.backgroundsDir(id), to: localBackgroundsDir(id),
+            report: &report)
+
         // Manifest last: local dir is never a manifest pointing at missing pages.
         try manifestData.write(to: localManifestURL(id))
 
         if let updatedAt = epochMs(manifest.updatedAt) {
             state[id] = NotebookSyncState(localUpdatedAtAtSync: updatedAt, etag: etag)
+        }
+    }
+
+    // MARK: - Assets
+
+    /// Mirrors one optional asset directory in either direction.
+    ///
+    /// Assets are immutable blobs referenced by name — neither client rewrites one in place — so
+    /// presence is a sufficient test and no ETag bookkeeping is needed. Files are only ever added:
+    /// nothing is deleted, because the other client may hold the only copy of an asset that a page
+    /// its manifest still references points at.
+    ///
+    /// Both directories are optional; a notebook that has never had an image simply has no such
+    /// folder, so a 404 listing is "nothing to do", not an error. Individual failures land in the
+    /// report and are stepped over, so a missing background never fails the notebook.
+    private func downloadAssets(
+        _ id: String, from remoteDir: String, to localDir: URL, report: inout SyncReport
+    ) async {
+        guard let listing = try? await dav.list(remoteDir) else { return }
+        let files = listing.filter { !$0.isCollection }
+        guard !files.isEmpty else { return }
+        do {
+            try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
+        } catch {
+            report.errors.append("\(id): cannot create \(localDir.lastPathComponent) (\(error))")
+            return
+        }
+        for res in files {
+            let destination = localDir.appendingPathComponent(res.name)
+            guard !FileManager.default.fileExists(atPath: destination.path) else { continue }
+            do {
+                // Path rebuilt from `remoteDir`, never `res.path`: hrefs are server-absolute and
+                // carry the transport's base prefix, while `get` takes base-relative paths.
+                let asset = try await dav.get(remoteDir + "/" + res.name)
+                try asset.data.write(to: destination)
+            } catch {
+                report.errors.append("\(id): asset \(res.name) (\(error))")
+            }
+        }
+    }
+
+    private func uploadAssets(
+        _ id: String, from localDir: URL, to remoteDir: String, report: inout SyncReport
+    ) async {
+        let names = localFileNames(in: localDir)
+        guard !names.isEmpty else { return }
+        let remoteNames = Set(
+            ((try? await dav.list(remoteDir)) ?? []).filter { !$0.isCollection }.map(\.name))
+        let missing = names.filter { !remoteNames.contains($0) }
+        guard !missing.isEmpty else { return }
+        do {
+            try await dav.makeCollection(remoteDir)
+        } catch {
+            report.errors.append("\(id): cannot create \(remoteDir) (\(error))")
+            return
+        }
+        for name in missing {
+            do {
+                let data = try Data(contentsOf: localDir.appendingPathComponent(name))
+                try await dav.put(remoteDir + "/" + name, data: data)
+            } catch {
+                report.errors.append("\(id): asset \(name) (\(error))")
+            }
+        }
+    }
+
+    /// Regular files only — subdirectories and dotfiles are not assets.
+    private func localFileNames(in dir: URL) -> [String] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.filter { name in
+            guard !name.hasPrefix(".") else { return false }
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(
+                atPath: dir.appendingPathComponent(name).path, isDirectory: &isDirectory)
+            return exists && !isDirectory.boolValue
         }
     }
 
@@ -275,8 +397,12 @@ public actor SyncEngine {
     ///
     /// Returns the folder ids the server holds once this step is done — the folder half of
     /// the remote index. Folders the merge failed to push stay out of it, so they keep
-    /// reading as local-only in the UI.
-    private func syncFolders(_ report: inout SyncReport) async -> Set<String> {
+    /// reading as local-only in the UI. `sawRemoteFile` reports whether the server already had a
+    /// `folders.json` before this run, which is one of the signals that the tree is somebody's
+    /// real library rather than an empty directory we just made.
+    private func syncFolders(
+        _ report: inout SyncReport
+    ) async -> (ids: Set<String>, sawRemoteFile: Bool) {
         let localURL = rootURL.appendingPathComponent("folders.json")
         let localFile = (try? Data(contentsOf: localURL))
             .flatMap { try? JSONDecoder().decode(FoldersFile.self, from: $0) }
@@ -291,10 +417,11 @@ public actor SyncEngine {
             // Absent remote: treated as empty.
         } catch {
             report.errors.append("folders: \(error)")
-            return []
+            return ([], false)
         }
+        let sawRemoteFile = remoteData != nil
         var serverFolderIds = Set((remoteFile?.folders ?? []).map(\.id))
-        guard localFile != nil || remoteData != nil else { return serverFolderIds }
+        guard localFile != nil || remoteData != nil else { return (serverFolderIds, sawRemoteFile) }
 
         let merged = FolderMerge.merge(
             local: localFile?.folders ?? [], remote: remoteFile?.folders ?? [])
@@ -320,7 +447,7 @@ public actor SyncEngine {
                 report.downloaded.append("folders.json")
             }
         }
-        return serverFolderIds
+        return (serverFolderIds, sawRemoteFile)
     }
 
     // MARK: - Tombstones
@@ -370,6 +497,14 @@ public actor SyncEngine {
     }
     private func localPageURL(_ id: String, _ pageId: String) -> URL {
         localNotebookDir(id).appendingPathComponent("pages/\(pageId).json")
+    }
+    /// These two mirror the server's `images/` and `backgrounds/` names exactly, which is also
+    /// where `BackgroundRenderer` looks when resolving a page's assets by basename.
+    private func localImagesDir(_ id: String) -> URL {
+        localNotebookDir(id).appendingPathComponent("images", isDirectory: true)
+    }
+    private func localBackgroundsDir(_ id: String) -> URL {
+        localNotebookDir(id).appendingPathComponent("backgrounds", isDirectory: true)
     }
     private func localNotebookExists(_ id: String) -> Bool {
         FileManager.default.fileExists(atPath: localManifestURL(id).path)

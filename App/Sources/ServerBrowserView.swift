@@ -1,97 +1,20 @@
 import NotableKit
 import SwiftUI
 
-/// What the sidebar's "Server" row opens: a read-only view of the WebDAV share itself —
-/// the actual files and folders, not the synced library.
+/// A read-only look at the WebDAV share itself — the actual files and folders, not the library.
 ///
-/// The library only ever shows notebooks that sync pulled down out of `<folder>/notable`,
-/// so when nothing appears there the question is always "what is actually on the server,
-/// and am I pointed at the right folder?". This answers it without leaving the app.
+/// This is a diagnostic, which is why it lives in sync settings rather than the sidebar: synced
+/// notebooks are ordinary notes in the library, so the only question the raw tree answers is "is
+/// my stuff really there, and am I pointed at it?". Reached from the "Browse server" row, which is
+/// disabled until `canBrowse`, so the credentials are known good by the time we get here.
 struct ServerBrowserView: View {
-    @EnvironmentObject private var store: NotebookStore
-    @EnvironmentObject private var coordinator: SyncCoordinator
-
-    /// Re-read on appear and whenever the settings are saved, so editing the server address
-    /// anywhere in the app is reflected here without a restart.
-    @State private var settings = SyncSettings.load()
-    /// Bumped alongside `settings` so the browser — and its transport — is rebuilt even when
-    /// only the password changed, which the identity below cannot see.
-    @State private var revision = 0
-    @State private var showingSettings = false
+    /// Passed in from the settings form rather than reloaded, so the address being typed one screen
+    /// back is the address browsed here — including edits not yet written to UserDefaults.
+    let settings: SyncSettings
 
     var body: some View {
-        Group {
-            if settings.hostRootURL == nil {
-                // An address that is present but unusable is a different problem from no
-                // address at all: "add your WebDAV address" reads as a no-op to someone who
-                // can see one already typed in, and sends them looking in the wrong place.
-                ContentUnavailableView {
-                    Label(
-                        hasServerAddress ? "Server address isn’t usable" : "No server yet",
-                        systemImage: hasServerAddress
-                            ? "exclamationmark.triangle" : "externaldrive.badge.questionmark")
-                } description: {
-                    Text(hasServerAddress
-                        ? "“\(settings.serverURL)” isn’t an address bopa can reach. It needs an "
-                            + "http:// or https:// host, like https://example.com/dav."
-                        : "Add your WebDAV address, username and password to browse the server.")
-                } actions: {
-                    Button("Open sync settings") { showingSettings = true }
-                        .buttonStyle(.borderedProminent)
-                }
-            } else if !settings.canBrowse {
-                ContentUnavailableView {
-                    Label("Sign-in needed", systemImage: "person.badge.key")
-                } description: {
-                    Text("Browsing the server needs a username and password.")
-                } actions: {
-                    Button("Open sync settings") { showingSettings = true }
-                        .buttonStyle(.borderedProminent)
-                }
-            } else {
-                // `.id` rebuilds the browser — and its transport — when the settings change;
-                // a StateObject would otherwise keep the stale one.
-                ServerBrowser(settings: settings)
-                    .id(revision)
-            }
-        }
-        .navigationTitle("Server")
-        .toolbar {
-            Button {
-                Task { await coordinator.syncNow(store: store) }
-            } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
-            }
-            .disabled(!settings.isConfigured || coordinator.isSyncing)
-            .accessibilityIdentifier("server.syncNow")
-            Button {
-                showingSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-            }
-            .accessibilityIdentifier("server.settings")
-        }
-        .sheet(isPresented: $showingSettings) {
-            NavigationStack {
-                SyncSettingsView()
-            }
-        }
-        .onAppear { reload() }
-        .onReceive(NotificationCenter.default.publisher(for: SyncSettings.didChangeNotification)) { _ in
-            reload()
-        }
-    }
-
-    /// Something is typed in the address field, whether or not it parses.
-    private var hasServerAddress: Bool {
-        !settings.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func reload() {
-        let latest = SyncSettings.load()
-        guard latest != settings else { return }
-        settings = latest
-        revision += 1
+        ServerBrowser(settings: settings)
+            .navigationTitle("Server")
     }
 }
 
@@ -101,12 +24,16 @@ private struct ServerBrowser: View {
     let settings: SyncSettings
 
     @StateObject private var model: RemoteFolderBrowserModel
-    /// The folder sync is pointed at, so rows under it can be called out as the shared tree.
-    private let syncPath: String
+    /// The tree sync actually reads, so the row for it can be called out. Resolved, not the raw
+    /// chosen path — otherwise picking the `notable` folder would badge `<chosen>/notable/notable`,
+    /// a directory that no longer exists.
+    private let syncTreePath: String
 
     init(settings: SyncSettings) {
         self.settings = settings
-        self.syncPath = settings.remotePath
+        self.syncTreePath = settings.syncTreePath
+        // Browsing starts where the user pointed, even when sync resolves elsewhere: that is the
+        // folder they are trying to inspect.
         _model = StateObject(wrappedValue: RemoteFolderBrowserModel(
             transport: settings.makeBrowsingTransport(),
             startPath: settings.remotePath))
@@ -204,21 +131,20 @@ private struct ServerBrowser: View {
         .foregroundStyle(.tertiary)
     }
 
-    /// The `notable` folder inside the chosen sync folder is the tree bopa and Notable share;
-    /// everything else on the server is just along for the ride.
+    /// The shared tree, whichever spelling the user configured. Compared case-insensitively for the
+    /// same reason `RemotePath.syncBase` matches that way.
     private func isSyncTree(_ path: String) -> Bool {
-        RemotePath.normalize(path) == RemotePath.child(syncPath, name: "notable")
+        RemotePath.normalize(path).compare(syncTreePath, options: .caseInsensitive) == .orderedSame
     }
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Sync folder: \(syncPath)")
+            Text("Notebooks are read from “\(syncTreePath)”.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.head)
-            Text("Notebooks are read from “\(RemotePath.child(syncPath, name: "notable"))”. "
-                + "Point Notable on the BOOX at the same folder, then sync.")
+            Text("Point Notable on the BOOX at “\(settings.syncRemotePath)”, then sync.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }

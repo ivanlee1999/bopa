@@ -230,4 +230,65 @@ final class SyncCoordinatorTests: XCTestCase {
         await coordinator.syncNow(store: store)       // manual sync bypasses staleness
         XCTAssertEqual(spy.callCount, 2)
     }
+
+    // MARK: Empty-run reporting
+
+    /// "Nothing to sync" is the right words for an up-to-date library and the wrong words for a
+    /// wrong folder, and the second is the far likelier reason a library looks empty.
+    func testEmptyRunNamesWhatItFound() {
+        XCTAssertEqual(
+            SyncCoordinator.emptyRunSummary(for: .populated), "Nothing to sync")
+        XCTAssertEqual(
+            SyncCoordinator.emptyRunSummary(for: .unknown), "Nothing to sync")
+        XCTAssertTrue(
+            SyncCoordinator.emptyRunSummary(for: .absent).contains("created the shared tree"))
+        XCTAssertTrue(
+            SyncCoordinator.emptyRunSummary(for: .empty).contains("nothing in the shared folder"))
+    }
+
+    /// An empty tree is not a failure: a genuinely new setup looks exactly the same, and crying
+    /// "sync failed" on day one would be a false alarm.
+    func testAbsentTreeStaysASuccess() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        spy.result.remoteTree = .absent
+
+        let coordinator = makeCoordinator(spy: spy)
+        await coordinator.syncNow(store: store)
+
+        guard case .success = coordinator.status else {
+            return XCTFail("expected success, got \(coordinator.status)")
+        }
+        XCTAssertTrue(coordinator.lastRunFoundNothing)
+        XCTAssertEqual(
+            coordinator.statusDetail, SyncCoordinator.emptyRunSummary(for: .absent))
+    }
+
+    /// Pushing our own notes into a tree we just created says nothing about whether the *other*
+    /// device's notes are there — that is the exact shape of a wrong-folder setup, so the summary
+    /// reports the transfer while the hint stays up.
+    func testTransfersOutrankTheSummaryButNotTheHint() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        spy.result.remoteTree = .absent
+        spy.result.uploaded = ["nb1"]
+
+        let coordinator = makeCoordinator(spy: spy)
+        await coordinator.syncNow(store: store)
+
+        XCTAssertEqual(coordinator.statusDetail, "↑1")
+        XCTAssertTrue(coordinator.lastRunFoundNothing)
+    }
+
+    func testPopulatedTreeKeepsTheOriginalWording() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        spy.result.remoteTree = .populated
+
+        let coordinator = makeCoordinator(spy: spy)
+        await coordinator.syncNow(store: store)
+
+        XCTAssertEqual(coordinator.statusDetail, "Nothing to sync")
+        XCTAssertFalse(coordinator.lastRunFoundNothing)
+    }
 }
