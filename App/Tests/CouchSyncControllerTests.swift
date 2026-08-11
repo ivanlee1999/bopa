@@ -140,7 +140,10 @@ final class CouchSyncControllerTests: XCTestCase {
         let engine = EngineSpy()
         var report = CouchSyncEngine.FlushReport()
         report.blockedByDeletionGuard = true
+        // The deletions are what is held back; the rest of the queue went out as usual, which is
+        // why the message counts these and not everything that was waiting.
         report.stillDirty = (0..<12).map { "notebook:n\($0)" }
+        report.deletionsHeldBack = 12
         engine.setFlushReport(report)
 
         let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))

@@ -35,19 +35,38 @@ public struct CouchSyncState: Codable, Equatable, Sendable {
 public struct CouchDeletedDoc: Codable, Equatable, Sendable {
     public var type: String
     public var schema: Int
+    /// When the deletion happened, or empty when this device cannot know — a tombstone written
+    /// without a body (a plain HTTP `DELETE`, or a client that did not keep one) carries no
+    /// instant. Empty means *unknown*, not the epoch and emphatically not "now": it loses every
+    /// comparison in `resolveDeletion`, so an unknown deletion yields to a live document rather
+    /// than destroying it (protocol §6.4).
     public var deletedAt: String
     public var updatedAt: String
     public var updatedBy: String
 
     public init(
         type: String, schema: Int = couchSchemaVersion,
-        deletedAt: String, updatedAt: String? = nil, updatedBy: String
+        deletedAt: String = "", updatedAt: String? = nil, updatedBy: String = ""
     ) {
         self.type = type
         self.schema = schema
         self.deletedAt = deletedAt
         self.updatedAt = updatedAt ?? deletedAt
         self.updatedBy = updatedBy
+    }
+
+    /// Decoded leniently, because §3.1 requires a tombstone to retain only `type`, `deletedAt`,
+    /// `updatedAt` and `updatedBy` — `schema` is not promised, and a document deleted through a
+    /// plain `DELETE` has no body at all. Synthesized `Decodable` would reject both, and the
+    /// caller's fallback was to invent `deletedAt = now`, which beats any edit the user has ever
+    /// made and so deleted work that outlived the deletion.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decodeIfPresent(String.self, forKey: .type) ?? ""
+        schema = try c.decodeIfPresent(Int.self, forKey: .schema) ?? couchSchemaVersion
+        deletedAt = try c.decodeIfPresent(String.self, forKey: .deletedAt) ?? ""
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? deletedAt
+        updatedBy = try c.decodeIfPresent(String.self, forKey: .updatedBy) ?? ""
     }
 }
 
@@ -101,14 +120,21 @@ extension CouchMerge {
         case (.deleted(let x), .deleted(let y)):
             return .deleted(CouchDeletedDoc(
                 type: x.type, schema: Swift.max(x.schema, y.schema),
-                deletedAt: earlier(x.deletedAt, y.deletedAt),
+                // A deletion cannot un-happen, so the earliest observation is the true one — but an
+                // unknown instant is not an early one. Taking it would erase a real timestamp the
+                // peer recorded, so a known value always survives beside an empty one.
+                deletedAt: x.deletedAt.isEmpty ? y.deletedAt
+                    : y.deletedAt.isEmpty ? x.deletedAt
+                    : earlier(x.deletedAt, y.deletedAt),
                 updatedAt: later(x.updatedAt, y.updatedAt),
                 updatedBy: wins((x.updatedAt, x.updatedBy, ""), over: (y.updatedAt, y.updatedBy, ""))
                     ? x.updatedBy : y.updatedBy))
 
         case (.deleted(let tomb), let live), (let live, .deleted(let tomb)):
             // An edit made after the deletion resurrects the document; otherwise the delete stands.
-            switch resolveDeletion(liveUpdatedAt: live.updatedAt, tombstoneDeletedAt: tomb.deletedAt) {
+            switch resolveDeletion(
+                liveUpdatedAt: live.updatedAt,
+                tombstoneDeletedAt: tomb.deletedAt.isEmpty ? nil : tomb.deletedAt) {
             case .resurrect: return live
             case .applyDeletion: return .deleted(tomb)
             }
@@ -170,6 +196,9 @@ public actor CouchSyncEngine {
         public var failures: [String: String] = [:]
         /// Set when the mass-deletion guard refused the run (protocol §6.6).
         public var blockedByDeletionGuard = false
+        /// How many notebook tombstones the guard held back — not the size of the whole queue,
+        /// which is what the warning used to report.
+        public var deletionsHeldBack = 0
 
         public init() {}
     }
@@ -224,12 +253,18 @@ public actor CouchSyncEngine {
 
     public func flush() async -> FlushReport {
         var report = FlushReport()
-        let queue = orderedDirty()
+        var queue = orderedDirty()
 
+        // Only the deletions are held back. Blocking the whole queue meant a guard meant to
+        // question a suspicious *deletion* also stopped ordinary edits syncing — and since the
+        // confirmation it asks for does not exist yet, that was a permanent stall rather than a
+        // prompt. Drawings keep flowing; the tombstones wait.
         if exceedsDeletionGuard(queue) {
+            let held = queue.filter { isNotebookTombstone($0) }
             report.blockedByDeletionGuard = true
-            report.stillDirty = queue
-            return report
+            report.deletionsHeldBack = held.count
+            report.stillDirty = held
+            queue.removeAll { held.contains($0) }
         }
 
         for documentID in queue {
@@ -242,9 +277,11 @@ public actor CouchSyncEngine {
             } catch let error as CouchError {
                 report.failures[documentID] = String(describing: error)
                 report.stillDirty.append(documentID)
-                // Offline or a server fault applies to every remaining document too; stopping
-                // keeps one dead connection from turning into a burst of doomed requests.
-                if error.isRetriable { break }
+                // Offline or a server fault applies to every remaining document too, and so do
+                // rejected credentials — which no amount of retrying will fix. Stopping keeps one
+                // dead connection, or one wrong password, from turning into a burst of doomed
+                // requests, one per queued document, on every flush.
+                if error.isRetriable || error == .unauthorized { break }
             } catch {
                 report.failures[documentID] = String(describing: error)
                 report.stillDirty.append(documentID)
@@ -364,11 +401,13 @@ public actor CouchSyncEngine {
     /// Protocol §6.6: a device whose local database was wiped looks exactly like a user who
     /// deleted everything. Ten-plus notebook tombstones that are also most of what this device
     /// knows is treated as the former until a human says otherwise.
+    private func isNotebookTombstone(_ documentID: String) -> Bool {
+        CouchDocID.split(documentID)?.type == CouchDocType.notebook
+            && ((try? store.load(documentID))?.isDeleted ?? false)
+    }
+
     private func exceedsDeletionGuard(_ queue: [String]) -> Bool {
-        let tombstones = queue.filter {
-            CouchDocID.split($0)?.type == CouchDocType.notebook
-                && ((try? store.load($0))?.isDeleted ?? false)
-        }
+        let tombstones = queue.filter { isNotebookTombstone($0) }
         guard tombstones.count >= 10 else { return false }
         let knownNotebooks = state.revs.keys.filter {
             CouchDocID.split($0)?.type == CouchDocType.notebook
@@ -483,9 +522,13 @@ public actor CouchSyncEngine {
         if deleted {
             // A tombstone whose body was stripped (or written by a client that did not keep one)
             // still has to be applied; synthesize the minimum the merge needs.
+            //
+            // `deletedAt` is left *empty* rather than stamped with the current time. Stamping "now"
+            // reads as a deletion newer than any edit this device has ever made, so §6.4's
+            // resurrect branch became unreachable from here and a stripped tombstone destroyed work
+            // done after the deletion. Empty means unknown and loses the comparison instead.
             let decoded = try? decoder.decode(CouchDeletedDoc.self, from: json)
-            return .deleted(decoded ?? CouchDeletedDoc(
-                type: type, deletedAt: NotableDate.format(Date()), updatedBy: deviceID))
+            return .deleted(decoded ?? CouchDeletedDoc(type: type, updatedBy: deviceID))
         }
 
         // A document from a future schema is not something this build can merge safely.

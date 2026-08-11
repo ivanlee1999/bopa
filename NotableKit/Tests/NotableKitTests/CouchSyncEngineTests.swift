@@ -507,8 +507,32 @@ final class CouchSyncEngineTests: XCTestCase {
 
         let report = await ipad.flush()
         XCTAssertTrue(report.blockedByDeletionGuard)
+        XCTAssertEqual(report.deletionsHeldBack, 12)
         XCTAssertTrue(report.pushed.isEmpty)
         XCTAssertTrue(server.documentIDs().isEmpty, "nothing should have reached the server")
+    }
+
+    /// The guard exists to question a suspicious *deletion*. Stopping the rest of the queue with it
+    /// meant a drawing could not sync either — and since the confirmation the warning asks for does
+    /// not exist yet, that was a permanent stall rather than a prompt.
+    func testTheDeletionGuardDoesNotHoldBackOrdinaryEdits() async throws {
+        var ids: [String] = []
+        for index in 0..<12 {
+            let id = CouchDocID.notebook("nb\(index)")
+            ids.append(id)
+            ipadStore.set(id, .deleted(CouchDeletedDoc(
+                type: CouchDocType.notebook, deletedAt: stamp(10), updatedBy: "ipad")))
+        }
+        ipadStore.set(pageID, .page(page(strokes: [stroke("s1", at: 1, device: "ipad")],
+                                         updatedAt: 5, by: "ipad")))
+        ids.append(pageID)
+        await ipad.markDirty(ids)
+
+        let report = await ipad.flush()
+        XCTAssertTrue(report.blockedByDeletionGuard)
+        XCTAssertEqual(report.pushed, [pageID], "the drawing should still have gone out")
+        XCTAssertEqual(server.documentIDs(), [pageID])
+        XCTAssertFalse(report.stillDirty.contains(pageID))
     }
 
     func testUnauthorizedStopsImmediatelyAndKeepsWork() async throws {
