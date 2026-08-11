@@ -131,9 +131,29 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertTrue(store.isFolderEmpty(parent.id) == false)
     }
 
-    /// A `parentFolderId` loop from a hand-edited or half-merged file leaves both folders
-    /// unreachable. They surface at the root rather than taking their notebooks into hiding.
-    func testFolderCycleSurfacesAtRoot() throws {
+    /// Deleting the top of a nested subtree must not flatten it. Every folder below the deleted
+    /// one still names a parent that exists, so only the top survivor is adopted by the root —
+    /// listing the descendants there too would draw each of them twice.
+    func testOrphanedSubtreeKeepsItsNestingInsteadOfFlattening() throws {
+        let top = try store.createFolder(title: "Semester")
+        let middle = try store.createFolder(title: "Week 1", parentFolderId: top.id)
+        let leaf = try store.createFolder(title: "Monday", parentFolderId: middle.id)
+
+        try dropFoldersOnDisk(ids: [top.id])
+
+        XCTAssertEqual(store.folders(in: nil).map(\.id), [middle.id])
+        XCTAssertEqual(store.folders(in: middle.id).map(\.id), [leaf.id])
+
+        let tree = FolderNode.tree(from: store)
+        XCTAssertEqual(tree.map(\.title), ["Week 1"])
+        XCTAssertEqual(try XCTUnwrap(tree[0].children).map(\.title), ["Monday"])
+        XCTAssertEqual(drawnFolderIDs(tree).sorted(), [middle.id, leaf.id].sorted())
+    }
+
+    /// A `parentFolderId` loop from a hand-edited or half-merged file has no folder the root can
+    /// reach it by. One member is adopted so the loop is drawn at all, and the rest nest beneath
+    /// it — still exactly once each, rather than taking their notebooks into hiding.
+    func testFolderCycleGetsExactlyOneEntryPoint() throws {
         let first = try store.createFolder(title: "A")
         let second = try store.createFolder(title: "B", parentFolderId: first.id)
         var file = try foldersOnDisk()
@@ -146,7 +166,16 @@ final class NotebookStoreTests: XCTestCase {
             .write(to: rootURL.appendingPathComponent("folders.json"))
         store.refresh()
 
-        XCTAssertEqual(Set(store.folders(in: nil).map(\.id)), [first.id, second.id])
+        // Lowest id wins, so the sidebar does not reshuffle between launches.
+        XCTAssertEqual(store.folders(in: nil).map(\.id), [min(first.id, second.id)])
+        XCTAssertEqual(drawnFolderIDs(FolderNode.tree(from: store)).sorted(),
+                       [first.id, second.id].sorted())
+    }
+
+    /// Every folder id the sidebar actually draws, in tree order, so a test can prove nothing is
+    /// hidden *and* nothing is duplicated.
+    private func drawnFolderIDs(_ nodes: [FolderNode]) -> [String] {
+        nodes.flatMap { [$0.id] + drawnFolderIDs($0.children ?? []) }
     }
 
     // MARK: Paper templates

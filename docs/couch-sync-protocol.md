@@ -274,9 +274,14 @@ A folder deletion takes **only the folder**. Notebooks and subfolders that named
 nobody edited would push a change back at a peer that may still hold the folder alive. What
 that leaves is a `parentFolderId` naming a folder this device does not have, which is a display
 question rather than a merge one: **a library MUST show such an object at the root**, never
-hide it. Hiding it would strand a notebook whose files are still on disk. The same rule covers
-a chain that loops or dangles in a half-merged `folders.json`; reachability from the root, not
-the presence of a parent id, is what decides.
+hide it. Hiding it would strand a notebook whose files are still on disk.
+
+The requirement is that **every folder and notebook is drawn exactly once**. Only the objects
+with nowhere else to appear are taken to the root — the ones naming a parent the library does
+not hold. Their descendants still name a parent that exists, so they keep nesting normally
+rather than being listed at the root as well. A `parentFolderId` chain that loops in a
+half-merged `folders.json` has no such entry point, so the library picks one member (lowest id,
+so the choice is stable across launches) and draws the rest beneath it.
 
 ### 6.5 Un-mergeable input — conflict copy
 

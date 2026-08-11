@@ -318,46 +318,63 @@ final class NotebookStore: ObservableObject {
 
     // MARK: - Folder queries
 
-    /// Ids of the folders whose `parentFolderId` chain actually reaches the root.
+    /// Ids of the folders the root has to show, because nothing else will.
     ///
-    /// A folder can stop being rooted without anything local going wrong: the peer is allowed to
-    /// delete a folder that still has children here (protocol §6.4 deletes the folder alone), and
-    /// a half-merged `folders.json` can leave a chain pointing at nothing or looping back on
-    /// itself. The merge deliberately does not repair either — the library absorbs it, which is
-    /// what `folders(in:)` and `notebooks(in:)` do by treating the unrooted remainder as root
-    /// content. Hiding it instead would lose real notebooks whose files are still on disk.
-    private var rootedFolderIDs: Set<String> {
+    /// A folder can stop reaching the root without anything local going wrong: the peer is allowed
+    /// to delete a folder that still has children here (protocol §6.4 deletes the folder alone),
+    /// and a half-merged `folders.json` can leave a chain pointing at nothing or looping back on
+    /// itself. The merge deliberately repairs neither — the library absorbs it. Hiding the
+    /// remainder would lose real notebooks whose files are still on disk.
+    ///
+    /// Adoption is deliberately *not* "every folder that cannot reach the root": in an orphaned
+    /// subtree every descendant fails that test too, and adopting them all would list each one at
+    /// the root as well as under its own parent. Only the folders with nowhere else to appear are
+    /// taken — the ones whose parent id names no folder we hold, plus one entry point per cycle,
+    /// without which a loop would have no way in at all. Everything below them nests as usual, so
+    /// each folder is drawn exactly once.
+    private var rootAdoptedFolderIDs: Set<String> {
         let parents = Dictionary(
             folders.map { ($0.id, $0.parentFolderId) }, uniquingKeysWith: { first, _ in first })
-        var rooted: Set<String> = []
-        for id in parents.keys {
-            // Walked one folder at a time so a chain that turns out to be rooted marks every
-            // link on the way, and a cycle is left out entirely rather than looping forever.
-            var chain: [String] = []
-            var seen: Set<String> = []
+        var adopted: Set<String> = []
+        for (id, parent) in parents {
+            // Nil parent means it sits at the root already; a parent id we hold no folder for
+            // means the root is the only place left to draw it.
+            let parentIsPresent = parent.map { parents[$0] != nil } ?? false
+            if !parentIsPresent { adopted.insert(id) }
+        }
+
+        // Whatever is left either climbs to one of those or goes round forever. Walking each
+        // chain once and settling it keeps this linear even when every folder shares an ancestor.
+        var settled: Set<String> = []
+        for id in parents.keys where !settled.contains(id) {
+            var path: [String] = []
+            var position: [String: Int] = [:]
             var cursor: String? = id
-            var reachesRoot = false
-            while let current = cursor {
-                if rooted.contains(current) { reachesRoot = true; break }
-                guard seen.insert(current).inserted else { break }   // a cycle: never rooted
-                guard let parent = parents[current] else { break }   // parent folder is gone
-                chain.append(current)
-                guard let parent else { reachesRoot = true; break }  // reached the root
+            while let current = cursor, !settled.contains(current) {
+                if let start = position[current] {
+                    // A loop closes here. Its lowest id is the entry point, chosen by id so the
+                    // sidebar does not reshuffle itself between launches.
+                    if let entry = path[start...].min() { adopted.insert(entry) }
+                    break
+                }
+                position[current] = path.count
+                path.append(current)
+                guard let parent = parents[current] ?? nil else { break }
                 cursor = parent
             }
-            if reachesRoot { rooted.formUnion(chain) }
+            settled.formUnion(path)
         }
-        return rooted
+        return adopted
     }
 
-    /// Subfolders of `parentFolderId`. The root additionally adopts every folder that no longer
-    /// reaches it, so an orphaned subtree stays reachable instead of vanishing from the sidebar.
+    /// Subfolders of `parentFolderId`. The root additionally adopts the folders that nothing else
+    /// would draw, so an orphaned subtree stays reachable instead of vanishing from the sidebar.
     func folders(in parentFolderId: String?) -> [FolderDTO] {
         guard parentFolderId == nil else {
             return folders.filter { $0.parentFolderId == parentFolderId }
         }
-        let rooted = rootedFolderIDs
-        return folders.filter { $0.parentFolderId == nil || !rooted.contains($0.id) }
+        let adopted = rootAdoptedFolderIDs
+        return folders.filter { adopted.contains($0.id) }
     }
 
     /// Notebooks directly inside `parentFolderId`. The root additionally adopts every notebook
