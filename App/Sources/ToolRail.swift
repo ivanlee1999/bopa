@@ -72,8 +72,8 @@ final class ToolSelection: ObservableObject {
         revision += 1
     }
 
-    /// Mirrors a tool chosen elsewhere (PencilKit's own palette, an Apple Pencil gesture)
-    /// onto the rail without asking for it to be applied back.
+    /// Mirrors a tool chosen elsewhere (an Apple Pencil gesture) onto the rail without
+    /// asking for it to be applied back.
     func adopt(_ tool: PKTool) {
         if let inking = tool as? PKInkingTool {
             switch inking.inkType {

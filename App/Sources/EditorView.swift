@@ -183,9 +183,6 @@ struct EditorView: View {
             Toggle(isOn: $handwriting.config.scrollLocked) {
                 Label("Lock scrolling", systemImage: "lock")
             }
-            Toggle(isOn: $handwriting.config.showsToolPicker) {
-                Label("Tool palette", systemImage: "paintpalette")
-            }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .semibold))
@@ -413,14 +410,12 @@ struct EditorCanvasView: UIViewRepresentable {
 
         undoController.attach(container.pageUndoManager)
 
-        let picker = context.coordinator.toolPicker
-        // Seed canvas and picker from the rail before the observers are attached, so this
-        // does not read back as a user-driven tool change. PKToolPicker otherwise persists
-        // whatever was last selected app-wide, which the rail would then be lying about.
+        // Seed the canvas from the rail: the rail is the only tool UI, so whatever it shows
+        // is what the canvas must be holding from the first stroke on.
         var initialTool = toolSelection.pkTool
         if CommandLine.arguments.contains("--uitest-select-eraser") {
-            // The tool picker is system UI a UI test cannot reliably drive; erasing is
-            // reached by relaunching with this argument instead.
+            // Erasing is reached by relaunching with this argument rather than by tapping
+            // the rail, so the test starts from a known tool without synthesising a tap.
             initialTool = PKEraserTool(.bitmap)
         } else if CommandLine.arguments.contains("--uitest-reset-tool") {
             // A leftover eraser makes drawing tests silently no-op; tests opt into a
@@ -428,13 +423,10 @@ struct EditorCanvasView: UIViewRepresentable {
             initialTool = PKInkingTool(.pen, color: .black, width: 5)
         }
         canvas.tool = initialTool
-        picker.selectedTool = initialTool
         context.coordinator.toolSelection = toolSelection
         // Freezes the rail's current revision as already-applied, so the first update does
         // not stomp the tool we just set (which matters for the eraser test hook).
-        context.coordinator.markToolApplied()
-        picker.addObserver(canvas)
-        picker.addObserver(context.coordinator)
+        context.coordinator.seed(initialTool)
         context.coordinator.apply(config, to: container)
         canvas.becomeFirstResponder()
         return container
@@ -481,11 +473,8 @@ struct EditorCanvasView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    final class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver,
-        UIPencilInteractionDelegate
-    {
+    final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate {
         let parent: EditorCanvasView
-        let toolPicker = PKToolPicker()
         var programmaticUpdate = false
         var loadedPageId: String?
         weak var container: CanvasContainerView?
@@ -499,9 +488,6 @@ struct EditorCanvasView: UIViewRepresentable {
         /// eraser-toggle pencil gestures.
         private var previousTool: PKTool?
         private let pencilInteraction = UIPencilInteraction()
-        /// Session-local override of the tool palette (the "show/hide" pencil gesture);
-        /// nil means "follow the setting".
-        private var toolPickerOverride: Bool?
 
         /// Pushes the handwriting preferences onto the canvas. Called on creation and on
         /// every SwiftUI update; every step is idempotent and none of them touch
@@ -515,9 +501,6 @@ struct EditorCanvasView: UIViewRepresentable {
             canvas.drawingPolicy = config.fingerDrawing ? .anyInput : .pencilOnly
             canvas.isScrollEnabled = !config.scrollLocked
             container.fitWidthOnOpen = config.zoomOnOpen == .fitWidth
-
-            let showsPicker = toolPickerOverride ?? config.showsToolPicker
-            toolPicker.setVisible(showsPicker, forFirstResponder: canvas)
 
             // Only claim the pencil gestures when the user asked for something other than
             // the system behaviour; otherwise leave them to PencilKit.
@@ -545,15 +528,18 @@ struct EditorCanvasView: UIViewRepresentable {
             select(toolSelection.pkTool)
         }
 
-        /// Marks the rail's current revision as applied without touching the canvas, for
-        /// when something else has already set the tool it asks for.
-        func markToolApplied() {
+        /// Records the tool the canvas was created holding: marks the rail's current
+        /// revision as applied so the first update does not re-push it, and gives
+        /// "previous tool" something to compare against before any tool change.
+        func seed(_ tool: PKTool) {
+            currentTool = tool
             appliedToolRevision = toolSelection?.revision ?? 0
         }
 
-        /// Applies a tool chosen outside the rail and mirrors it back, so the rail always
-        /// shows what the canvas is actually holding. `adopt` deliberately does not bump
-        /// the rail's revision, so this cannot bounce back through `applyToolIfNeeded`.
+        /// Applies a tool chosen outside the rail (an Apple Pencil gesture) and mirrors it
+        /// back, so the rail always shows what the canvas is actually holding. `adopt`
+        /// deliberately does not bump the rail's revision, so this cannot bounce back
+        /// through `applyToolIfNeeded`.
         private func selectFromOutsideTheRail(_ tool: PKTool) {
             toolSelection?.adopt(tool)
             select(tool)
@@ -586,7 +572,8 @@ struct EditorCanvasView: UIViewRepresentable {
             switch preference {
             case .switchEraser: .eraser
             case .switchPrevious: .previousTool
-            case .showColorPalette, .showInkAttributes: .toggleToolPicker
+            // The palette preferences have nothing to open now that the rail is the only
+            // tool UI, and it is always on screen.
             default: .ignore
             }
         }
@@ -605,10 +592,9 @@ struct EditorCanvasView: UIViewRepresentable {
             case .system, .ignore:
                 break
             case .eraser:
-                if toolPicker.selectedTool is PKEraserTool {
+                if currentTool is PKEraserTool {
                     selectFromOutsideTheRail(
-                        previousTool ?? toolSelection?.pkTool
-                            ?? PKInkingTool(.pen, color: .black, width: 5))
+                        previousTool ?? PKInkingTool(.pen, color: .black, width: 5))
                 } else {
                     selectFromOutsideTheRail(PKEraserTool(.bitmap))
                 }
@@ -616,20 +602,12 @@ struct EditorCanvasView: UIViewRepresentable {
                 if let previousTool { selectFromOutsideTheRail(previousTool) }
             case .undo:
                 container?.pageUndoManager.undo()
-            case .toggleToolPicker:
-                guard let canvas = container?.canvas else { return }
-                let showing = toolPickerOverride ?? config.showsToolPicker
-                toolPickerOverride = !showing
-                toolPicker.setVisible(!showing, forFirstResponder: canvas)
             }
         }
 
         private func select(_ tool: PKTool) {
             noteSelection(tool)
-            isProgrammaticToolChange = true
-            toolPicker.selectedTool = tool
             container?.canvas.tool = tool
-            isProgrammaticToolChange = false
         }
 
         private func noteSelection(_ tool: PKTool) {
@@ -637,20 +615,7 @@ struct EditorCanvasView: UIViewRepresentable {
             currentTool = tool
         }
 
-        // MARK: - PKToolPickerObserver
-
-        func toolPickerSelectedToolDidChange(_ toolPicker: PKToolPicker) {
-            // Skipped for our own switches: `select` has already done the bookkeeping, and
-            // running it twice would make "previous tool" the current one.
-            guard !isProgrammaticToolChange else { return }
-            noteSelection(toolPicker.selectedTool)
-            // The system palette is still available behind a setting; when it is used, the
-            // rail follows it rather than the two disagreeing about what is selected.
-            toolSelection?.adopt(toolPicker.selectedTool)
-        }
-
         private var currentTool: PKTool?
-        private var isProgrammaticToolChange = false
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             container?.updateContentGeometry()
