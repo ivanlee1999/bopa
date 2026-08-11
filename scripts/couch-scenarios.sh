@@ -53,6 +53,10 @@ say "preflight: $COUCH_URL"
 [ -x "$NOTABLE_DIR/gradlew" ] || {
   fail "no notable checkout at $NOTABLE_DIR — set NOTABLE_DIR to yours"; exit 1; }
 [ -f "$SCENARIO_FILE" ] || { fail "no scenario file at $SCENARIO_FILE"; exit 1; }
+# The two repos must be running the same contract. Checked here rather than left to a code review,
+# because a vector the other side does not parse is a vector that passes on both sides and tests
+# nothing — which is how the page-rename cases went missing.
+NOTABLE_DIR="$NOTABLE_DIR" "$BOPA_DIR/scripts/couch-vectors-parity.sh" || exit 1
 curl -fsS --user "$COUCH_USER:$COUCH_PASSWORD" "$COUCH_URL/_up" >/dev/null || {
   fail "cannot reach the server"; exit 1; }
 curl -fsS --user "$COUCH_USER:$COUCH_PASSWORD" -X PUT "$COUCH_URL/$COUCH_DATABASE" >/dev/null || {
