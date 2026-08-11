@@ -15,16 +15,20 @@ public struct HTTPRequest: Sendable {
     public var query: [HTTPQueryItem]
     public var headers: [String: String]
     public var body: Data?
+    /// Per-request timeout in seconds, or nil for the session's default. Set only by the longpoll
+    /// path, which must outlast the window it asked the server to hold the connection open.
+    public var timeout: TimeInterval?
 
     public init(
         method: String, path: String, query: [HTTPQueryItem] = [],
-        headers: [String: String] = [:], body: Data? = nil
+        headers: [String: String] = [:], body: Data? = nil, timeout: TimeInterval? = nil
     ) {
         self.method = method
         self.path = path
         self.query = query
         self.headers = headers
         self.body = body
+        self.timeout = timeout
     }
 }
 
@@ -110,6 +114,9 @@ public struct URLSessionTransport: HTTPTransport {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = request.method
+        // An idle timer, which is exactly right for a longpoll that asks for no keep-alives: the
+        // server is silent for the whole park, so this bounds the wait outright.
+        if let timeout = request.timeout { urlRequest.timeoutInterval = timeout }
         urlRequest.httpBody = request.body
         for (k, v) in request.headers { urlRequest.setValue(v, forHTTPHeaderField: k) }
         if let authorization { urlRequest.setValue(authorization, forHTTPHeaderField: "Authorization") }
