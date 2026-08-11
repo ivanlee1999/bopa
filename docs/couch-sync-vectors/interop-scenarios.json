@@ -1,0 +1,488 @@
+{
+  "version": 1,
+  "comment": [
+    "Cross-app sync scenarios, executed by BOTH implementations against one real CouchDB.",
+    "bopa runs the 'ipad' steps (NotableKit/Tests/CouchScenarioTests.swift); notable runs the",
+    "'boox' steps (CouchScenarioTest.kt); scripts/couch-scenarios.sh interleaves them. Unlike",
+    "vectors.json this file is NOT duplicated into notable — the driver passes its path to both",
+    "runners, so there is one copy and it cannot drift.",
+    "",
+    "Where vectors.json checks that merge(a,b) agrees on paper, this checks that two devices",
+    "driving their own engines through a real server converge on the same content.",
+    "",
+    "Logical document names are namespaced per run and resolved by prefix: nb* -> notebook:,",
+    "pg* -> page:, fd* -> folder:. 'at' is seconds after 2026-02-02T03:20:00Z; it is what makes",
+    "last-writer-wins outcomes deterministic, so every ordering-sensitive op states it.",
+    "A step is one process invocation on one device: an edit without a following 'push' is an",
+    "edit made offline, which is how the concurrent cases are staged."
+  ],
+
+  "scenarios": [
+    {
+      "name": "ipad-starts-boox-continues",
+      "why": "The headline case: start a notebook on the iPad, keep writing on the BOOX.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbA", "title": "Meeting notes", "pages": ["pgA"], "at": 0 },
+          { "op": "draw", "doc": "pgA", "strokes": ["s1", "s2"], "at": 10 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbA", "title": "Meeting notes" },
+          { "op": "expectPageIds", "doc": "nbA", "pages": ["pgA"] },
+          { "op": "expectStrokes", "doc": "pgA", "ids": ["s1", "s2"] },
+          { "op": "draw", "doc": "pgA", "strokes": ["s3"], "at": 20 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgA", "ids": ["s1", "s2", "s3"] } ] }
+      ]
+    },
+
+    {
+      "name": "boox-erases-ipad-ink",
+      "why": "Erasing on the BOOX must remove the iPad's stroke everywhere, and it must not come back on the iPad's next push. This is the case absence-only sync gets wrong.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbB", "title": "Lab", "pages": ["pgB"], "at": 0 },
+          { "op": "draw", "doc": "pgB", "strokes": ["s1", "s2", "s3"], "at": 10 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgB", "ids": ["s1", "s2", "s3"] },
+          { "op": "erase", "doc": "pgB", "strokes": ["s2"], "at": 20 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgB", "ids": ["s1", "s3"] },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgB", "ids": ["s1", "s3"] } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgB", "ids": ["s1", "s3"] } ] }
+      ]
+    },
+
+    {
+      "name": "ipad-erases-boox-ink",
+      "why": "The mirror of the above — the erase path must be symmetric.",
+      "steps": [
+        { "device": "boox", "do": [
+          { "op": "newNotebook", "doc": "nbC", "title": "Field", "pages": ["pgC"], "at": 0 },
+          { "op": "draw", "doc": "pgC", "strokes": ["b1", "b2", "b3"], "at": 10 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgC", "ids": ["b1", "b2", "b3"] },
+          { "op": "erase", "doc": "pgC", "strokes": ["b1"], "at": 20 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgC", "ids": ["b2", "b3"] },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgC", "ids": ["b2", "b3"] } ] }
+      ]
+    },
+
+    {
+      "name": "concurrent-draw-offline",
+      "why": "Both devices write on the same page with no network, then both reconnect. Nobody's ink may be lost.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbD", "title": "Shared", "pages": ["pgD"], "at": 0 },
+          { "op": "draw", "doc": "pgD", "strokes": ["base"], "at": 5 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [ { "op": "pull" } ] },
+        { "device": "ipad", "do": [
+          { "op": "draw", "doc": "pgD", "strokes": ["i1"], "at": 100 } ] },
+        { "device": "boox", "do": [
+          { "op": "draw", "doc": "pgD", "strokes": ["b1"], "at": 101 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgD", "ids": ["b1", "base", "i1"] } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgD", "ids": ["b1", "base", "i1"] } ] }
+      ]
+    },
+
+    {
+      "name": "concurrent-erase-vs-draw",
+      "why": "One device erases while the other draws, both offline. The erasure must stand and the new stroke must survive.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbE", "title": "E", "pages": ["pgE"], "at": 0 },
+          { "op": "draw", "doc": "pgE", "strokes": ["x1", "x2"], "at": 5 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [ { "op": "pull" } ] },
+        { "device": "ipad", "do": [
+          { "op": "erase", "doc": "pgE", "strokes": ["x1"], "at": 100 } ] },
+        { "device": "boox", "do": [
+          { "op": "draw", "doc": "pgE", "strokes": ["x3"], "at": 101 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgE", "ids": ["x2", "x3"] } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgE", "ids": ["x2", "x3"] } ] }
+      ]
+    },
+
+    {
+      "name": "concurrent-erase-same-stroke",
+      "why": "Both devices erase the same stroke offline. Deletions must not fight each other.",
+      "steps": [
+        { "device": "boox", "do": [
+          { "op": "newNotebook", "doc": "nbF", "title": "F", "pages": ["pgF"], "at": 0 },
+          { "op": "draw", "doc": "pgF", "strokes": ["y1", "y2"], "at": 5 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [ { "op": "pull" } ] },
+        { "device": "boox", "do": [
+          { "op": "erase", "doc": "pgF", "strokes": ["y1"], "at": 100 } ] },
+        { "device": "ipad", "do": [
+          { "op": "erase", "doc": "pgF", "strokes": ["y1"], "at": 90 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgF", "ids": ["y2"] } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgF", "ids": ["y2"] } ] }
+      ]
+    },
+
+    {
+      "name": "erase-then-redraw",
+      "why": "After an erasure propagates, drawing again on the cleared page must not be swallowed by the tombstone.",
+      "steps": [
+        { "device": "boox", "do": [
+          { "op": "newNotebook", "doc": "nbR", "title": "R", "pages": ["pgR"], "at": 0 },
+          { "op": "draw", "doc": "pgR", "strokes": ["w1"], "at": 5 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "erase", "doc": "pgR", "strokes": ["w1"], "at": 100 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgR", "ids": [] },
+          { "op": "draw", "doc": "pgR", "strokes": ["w2"], "at": 200 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgR", "ids": ["w2"] } ] }
+      ]
+    },
+
+    {
+      "name": "concurrent-rename",
+      "why": "Both devices rename the same notebook offline. Both must end on the same title — the later edit's.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbG", "title": "Draft", "pages": ["pgG"], "at": 0 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [ { "op": "pull" } ] },
+        { "device": "ipad", "do": [
+          { "op": "rename", "doc": "nbG", "title": "iPad title", "at": 100 } ] },
+        { "device": "boox", "do": [
+          { "op": "rename", "doc": "nbG", "title": "BOOX title", "at": 200 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbG", "title": "BOOX title" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbG", "title": "BOOX title" } ] }
+      ]
+    },
+
+    {
+      "name": "concurrent-page-add",
+      "why": "Each device adds a page offline. Both pages must survive, in the same order on both devices (protocol 5.2: the later writer's order wins, the other's pages are appended).",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbH", "title": "H", "pages": ["pgH1"], "at": 0 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [ { "op": "pull" } ] },
+        { "device": "ipad", "do": [
+          { "op": "addPage", "doc": "nbH", "page": "pgH2", "at": 100 } ] },
+        { "device": "boox", "do": [
+          { "op": "addPage", "doc": "nbH", "page": "pgH3", "at": 101 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectPageIds", "doc": "nbH", "pages": ["pgH1", "pgH3", "pgH2"] } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectPageIds", "doc": "nbH", "pages": ["pgH1", "pgH3", "pgH2"] } ] }
+      ]
+    },
+
+    {
+      "name": "page-delete-vs-page-edit",
+      "why": "One device deletes a page while the other is still writing on it. Remove-wins: both devices must agree the page is gone rather than one keeping a ghost.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbI", "title": "I", "pages": ["pgI1", "pgI2"], "at": 0 },
+          { "op": "draw", "doc": "pgI2", "strokes": ["k1"], "at": 5 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [ { "op": "pull" } ] },
+        { "device": "ipad", "do": [
+          { "op": "deletePage", "doc": "nbI", "page": "pgI2", "at": 100 } ] },
+        { "device": "boox", "do": [
+          { "op": "draw", "doc": "pgI2", "strokes": ["k2"], "at": 101 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectPageIds", "doc": "nbI", "pages": ["pgI1"] } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectPageIds", "doc": "nbI", "pages": ["pgI1"] } ] }
+      ]
+    },
+
+    {
+      "name": "notebook-delete-propagates",
+      "why": "Deleting a notebook on one device must delete it on the other, not leave it behind to be re-uploaded.",
+      "steps": [
+        { "device": "boox", "do": [
+          { "op": "newNotebook", "doc": "nbJ", "title": "J", "pages": ["pgJ"], "at": 0 },
+          { "op": "draw", "doc": "pgJ", "strokes": ["d1"], "at": 5 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbJ", "title": "J" } ] },
+        { "device": "boox", "do": [
+          { "op": "delete", "doc": "nbJ", "at": 100 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectDeleted", "doc": "nbJ" } ] }
+      ]
+    },
+
+    {
+      "name": "delete-vs-later-edit-resurrects",
+      "why": "A notebook deleted on one device but edited later on the other comes back — protocol 6.4. Losing work to a stale delete is the failure this prevents.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbK", "title": "K", "pages": ["pgK"], "at": 0 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [ { "op": "pull" } ] },
+        { "device": "ipad", "do": [
+          { "op": "delete", "doc": "nbK", "at": 100 } ] },
+        { "device": "boox", "do": [
+          { "op": "rename", "doc": "nbK", "title": "still wanted", "at": 200 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbK", "title": "still wanted" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbK", "title": "still wanted" } ] }
+      ]
+    },
+
+    {
+      "name": "delete-beats-earlier-edit",
+      "why": "The other half of 6.4: a delete that happened after the peer's edit must stand on both devices.",
+      "steps": [
+        { "device": "boox", "do": [
+          { "op": "newNotebook", "doc": "nbL", "title": "L", "pages": ["pgL"], "at": 0 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [ { "op": "pull" } ] },
+        { "device": "ipad", "do": [
+          { "op": "rename", "doc": "nbL", "title": "renamed", "at": 100 } ] },
+        { "device": "boox", "do": [
+          { "op": "delete", "doc": "nbL", "at": 200 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectDeleted", "doc": "nbL" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectDeleted", "doc": "nbL" } ] }
+      ]
+    },
+
+    {
+      "name": "notebook-delete-vs-page-edit",
+      "why": "Ink written on the BOOX for a notebook the iPad deleted. Both devices must agree the notebook is gone rather than one showing a half-deleted book.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbT", "title": "T", "pages": ["pgT"], "at": 0 },
+          { "op": "draw", "doc": "pgT", "strokes": ["t1"], "at": 5 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [ { "op": "pull" } ] },
+        { "device": "boox", "do": [
+          { "op": "draw", "doc": "pgT", "strokes": ["t2"], "at": 100 } ] },
+        { "device": "ipad", "do": [
+          { "op": "delete", "doc": "nbT", "at": 200 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectDeleted", "doc": "nbT" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectDeleted", "doc": "nbT" } ] }
+      ]
+    },
+
+    {
+      "name": "folder-create-move-and-rename",
+      "why": "Filing a notebook into a folder on one device and renaming that folder on the other.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newFolder", "doc": "fdM", "title": "Study", "at": 0 },
+          { "op": "newNotebook", "doc": "nbM", "title": "M", "pages": ["pgM"], "at": 0 },
+          { "op": "move", "doc": "nbM", "folder": "fdM", "at": 10 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "fdM", "title": "Study" },
+          { "op": "expectParent", "doc": "nbM", "folder": "fdM" },
+          { "op": "rename", "doc": "fdM", "title": "Studies", "at": 100 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "fdM", "title": "Studies" },
+          { "op": "expectParent", "doc": "nbM", "folder": "fdM" } ] }
+      ]
+    },
+
+    {
+      "name": "folder-delete-leaves-the-notebook-behind",
+      "why": "Deleting a folder must not take the notebooks inside it with it. What the peer is left with is a notebook whose parentFolderId names a folder that no longer exists — pinned here because the sync layer does not repair it, so each app's library has to fall back to the root rather than hide the notebook.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newFolder", "doc": "fdU", "title": "Semester", "at": 0 },
+          { "op": "newNotebook", "doc": "nbU", "title": "U", "pages": ["pgU"], "at": 0 },
+          { "op": "move", "doc": "nbU", "folder": "fdU", "at": 10 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectParent", "doc": "nbU", "folder": "fdU" } ] },
+        { "device": "ipad", "do": [
+          { "op": "delete", "doc": "fdU", "at": 100 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectDeleted", "doc": "fdU" },
+          { "op": "expectTitle", "doc": "nbU", "title": "U" },
+          { "op": "expectParent", "doc": "nbU", "folder": "fdU" } ] }
+      ]
+    },
+
+    {
+      "name": "background-change-propagates",
+      "why": "Changing the paper template on one device must show up on the other, or pages render differently on each.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbS", "title": "S", "pages": ["pgS"], "at": 0 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "setBackground", "doc": "pgS", "background": "lined", "at": 100 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectBackground", "doc": "pgS", "background": "lined" } ] }
+      ]
+    },
+
+    {
+      "name": "checkpoint-loss-replays",
+      "why": "A reinstalled or wiped device replays the feed from zero and must recover everything.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbN", "title": "N", "pages": ["pgN"], "at": 0 },
+          { "op": "draw", "doc": "pgN", "strokes": ["r1", "r2"], "at": 10 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgN", "ids": ["r1", "r2"] },
+          { "op": "reset" },
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbN", "title": "N" },
+          { "op": "expectStrokes", "doc": "pgN", "ids": ["r1", "r2"] } ] }
+      ]
+    },
+
+    {
+      "name": "repeated-sync-is-idempotent",
+      "why": "Syncing twice with nothing new must not duplicate strokes or ping-pong pushes between the devices.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbO", "title": "O", "pages": ["pgO"], "at": 0 },
+          { "op": "draw", "doc": "pgO", "strokes": ["q1"], "at": 10 },
+          { "op": "push" }, { "op": "push" }, { "op": "pull" }, { "op": "pull" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" }, { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgO", "ids": ["q1"] },
+          { "op": "push" }, { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgO", "ids": ["q1"] },
+          { "op": "expectClean" } ] }
+      ]
+    },
+
+    {
+      "name": "future-schema-is-quarantined",
+      "why": "A page written by a newer build must never be merged on guesswork. Both devices keep their own copy and set the remote one aside (protocol 6.5).",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbP", "title": "P", "pages": ["pgP"], "at": 0 },
+          { "op": "draw", "doc": "pgP", "strokes": ["z1"], "at": 10 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [ { "op": "pull" } ] },
+        { "device": "server", "do": [
+          { "op": "putRaw", "doc": "pgP", "json": {
+            "type": "page", "schema": 99, "notebookId": "from-the-future",
+            "background": "blank", "backgroundType": "native",
+            "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
+            "createdAt": "2026-02-02T03:20:00Z", "updatedAt": "2026-02-02T03:40:00Z",
+            "updatedBy": "future" } } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectConflictCopy", "doc": "pgP" },
+          { "op": "expectStrokes", "doc": "pgP", "ids": ["z1"] } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectConflictCopy", "doc": "pgP" },
+          { "op": "expectStrokes", "doc": "pgP", "ids": ["z1"] } ] }
+      ]
+    },
+
+    {
+      "name": "undecodable-document-is-quarantined",
+      "why": "A corrupt document must not crash the sync or be silently dropped — it is set aside and the rest of the run continues.",
+      "steps": [
+        { "device": "server", "do": [
+          { "op": "putRaw", "doc": "pgQ", "json": {
+            "type": "page", "schema": 1, "strokes": [], "updatedBy": "corrupt" } } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectConflictCopy", "doc": "pgQ" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectConflictCopy", "doc": "pgQ" } ] }
+      ]
+    }
+  ]
+}

@@ -241,9 +241,11 @@ Assets are immutable; return either (they are equal by construction).
 
 ### 6.1 Local-vs-remote on push (`409`)
 
-The pusher re-reads the current remote document (including `_deleted` tombstones), merges
-per §5, and re-PUTs with the fresh `_rev`. Bounded retries (5, jittered); on exhaustion the
-document stays dirty and is retried on the next flush.
+The pusher re-reads the current remote document (including `_deleted` tombstones — which takes
+the two-request read described in §7), merges per §5, and re-PUTs with the fresh `_rev` — unless
+the merge result already equals the remote document, in which case the server is up to date and
+the push is finished (§7). Bounded retries (5, jittered); on exhaustion the document stays dirty
+and is retried on the next flush.
 
 ### 6.2 Remote-vs-local on pull
 
@@ -304,11 +306,26 @@ confirmation. This protects against a wiped local database masquerading as inten
 
 | Step | Request |
 |---|---|
-| Read | `GET /{db}/{docid}` (add `?deleted=true` semantics via `open_revs` only if needed; a plain 404 means absent, a 200 with `_deleted` means tombstoned) |
-| Write | `PUT /{db}/{docid}` with `_rev` when updating; `201` success, `409` conflict → §6.1 |
+| Read | `GET /{db}/{docid}`, then `GET /{db}/{docid}?open_revs=all` with `Accept: application/json` on a 404 — see below |
+| Write | `PUT /{db}/{docid}` with `_rev` when updating; `201` success (`200` for a tombstone), `409` conflict → §6.1 |
 | Catch-up | `GET /{db}/_changes?feed=normal&since={seq}&include_docs=true&limit=…` |
 | Live | `GET /{db}/_changes?feed=longpoll&since={seq}&include_docs=true&timeout=55000&heartbeat=15000` |
 | Attachment | `PUT /{db}/{docid}/blob?rev=…`, `GET /{db}/{docid}/blob` |
+
+**Reading a deleted document takes two requests.** A plain `GET` of a tombstoned document is
+`404 {"error":"not_found","reason":"deleted"}` — CouchDB does not return the body there, and the
+404 is indistinguishable from a document that never existed. Only `?open_revs=all` (with
+`Accept: application/json`, or the answer is `multipart/mixed`) returns the deleted leaf and its
+body; it 404s when the id is genuinely unknown. This distinction is not cosmetic: a pusher that
+reads a tombstone as "absent" retries as a create, and **a `PUT` with no `_rev` over a tombstone
+succeeds** — silently resurrecting whatever the peer deleted.
+
+**A tombstone may not be written twice.** `PUT` with `_deleted: true` over an already-deleted
+document is a `409` *even when the `_rev` is current*. So when a merge resolves to the remote's
+tombstone — or to anything else the server already holds — the pusher must stop, not write the
+result back: §6.1's retry loop would otherwise spin to exhaustion and leave the id in the outbox
+forever. Restated as a rule: **if the merge result equals the remote document, the push is
+already done.**
 
 Auth is HTTP Basic over TLS. `since` checkpoints are persisted locally per device; losing
 one is safe (replay from `0` is idempotent), only slower.
@@ -334,3 +351,16 @@ For every vector both suites assert:
 3. `merge(expected, a) == expected` and `merge(expected, b) == expected` (idempotence)
 
 Documents in vectors omit `_id`/`_rev`; merges operate on document bodies.
+
+### 8.1 Scenario suite
+
+The vectors check the merge as a function. They cannot check the *engines*: what two devices do to
+each other through a real server over a sequence of edits, pushes and pulls. That is
+`couch-sync-vectors/interop-scenarios.json`, run by `scripts/couch-scenarios.sh` — bopa executes
+the `ipad` steps, notable the `boox` steps, each against one real CouchDB, with each device's
+content and sync state persisted between steps so an edit made now and pushed three steps later is
+genuinely an offline edit.
+
+Both defects §7 describes were found this way and are invisible to a mock: the mocks had modelled a
+`GET` of a tombstone as `200`, which no CouchDB does. When a mock disagrees with the server, fix the
+mock — the point of it is to be the server.

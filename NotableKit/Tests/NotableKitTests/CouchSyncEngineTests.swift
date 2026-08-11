@@ -189,6 +189,46 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertFalse(server.isDeleted(otherID), "the newer edit should have resurrected it")
     }
 
+    /// The other half of delete-vs-edit, and the one that used to lose the deletion.
+    ///
+    /// A plain `GET` of a deleted document is a 404 — CouchDB does not hand the tombstone back
+    /// there — so a pusher that read 404 as "never existed" retried as a create, and a PUT with no
+    /// revision over a tombstone *succeeds*: the peer's deletion silently came back as a live
+    /// notebook. Then, once the tombstone is read correctly, the merge resolves to it, and writing
+    /// that tombstone back is itself a 409 — so the id has to leave the outbox without a write.
+    func testPeersDeletionSurvivesAnOlderLocalEditWaitingToBePushed() async throws {
+        ipadStore.set(notebookID, .notebook(CouchNotebook(
+            title: "notes", pageIds: [], createdAt: stamp(0), updatedAt: stamp(1),
+            updatedBy: "ipad")))
+        await ipad.markDirty([notebookID])
+        _ = await ipad.flush()
+        _ = try await boox.pull()
+
+        // The iPad renames it offline...
+        var renamed = ipadStore.notebook(notebookID)!
+        renamed.title = "renamed on the iPad"
+        renamed.updatedAt = stamp(10)
+        ipadStore.set(notebookID, .notebook(renamed))
+        await ipad.markDirty([notebookID])
+
+        // ...while the BOOX deletes it, later, and gets there first.
+        booxStore.set(notebookID, .deleted(CouchDeletedDoc(
+            type: CouchDocType.notebook, deletedAt: stamp(20), updatedBy: "boox")))
+        await boox.markDirty([notebookID])
+        _ = await boox.flush()
+
+        let flush = await ipad.flush()
+
+        XCTAssertTrue(flush.failures.isEmpty, "the push should settle, not exhaust its retries")
+        XCTAssertTrue(flush.stillDirty.isEmpty, "the document must leave the outbox")
+        let pending = await ipad.pendingCount
+        XCTAssertEqual(pending, 0)
+        XCTAssertTrue(
+            ipadStore.body(notebookID)?.isDeleted ?? false,
+            "the iPad should have accepted the deletion rather than re-created the notebook")
+        XCTAssertTrue(server.isDeleted(notebookID), "the deletion must still stand on the server")
+    }
+
     func testOfflineEditsQueueAndDrainOnReconnect() async throws {
         server.isOffline = true
         ipadStore.set(pageID, .page(page(strokes: [stroke("s1", at: 1, device: "ipad")],
