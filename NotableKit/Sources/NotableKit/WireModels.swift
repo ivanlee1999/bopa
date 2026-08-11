@@ -106,13 +106,16 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
 
 public struct PageFile: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
-        case version, id, notebookId, background, backgroundType, parentFolderId, scroll
+        case version, id, notebookId, title, background, backgroundType, parentFolderId, scroll
         case createdAt, updatedAt, strokes, images, deletedStrokes, updatedBy
     }
 
     public var version: Int
     public var id: String
     public var notebookId: String?
+    /// The page's name, or nil for a page nobody has named. Set on the BOOX; bopa has no UI for
+    /// it, and carries it so a round trip through this device does not erase it.
+    public var title: String?
     public var background: String
     public var backgroundType: String
     public var parentFolderId: String?
@@ -132,6 +135,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         version: Int = 1,
         id: String,
         notebookId: String?,
+        title: String? = nil,
         background: String = "blank",
         backgroundType: String = "native",
         parentFolderId: String? = nil,
@@ -146,6 +150,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         self.version = version
         self.id = id
         self.notebookId = notebookId
+        self.title = title
         self.background = background
         self.backgroundType = backgroundType
         self.parentFolderId = parentFolderId
@@ -163,6 +168,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
         id = try c.decode(String.self, forKey: .id)
         notebookId = try c.decodeIfPresent(String.self, forKey: .notebookId)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
         background = try c.decodeIfPresent(String.self, forKey: .background) ?? "blank"
         backgroundType = try c.decodeIfPresent(String.self, forKey: .backgroundType) ?? "native"
         parentFolderId = try c.decodeIfPresent(String.self, forKey: .parentFolderId)
@@ -180,6 +186,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         try c.encode(version, forKey: .version)
         try c.encode(id, forKey: .id)
         try c.encode(notebookId, forKey: .notebookId)
+        try c.encode(title, forKey: .title)
         try c.encode(background, forKey: .background)
         try c.encode(backgroundType, forKey: .backgroundType)
         try c.encode(parentFolderId, forKey: .parentFolderId)

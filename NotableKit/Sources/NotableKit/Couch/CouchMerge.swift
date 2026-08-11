@@ -123,6 +123,7 @@ public enum CouchMerge {
             type: CouchDocType.page,
             schema: Swift.max(a.schema, b.schema),
             notebookId: winner.notebookId,
+            title: winner.title,
             background: winner.background,
             backgroundType: winner.backgroundType,
             strokes: strokes,
@@ -186,6 +187,7 @@ public enum CouchMerge {
             ("type", page.type), ("schema", String(page.schema)),
             ("createdAt", page.createdAt), ("updatedAt", page.updatedAt),
             ("updatedBy", page.updatedBy), ("notebookId", page.notebookId),
+            ("title", page.title),
             ("background", page.background), ("backgroundType", page.backgroundType),
         ])
     }

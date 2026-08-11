@@ -160,6 +160,12 @@ final class NotebookStore: ObservableObject {
         let baseline = baselineStrokeIDs ?? Set(onDisk?.strokes.map(\.id) ?? [])
         let saved = Set(page.strokes.map(\.id))
 
+        // Nothing in this app names a page, so the caller's `title` is at best as fresh as the
+        // file's and at worst stale — a rename that arrived from the BOOX while the page was open.
+        // Taking the file's value stops an autosave from undoing it, the same way the stroke
+        // fold-back below stops one from undoing the BOOX's ink.
+        page.title = onDisk?.title ?? page.title
+
         // Whatever the caller *had* and no longer has was erased. Recording it is what stops the
         // other device's copy of an erased stroke from coming back on the next merge — absence
         // alone cannot be told apart from "that stroke has not reached this device yet".
