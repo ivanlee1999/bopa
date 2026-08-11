@@ -32,7 +32,7 @@ struct LibraryNode: Identifiable, Hashable {
     let count: Int
     let provenance: SyncProvenance
     /// `nil` (not `[]`) for leaves — that is what suppresses the disclosure triangle.
-    var children: [LibraryNode]?
+    let children: [LibraryNode]?
 
     var id: String {
         switch kind {
@@ -153,7 +153,10 @@ struct LibrarySidebar: View {
         .tint(Modernist.ink)
         .alert(renameAlertTitle, isPresented: $showingRename) {
             TextField("Name", text: $renameTitle)
+            // Disabled rather than a no-op: an alert closes whatever its button does, so a
+            // blank name would otherwise dismiss and silently keep the old one.
             Button("Rename") { commitRename() }
+                .disabled(trimmedRenameTitle.isEmpty)
             Button("Cancel", role: .cancel) {}
         }
     }
@@ -179,7 +182,8 @@ struct LibrarySidebar: View {
         } label: {
             rowBody(
                 title: "All Notes", systemImage: "tray.full", weight: .semibold,
-                count: store.totalNotebookCount, countUnit: "notebooks",
+                count: store.totalNotebookCount,
+                countUnit: plural(store.totalNotebookCount, "notebook"),
                 provenance: .unknown, selected: selected)
         }
         .buttonStyle(.plain)
@@ -210,7 +214,7 @@ struct LibrarySidebar: View {
             } label: {
                 rowBody(
                     title: node.title, systemImage: "folder", weight: .semibold,
-                    count: node.count, countUnit: "items",
+                    count: node.count, countUnit: plural(node.count, "item"),
                     provenance: node.provenance, selected: selected)
             }
             .buttonStyle(.plain)
@@ -248,7 +252,7 @@ struct LibrarySidebar: View {
             } label: {
                 rowBody(
                     title: node.title, systemImage: "doc.text", weight: .regular,
-                    count: node.count, countUnit: node.count == 1 ? "page" : "pages",
+                    count: node.count, countUnit: plural(node.count, "page"),
                     provenance: node.provenance, selected: false)
             }
             .buttonStyle(.plain)
@@ -264,6 +268,12 @@ struct LibrarySidebar: View {
                 Label("Rename", systemImage: "pencil")
             }
         }
+    }
+
+    /// The count on a row is read out with its unit, so it has to agree with it: "1 item",
+    /// not "1 items".
+    private func plural(_ count: Int, _ singular: String) -> String {
+        count == 1 ? singular : singular + "s"
     }
 
     /// Shared row interior, so a folder, a note and the root item line up on the same grid.
@@ -336,8 +346,12 @@ struct LibrarySidebar: View {
         showingRename = true
     }
 
+    private var trimmedRenameTitle: String {
+        renameTitle.trimmingCharacters(in: .whitespaces)
+    }
+
     private func commitRename() {
-        let title = renameTitle.trimmingCharacters(in: .whitespaces)
+        let title = trimmedRenameTitle
         guard !title.isEmpty, let renaming else { return }
         switch renaming {
         case .folder(let id): try? store.renameFolder(id: id, title: title)

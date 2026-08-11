@@ -119,6 +119,10 @@ private struct FolderContentsView: View {
     @State private var showingDeleteNotebook = false
     @State private var showingSyncSettings = false
 
+    private var trimmedRenameTitle: String {
+        renameTitle.trimmingCharacters(in: .whitespaces)
+    }
+
     private var subfolders: [FolderDTO] { store.folders(in: folderId) }
     private var notebooks: [NotebookManifest] { store.notebooks(in: folderId) }
 
@@ -168,22 +172,24 @@ private struct FolderContentsView: View {
         }
         .alert("Rename notebook", isPresented: $showingRenameNotebook) {
             TextField("Title", text: $renameTitle)
+            // Disabled rather than a no-op: an alert closes whatever its button does, so a
+            // blank title would otherwise dismiss and silently keep the old one.
             Button("Rename") {
-                let title = renameTitle.trimmingCharacters(in: .whitespaces)
-                if let id = renamingNotebookId, !title.isEmpty {
-                    try? store.renameNotebook(id: id, title: title)
+                if let id = renamingNotebookId {
+                    try? store.renameNotebook(id: id, title: trimmedRenameTitle)
                 }
             }
+            .disabled(trimmedRenameTitle.isEmpty)
             Button("Cancel", role: .cancel) {}
         }
         .alert("Rename folder", isPresented: $showingRenameFolder) {
             TextField("Name", text: $renameTitle)
             Button("Rename") {
-                let title = renameTitle.trimmingCharacters(in: .whitespaces)
-                if let id = renamingFolderId, !title.isEmpty {
-                    try? store.renameFolder(id: id, title: title)
+                if let id = renamingFolderId {
+                    try? store.renameFolder(id: id, title: trimmedRenameTitle)
                 }
             }
+            .disabled(trimmedRenameTitle.isEmpty)
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog(
