@@ -273,6 +273,21 @@ the merge result already equals the remote document, in which case the server is
 the push is finished (§7). Bounded retries (5, jittered); on exhaustion the document stays dirty
 and is retried on the next flush.
 
+### 6.1a Applying a merge is not overwriting
+
+A merge is computed from a snapshot of the local document, and computing it takes at least one
+network round trip — during which the editor goes on saving. When the result is written back, the
+implementation **MUST NOT** remove local content merely because the merged document lacks it. Only
+content the merge *saw* — present in the snapshot it consumed — and did not keep may be removed.
+Anything that arrived since is work the merge knows nothing about.
+
+Getting this wrong is silent and total: the stroke is deleted locally, no tombstone is produced
+(so it is not an erasure either), and it was never pushed, so no copy of it exists anywhere. It is
+the two-device case the design exists for — drawing on one device while the other edits the same
+page — so a store that replaces its stroke set wholesale destroys ink exactly when the system is
+doing its job. A test double must honour this rule too; one that overwrites wholesale cannot
+reproduce the failure and will hide it.
+
 ### 6.2 Remote-vs-local on pull
 
 Every incoming change is merged into the local copy with the same functions. If the merge
@@ -294,6 +309,14 @@ When one side holds a live document and the other a tombstone:
 
 Pages have no independent lifecycle: they live and die with their notebook's `pageIds` /
 `deletedPageIds`.
+
+**An unknown `deletedAt` loses.** A tombstone whose body was stripped — a plain HTTP `DELETE`, or
+a writer that kept no body — carries no instant. A reader must treat that as *unknown*, which by §4
+compares as `Long.MIN_VALUE` and therefore **resurrects**: the live document wins. Stamping the
+current time instead makes the deletion newer than any edit the user has ever made, so the rule
+above can never fire and a bodyless tombstone silently destroys work done after it. For the same
+reason, merging two tombstones keeps a known `deletedAt` in preference to an unknown one rather
+than taking the "earlier" of the two.
 
 A folder deletion takes **only the folder**. Notebooks and subfolders that named it keep the
 `parentFolderId` they have — the merge does not re-home them, because rewriting a document
@@ -342,6 +365,12 @@ A flush that would push ≥10 notebook tombstones **and** those tombstones are a
 majority of the device's known notebooks must be refused pending explicit user
 confirmation. This protects against a wiped local database masquerading as intent.
 
+The refusal covers **only the tombstones**. The rest of the flush proceeds: a guard that questions
+a suspicious deletion has no business stopping a drawing from reaching the other device, and while
+the confirmation it asks for is unimplemented, holding the whole outbox is not a prompt but a
+permanent stall. What is reported to the user is the number of deletions held back, not the size of
+the queue.
+
 ## 7. Transport
 
 | Step | Request |
@@ -366,6 +395,12 @@ tombstone — or to anything else the server already holds — the pusher must s
 result back: §6.1's retry loop would otherwise spin to exhaustion and leave the id in the outbox
 forever. Restated as a rule: **if the merge result equals the remote document, the push is
 already done.**
+
+Equality is not quite enough on its own. Two devices that deleted the same document independently
+merge to a tombstone whose `updatedAt` and `updatedBy` differ from the stored one — equal
+deletions, unequal documents — and writing that back takes the 409 above. So the full rule is:
+**if the merge result equals the remote document, *or* both are tombstones, the push is done.**
+There is nothing left to say in either case; the deletion is already recorded.
 
 Auth is HTTP Basic over TLS. `since` checkpoints are persisted locally per device; losing
 one is safe (replay from `0` is idempotent), only slower.
