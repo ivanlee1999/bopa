@@ -193,6 +193,29 @@ final class FileCouchStoreTests: XCTestCase {
         XCTAssertEqual(copies.count, 1, "a conflict copy notebook should exist")
     }
 
+    /// Losing the checkpoint replays the whole feed, which this design calls safe — so the same
+    /// unreadable document arrives again. Minting fresh ids each time turned every replay into
+    /// another set of duplicate notebooks in the library.
+    func testTheSameUnreadableDocumentDoesNotPileUpCopies() throws {
+        let id = CouchDocID.page("p1")
+        let raw = Data(#"{"type":"page","schema":99,"somethingNew":true}"#.utf8)
+
+        try store.applyConflictCopy(id, json: raw)
+        try store.applyConflictCopy(id, json: raw)
+        XCTAssertEqual(store.allDocumentIDs().filter { $0.hasPrefix("notebook:") }.count, 1)
+
+        // A *different* unreadable revision is genuinely different, and does get its own copy.
+        try store.applyConflictCopy(id, json: Data(#"{"type":"page","schema":99,"v":2}"#.utf8))
+        XCTAssertEqual(store.allDocumentIDs().filter { $0.hasPrefix("notebook:") }.count, 2)
+    }
+
+    /// §6.5 promises nothing is discarded. An unreadable *folder* was being dropped on the floor.
+    func testAnUnreadableFolderIsCopiedRatherThanDiscarded() throws {
+        try store.applyConflictCopy(
+            CouchDocID.folder("f1"), json: Data(#"{"type":"folder","schema":99}"#.utf8))
+        XCTAssertEqual(store.allDocumentIDs().filter { $0.hasPrefix("notebook:") }.count, 1)
+    }
+
     // MARK: Images
 
     private let pictureBytes = Data("PNG-ish bytes, hashed exactly as they are".utf8)
