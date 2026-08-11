@@ -269,6 +269,15 @@ When one side holds a live document and the other a tombstone:
 Pages have no independent lifecycle: they live and die with their notebook's `pageIds` /
 `deletedPageIds`.
 
+A folder deletion takes **only the folder**. Notebooks and subfolders that named it keep the
+`parentFolderId` they have — the merge does not re-home them, because rewriting a document
+nobody edited would push a change back at a peer that may still hold the folder alive. What
+that leaves is a `parentFolderId` naming a folder this device does not have, which is a display
+question rather than a merge one: **a library MUST show such an object at the root**, never
+hide it. Hiding it would strand a notebook whose files are still on disk. The same rule covers
+a chain that loops or dangles in a half-merged `folders.json`; reachability from the root, not
+the presence of a parent id, is what decides.
+
 ### 6.5 Un-mergeable input — conflict copy
 
 If a document fails to decode, or its `schema` is greater than the reader supports, or a

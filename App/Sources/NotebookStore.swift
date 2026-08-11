@@ -318,12 +318,61 @@ final class NotebookStore: ObservableObject {
 
     // MARK: - Folder queries
 
-    func folders(in parentFolderId: String?) -> [FolderDTO] {
-        folders.filter { $0.parentFolderId == parentFolderId }
+    /// Ids of the folders whose `parentFolderId` chain actually reaches the root.
+    ///
+    /// A folder can stop being rooted without anything local going wrong: the peer is allowed to
+    /// delete a folder that still has children here (protocol §6.4 deletes the folder alone), and
+    /// a half-merged `folders.json` can leave a chain pointing at nothing or looping back on
+    /// itself. The merge deliberately does not repair either — the library absorbs it, which is
+    /// what `folders(in:)` and `notebooks(in:)` do by treating the unrooted remainder as root
+    /// content. Hiding it instead would lose real notebooks whose files are still on disk.
+    private var rootedFolderIDs: Set<String> {
+        let parents = Dictionary(
+            folders.map { ($0.id, $0.parentFolderId) }, uniquingKeysWith: { first, _ in first })
+        var rooted: Set<String> = []
+        for id in parents.keys {
+            // Walked one folder at a time so a chain that turns out to be rooted marks every
+            // link on the way, and a cycle is left out entirely rather than looping forever.
+            var chain: [String] = []
+            var seen: Set<String> = []
+            var cursor: String? = id
+            var reachesRoot = false
+            while let current = cursor {
+                if rooted.contains(current) { reachesRoot = true; break }
+                guard seen.insert(current).inserted else { break }   // a cycle: never rooted
+                guard let parent = parents[current] else { break }   // parent folder is gone
+                chain.append(current)
+                guard let parent else { reachesRoot = true; break }  // reached the root
+                cursor = parent
+            }
+            if reachesRoot { rooted.formUnion(chain) }
+        }
+        return rooted
     }
 
+    /// Subfolders of `parentFolderId`. The root additionally adopts every folder that no longer
+    /// reaches it, so an orphaned subtree stays reachable instead of vanishing from the sidebar.
+    func folders(in parentFolderId: String?) -> [FolderDTO] {
+        guard parentFolderId == nil else {
+            return folders.filter { $0.parentFolderId == parentFolderId }
+        }
+        let rooted = rootedFolderIDs
+        return folders.filter { $0.parentFolderId == nil || !rooted.contains($0.id) }
+    }
+
+    /// Notebooks directly inside `parentFolderId`. The root additionally adopts every notebook
+    /// whose `parentFolderId` names a folder that is gone — the case a peer's folder deletion
+    /// leaves behind. A notebook filed under a folder that still exists stays there even if that
+    /// folder is itself orphaned, because `folders(in: nil)` has already surfaced the folder.
     func notebooks(in parentFolderId: String?) -> [NotebookManifest] {
-        notebooks.filter { $0.parentFolderId == parentFolderId }
+        guard parentFolderId == nil else {
+            return notebooks.filter { $0.parentFolderId == parentFolderId }
+        }
+        let known = Set(folders.map(\.id))
+        return notebooks.filter { notebook in
+            guard let parent = notebook.parentFolderId else { return true }
+            return !known.contains(parent)
+        }
     }
 
     func folder(id: String) -> FolderDTO? {
