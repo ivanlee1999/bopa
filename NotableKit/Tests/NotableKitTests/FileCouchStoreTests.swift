@@ -193,6 +193,137 @@ final class FileCouchStoreTests: XCTestCase {
         XCTAssertEqual(copies.count, 1, "a conflict copy notebook should exist")
     }
 
+    // MARK: Images
+
+    private let pictureBytes = Data("PNG-ish bytes, hashed exactly as they are".utf8)
+    private var pictureAssetID: String { CouchAssetID.forBytes(pictureBytes) }
+
+    /// Writes a page that places `images/<name>`, the way the editor and the WebDAV engine leave
+    /// one behind — file first, page file naming it by path.
+    private func placeImage(
+        named name: String, in notebookId: String, on pageId: String, bytes: Data? = nil
+    ) throws {
+        let dir = root.appendingPathComponent("notebooks/\(notebookId)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: NotableImageFiles.directory(in: dir), withIntermediateDirectories: true)
+        try (bytes ?? pictureBytes).write(
+            to: NotableImageFiles.directory(in: dir).appendingPathComponent(name))
+        let manifest = NotebookManifest(
+            notebookId: notebookId, title: "album", pageIds: [pageId], createdAt: stamp(0),
+            updatedAt: stamp(1), serverTimestamp: stamp(1))
+        try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"))
+        let file = PageFile(
+            id: pageId, notebookId: notebookId, createdAt: stamp(0), updatedAt: stamp(1),
+            images: [ImageDTO(
+                id: "i1", x: 10, y: 20, width: 30, height: 40, uri: "images/\(name)",
+                createdAt: stamp(1), updatedAt: stamp(1))],
+            updatedBy: "ipad")
+        let url = dir.appendingPathComponent("pages/\(pageId).json")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(file).write(to: url)
+    }
+
+    /// What a placed image looks like on the wire: a reference to the hash of its bytes, not to
+    /// wherever this device happens to keep the file.
+    func testAPlacedImageTravelsAsTheHashOfItsBytes() throws {
+        try placeImage(named: "holiday.png", in: "nb1", on: "p1")
+
+        guard case .page(let loaded)? = try store.load(CouchDocID.page("p1")) else {
+            return XCTFail("the page did not load")
+        }
+        XCTAssertEqual(loaded.images.map(\.assetId), [pictureAssetID])
+
+        guard case .asset(let asset)? = try store.load(pictureAssetID) else {
+            return XCTFail("the bytes behind the reference were not found")
+        }
+        XCTAssertEqual(asset.data, pictureBytes)
+    }
+
+    /// The window this whole mechanism exists for: the page has arrived, the picture has not.
+    func testAnIncomingImageIsOwedUntilItsBytesArrive() throws {
+        let pageID = CouchDocID.page("p1")
+        try store.apply(CouchDocID.notebook("nb1"), .notebook(CouchNotebook(
+            title: "album", pageIds: ["p1"], createdAt: stamp(0), updatedAt: stamp(1),
+            updatedBy: "boox")))
+        try store.apply(pageID, .page(CouchPage(
+            notebookId: "nb1",
+            images: [CouchImage(
+                id: "i1", assetId: pictureAssetID, x: 0, y: 0, width: 4, height: 4,
+                createdAt: stamp(1), updatedAt: stamp(1))],
+            createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "boox")))
+
+        XCTAssertEqual(try store.missingAssetIDs(), [pictureAssetID])
+        XCTAssertNil(try store.load(pictureAssetID), "nothing should claim to hold the bytes yet")
+
+        // Owed across a restart: the page can arrive in one session and the bytes in the next.
+        let reopened = FileCouchStore(rootURL: root, deviceID: "ipad")
+        XCTAssertEqual(try reopened.missingAssetIDs(), [pictureAssetID])
+
+        try reopened.apply(pictureAssetID, .asset(CouchAsset(
+            data: pictureBytes, at: stamp(2), updatedBy: "ipad")))
+
+        XCTAssertTrue(try reopened.missingAssetIDs().isEmpty)
+        // And it landed where the page says to look for it, so the renderer finds it.
+        guard case .page(let page)? = try reopened.load(pageID) else {
+            return XCTFail("the page did not load")
+        }
+        let notebookDir = root.appendingPathComponent("notebooks/nb1", isDirectory: true)
+        let file = try XCTUnwrap(NotableImageFiles.url(
+            uri: try XCTUnwrap(readPageFile("nb1", "p1")).images.first?.uri,
+            notebookDir: notebookDir))
+        XCTAssertEqual(try Data(contentsOf: file), pictureBytes)
+        XCTAssertEqual(page.images.map(\.assetId), [pictureAssetID])
+    }
+
+    /// An image this device already holds under its own name keeps that name: renaming it to the
+    /// hash would orphan the copy the WebDAV backend syncs by filename.
+    func testBytesAlreadyHeldKeepTheNameTheyArrivedUnder() throws {
+        try placeImage(named: "holiday.png", in: "nb1", on: "p1")
+
+        guard case .page(let loaded)? = try store.load(CouchDocID.page("p1")) else {
+            return XCTFail("the page did not load")
+        }
+        try store.apply(CouchDocID.page("p1"), .page(loaded))
+
+        XCTAssertEqual(readPageFile("nb1", "p1")?.images.first?.uri, "images/holiday.png")
+        XCTAssertTrue(try store.missingAssetIDs().isEmpty)
+    }
+
+    /// The same picture on two notebooks is one asset document and two files: a notebook's images
+    /// live with it, so the download has to land in both places or one of them stays blank.
+    func testOnePictureWantedByTwoNotebooksLandsInBoth() throws {
+        for notebook in ["nb1", "nb2"] {
+            try store.apply(CouchDocID.notebook(notebook), .notebook(CouchNotebook(
+                title: notebook, pageIds: ["p-\(notebook)"], createdAt: stamp(0),
+                updatedAt: stamp(1), updatedBy: "boox")))
+            try store.apply(CouchDocID.page("p-\(notebook)"), .page(CouchPage(
+                notebookId: notebook,
+                images: [CouchImage(
+                    id: "i1", assetId: pictureAssetID, x: 0, y: 0, width: 4, height: 4,
+                    createdAt: stamp(1), updatedAt: stamp(1))],
+                createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "boox")))
+        }
+
+        XCTAssertEqual(try store.missingAssetIDs(), [pictureAssetID])
+        try store.apply(pictureAssetID, .asset(CouchAsset(
+            data: pictureBytes, at: stamp(2), updatedBy: "ipad")))
+
+        XCTAssertTrue(try store.missingAssetIDs().isEmpty)
+        for notebook in ["nb1", "nb2"] {
+            let dir = root.appendingPathComponent("notebooks/\(notebook)", isDirectory: true)
+            let uri = try XCTUnwrap(readPageFile(notebook, "p-\(notebook)")?.images.first?.uri)
+            let file = try XCTUnwrap(NotableImageFiles.url(uri: uri, notebookDir: dir))
+            XCTAssertEqual(try Data(contentsOf: file), pictureBytes, "missing in \(notebook)")
+        }
+    }
+
+    private func readPageFile(_ notebookId: String, _ pageId: String) -> PageFile? {
+        let url = root.appendingPathComponent("notebooks/\(notebookId)/pages/\(pageId).json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(PageFile.self, from: data)
+    }
+
     // MARK: Through the engine
 
     /// The scenario the adapter exists for: two devices, two directories, one server.
@@ -237,6 +368,48 @@ final class FileCouchStoreTests: XCTestCase {
             return XCTFail("the merged page did not land on disk")
         }
         XCTAssertEqual(merged.strokes.map(\.id).sorted(), ["s-boox", "s-ipad"])
+    }
+
+    /// The bug this feature fixes: the page travelled, the picture did not. An image placed on one
+    /// device must end up as bytes on the other's disk, where its renderer looks for them.
+    func testAnImageReachesTheOtherDirectoryAsBytes() async throws {
+        let server = MockCouchServer()
+        let client = CouchDBClient(transport: server, database: "notes")
+
+        let otherRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bopa-couch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: otherRoot) }
+        let booxStore = FileCouchStore(rootURL: otherRoot, deviceID: "boox")
+
+        let ipad = CouchSyncEngine(client: client, store: store, deviceID: "ipad")
+        let boox = CouchSyncEngine(client: client, store: booxStore, deviceID: "boox")
+
+        try placeImage(named: "holiday.png", in: "nb1", on: "p1")
+        await ipad.markDirty(store.allDocumentIDs())
+        let pushed = await ipad.flush()
+        XCTAssertTrue(pushed.failures.isEmpty, "push failed: \(pushed.failures)")
+        // The bytes go first, so the peer never reads a page naming an asset that is not there.
+        XCTAssertEqual(pushed.pushed.first, pictureAssetID)
+
+        let pulled = try await boox.pull()
+        XCTAssertEqual(pulled.fetchedAssets, [pictureAssetID])
+
+        let file = try XCTUnwrap(NotableImageFiles.url(
+            uri: try XCTUnwrap(
+                pageFile(in: otherRoot, notebook: "nb1", page: "p1")?.images.first?.uri),
+            notebookDir: otherRoot.appendingPathComponent("notebooks/nb1", isDirectory: true)))
+        XCTAssertEqual(try Data(contentsOf: file), pictureBytes)
+
+        // Sending the same picture again is not a conflict, it is a no-op: the id is the content.
+        await ipad.markDirty([CouchDocID.page("p1")])
+        let again = await ipad.flush()
+        XCTAssertTrue(again.failures.isEmpty, "re-push failed: \(again.failures)")
+    }
+
+    private func pageFile(in root: URL, notebook: String, page: String) -> PageFile? {
+        let url = root.appendingPathComponent("notebooks/\(notebook)/pages/\(page).json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(PageFile.self, from: data)
     }
 
     func testDidApplyChangesFiresOnWritesButNotReads() throws {

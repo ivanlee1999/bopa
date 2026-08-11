@@ -3,6 +3,29 @@ import XCTest
 
 final class CouchMappingTests: XCTestCase {
 
+    /// A notebook directory holding `images/a.png`. Page images map to content-addressed asset
+    /// ids, so the mapping is only meaningful against real bytes.
+    private var notebookDir: URL!
+    private let imageBytes = Data("not really a png, but bytes are bytes".utf8)
+    private var imageAssetID: String { CouchAssetID.forBytes(imageBytes) }
+
+    override func setUpWithError() throws {
+        notebookDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CouchMappingTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: NotableImageFiles.directory(in: notebookDir), withIntermediateDirectories: true)
+        try imageBytes.write(
+            to: NotableImageFiles.directory(in: notebookDir).appendingPathComponent("a.png"))
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: notebookDir)
+    }
+
+    private func couchPage(from file: PageFile, deviceID: String = "ipad") -> CouchPage {
+        CouchMapping.couchPage(from: file, deviceID: deviceID, notebookDir: notebookDir)
+    }
+
     private func stamp(_ second: Int) -> String {
         NotableDate.format(Date(timeIntervalSince1970: 1_770_000_000 + Double(second)))
     }
@@ -24,14 +47,15 @@ final class CouchMappingTests: XCTestCase {
 
     func testPageRoundTripsThroughTheCouchDocument() {
         let original = samplePage()
-        let document = CouchMapping.couchPage(from: original, deviceID: "ipad")
-        let restored = CouchMapping.pageFile(from: document, id: "p1", existing: original)
+        let document = couchPage(from: original)
+        let restored = CouchMapping.pageFile(
+            from: document, id: "p1", existing: original, notebookDir: notebookDir)
         XCTAssertEqual(restored, original)
     }
 
     /// Ink is the part that must survive byte-for-byte: `pointsData` is the encoded geometry.
     func testStrokeGeometrySurvivesUnchanged() {
-        let document = CouchMapping.couchPage(from: samplePage(), deviceID: "ipad")
+        let document = couchPage(from: samplePage())
         let stroke = document.strokes[0]
         XCTAssertEqual(stroke.pointsData, "U0IC")
         XCTAssertEqual(stroke.color, -16_777_216)
@@ -41,9 +65,10 @@ final class CouchMappingTests: XCTestCase {
 
     /// A pen this build has not learned must come back as itself, not be flattened to a ballpen.
     func testUnknownPenNameSurvives() {
-        var document = CouchMapping.couchPage(from: samplePage(), deviceID: "ipad")
+        var document = couchPage(from: samplePage())
         document.strokes[0].pen = "SOME_FUTURE_PEN"
-        let restored = CouchMapping.pageFile(from: document, id: "p1", existing: nil)
+        let restored = CouchMapping.pageFile(
+            from: document, id: "p1", existing: nil, notebookDir: notebookDir)
         XCTAssertEqual(restored.strokes[0].pen, "SOME_FUTURE_PEN")
     }
 
@@ -51,16 +76,18 @@ final class CouchMappingTests: XCTestCase {
     /// the reader back to the top of the page.
     func testScrollPositionIsNotTakenFromTheServer() {
         let local = samplePage()
-        var incoming = CouchMapping.couchPage(from: local, deviceID: "boox")
+        var incoming = couchPage(from: local, deviceID: "boox")
         incoming.strokes = []
-        let restored = CouchMapping.pageFile(from: incoming, id: "p1", existing: local)
+        let restored = CouchMapping.pageFile(
+            from: incoming, id: "p1", existing: local, notebookDir: notebookDir)
         XCTAssertEqual(restored.scroll, 420)
     }
 
     func testTombstonesTravelWithThePage() {
-        let document = CouchMapping.couchPage(from: samplePage(), deviceID: "ipad")
+        let document = couchPage(from: samplePage())
         XCTAssertEqual(document.deletedStrokes.map(\.id), ["gone"])
-        let restored = CouchMapping.pageFile(from: document, id: "p1", existing: nil)
+        let restored = CouchMapping.pageFile(
+            from: document, id: "p1", existing: nil, notebookDir: notebookDir)
         XCTAssertEqual(restored.deletedStrokes.map(\.id), ["gone"])
     }
 
@@ -105,7 +132,7 @@ final class CouchMappingTests: XCTestCase {
         XCTAssertEqual(page.updatedBy, "")
 
         // The device id fills in when such a file is first pushed.
-        let document = CouchMapping.couchPage(from: page, deviceID: "ipad")
+        let document = couchPage(from: page)
         XCTAssertEqual(document.updatedBy, "ipad")
     }
 }

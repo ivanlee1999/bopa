@@ -56,6 +56,7 @@ public enum CouchDocBody: Equatable, Sendable {
     case page(CouchPage)
     case notebook(CouchNotebook)
     case folder(CouchFolder)
+    case asset(CouchAsset)
     case deleted(CouchDeletedDoc)
 
     public var isDeleted: Bool {
@@ -69,8 +70,16 @@ public enum CouchDocBody: Equatable, Sendable {
         case .page(let p): return p.updatedAt
         case .notebook(let n): return n.updatedAt
         case .folder(let f): return f.updatedAt
+        case .asset(let a): return a.updatedAt
         case .deleted(let d): return d.updatedAt
         }
+    }
+
+    /// The `asset:` documents this body names. Only a page names any; the engine uses this to send
+    /// an image's bytes before the page that places it, and to fetch them when one arrives.
+    var referencedAssetIDs: [String] {
+        guard case .page(let page) = self else { return [] }
+        return page.images.compactMap(\.assetId).filter { CouchAssetID.sha256Hex(ofAssetID: $0) != nil }
     }
 }
 
@@ -84,6 +93,10 @@ extension CouchMerge {
         case (.page(let x), .page(let y)): return .page(merge(x, y))
         case (.notebook(let x), .notebook(let y)): return .notebook(merge(x, y))
         case (.folder(let x), .folder(let y)): return .folder(merge(x, y))
+
+        // Protocol §5.4: an asset's id is the hash of its bytes, so two copies of one id are the
+        // same bytes. There is nothing to reconcile.
+        case (.asset(let x), .asset): return .asset(x)
 
         case (.deleted(let x), .deleted(let y)):
             return .deleted(CouchDeletedDoc(
@@ -119,6 +132,19 @@ public protocol CouchLocalStore: Sendable {
     /// implementation keeps the local copy untouched and materializes the remote one alongside it
     /// under a new identity — protocol §6.5. Never overwrite on this path.
     func applyConflictCopy(_ documentID: String, json: Data) throws
+
+    /// `asset:<sha256>` ids a local page places but whose bytes this device does not hold — an
+    /// image the peer drew in, whose blob has still to be fetched.
+    ///
+    /// The store answers rather than the engine because only the store knows where the bytes will
+    /// go, and the answer has to survive a restart: a page can arrive in one session and its image
+    /// only be fetchable in the next.
+    func missingAssetIDs() throws -> [String]
+}
+
+public extension CouchLocalStore {
+    /// A store that holds no images has none to fetch. Saves every test double from restating it.
+    func missingAssetIDs() throws -> [String] { [] }
 }
 
 // MARK: - Engine
@@ -141,6 +167,8 @@ public actor CouchSyncEngine {
         public var pushBack: [String] = []
         public var skippedEchoes: [String] = []
         public var conflictCopies: [String] = []
+        /// Image blobs downloaded for pages that reference them (protocol §3.4).
+        public var fetchedAssets: [String] = []
         public var lastSeq: String = "0"
 
         public init() {}
@@ -230,6 +258,17 @@ public actor CouchSyncEngine {
                 state.revs[documentID] = rev
                 state.dirty.remove(documentID)
                 return didMerge ? .mergedThenPushed : .pushed
+            } catch CouchError.conflict where CouchDocID.split(documentID)?.type == CouchDocType.asset {
+                // Protocol §3.4: an asset id is the hash of its bytes, so a document already at
+                // that id *is* this upload. Merging or retrying would only re-send bytes the
+                // server demonstrably has.
+                //
+                // Its revision is read anyway, because a known revision is how the next flush
+                // tells "already uploaded" from "never sent" — without it every flush would
+                // re-offer the whole image just to be told again that it is there.
+                state.revs[documentID] = try? await client.getRaw(documentID)?.rev
+                state.dirty.remove(documentID)
+                return .pushed
             } catch CouchError.conflict {
                 didMerge = true
                 guard let remote = try await fetchBody(documentID) else {
@@ -267,6 +306,7 @@ public actor CouchSyncEngine {
         case .page(let page): return try await client.put(documentID, rev: rev, body: page)
         case .notebook(let notebook): return try await client.put(documentID, rev: rev, body: notebook)
         case .folder(let folder): return try await client.put(documentID, rev: rev, body: folder)
+        case .asset(let asset): return try await client.put(documentID, rev: rev, body: asset)
         case .deleted(let tombstone):
             return try await client.put(documentID, rev: rev, body: tombstone, deleted: true)
         }
@@ -282,7 +322,12 @@ public actor CouchSyncEngine {
 
     /// Push order: assets, then folders and pages, then notebooks. A notebook names its folder and
     /// its pages, so sending it last means a reader never sees a manifest pointing at documents
-    /// that have not landed yet.
+    /// that have not landed yet — and an image's bytes go before the page that places it, so the
+    /// peer never has a reference it cannot resolve.
+    ///
+    /// Assets are not queued by the app: nothing "edits" one, and an image placed twice is the same
+    /// document. They are derived here from the pages being sent, and skipped once the server is
+    /// known to hold them — immutability means a revision we have seen can never go stale.
     private func orderedDirty() -> [String] {
         func rank(_ documentID: String) -> Int {
             switch CouchDocID.split(documentID)?.type {
@@ -292,7 +337,15 @@ public actor CouchSyncEngine {
             default: return 3
             }
         }
-        return state.dirty.sorted { (rank($0), $0) < (rank($1), $1) }
+        var queue = state.dirty
+        for documentID in state.dirty
+        where CouchDocID.split(documentID)?.type == CouchDocType.page {
+            guard let body = try? store.load(documentID) else { continue }
+            for assetID in body.referencedAssetIDs where state.revs[assetID] == nil {
+                queue.insert(assetID)
+            }
+        }
+        return queue.sorted { (rank($0), $0) < (rank($1), $1) }
     }
 
     /// Protocol §6.6: a device whose local database was wiped looks exactly like a user who
@@ -327,6 +380,14 @@ public actor CouchSyncEngine {
             // it would also mark the document dirty and start a push ping-pong.
             if let known = state.revs[row.id], known == row.rev {
                 report.skippedEchoes.append(row.id)
+                continue
+            }
+            // An asset announces itself here without its bytes — the feed carries the document,
+            // and CouchDB renders an attachment as a stub. Downloading every image the moment it
+            // appears would also mean downloading images for notebooks this device may never open,
+            // so the bytes are fetched below, for the pages that turn out to place them.
+            if CouchDocID.split(row.id)?.type == CouchDocType.asset {
+                state.revs[row.id] = row.rev
                 continue
             }
             guard let json = row.json,
@@ -367,8 +428,37 @@ public actor CouchSyncEngine {
 
         state.lastSeq = changes.lastSeq
         report.lastSeq = changes.lastSeq
+        report.fetchedAssets = await fetchMissingAssets()
         persist()
         return report
+    }
+
+    /// Downloads the blobs local pages reference and this device does not hold yet.
+    ///
+    /// Driven by the store's own list rather than by what this pull happened to apply, so a fetch
+    /// that failed — offline halfway through, a peer that had not uploaded the bytes yet — is
+    /// simply retried on the next pull instead of needing the page to change again.
+    ///
+    /// A failure here never fails the pull: the page and its ink are already applied, and an image
+    /// that is still on its way is a picture that has not appeared yet, not lost work.
+    private func fetchMissingAssets() async -> [String] {
+        guard let wanted = try? store.missingAssetIDs(), !wanted.isEmpty else { return [] }
+        var fetched: [String] = []
+        for assetID in wanted {
+            guard let sha = CouchAssetID.sha256Hex(ofAssetID: assetID) else { continue }
+            guard let blob = try? await client.getAttachment(assetID) else { continue }
+            // The id is a promise about the bytes. Checking it costs one hash and turns a
+            // truncated or mis-served download into a retry rather than into a corrupt image that
+            // would then be re-uploaded under a name that does not describe it.
+            guard CouchAssetID.sha256Hex(blob.data) == sha else { continue }
+            let now = NotableDate.format(Date())
+            let asset = CouchAsset(
+                contentType: blob.contentType, createdAt: now, updatedAt: now,
+                updatedBy: deviceID, data: blob.data)
+            guard (try? store.apply(assetID, .asset(asset))) != nil else { continue }
+            fetched.append(assetID)
+        }
+        return fetched
     }
 
     // MARK: Plumbing

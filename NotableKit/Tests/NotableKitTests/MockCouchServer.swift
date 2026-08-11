@@ -10,6 +10,9 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         var deleted: Bool
         var json: [String: Any]
         var seq: Int
+        /// Attachment bytes, held apart from the body exactly as CouchDB holds them: a document
+        /// read never carries them, only a stub saying they exist.
+        var attachments: [String: (contentType: String, data: Data)] = [:]
     }
 
     private let lock = NSLock()
@@ -36,6 +39,8 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
             if let status = failingDocumentIDs[tail] { return HTTPResponse(status: status) }
 
             switch request.method {
+            case "GET" where components.count > 2 && components.last == CouchAssetID.blobName:
+                return attachment(components.dropLast().dropFirst().joined(separator: "/"))
             case "GET":
                 let openRevs = request.query.contains { $0.name == "open_revs" }
                 return openRevs ? openRevsAll(tail) : get(tail)
@@ -66,6 +71,16 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         let leaves = [["ok": materialize(documentID, doc)]]
         let data = (try? JSONSerialization.data(withJSONObject: leaves)) ?? Data()
         return HTTPResponse(status: 200, body: data)
+    }
+
+    /// `GET /{db}/{docid}/blob` — the only way to get an attachment's bytes back, since every
+    /// document read renders them as a stub.
+    private func attachment(_ documentID: String) -> HTTPResponse {
+        guard let blob = docs[documentID]?.attachments[CouchAssetID.blobName] else {
+            return HTTPResponse(status: 404)
+        }
+        return HTTPResponse(
+            status: 200, headers: ["Content-Type": blob.contentType], body: blob.data)
     }
 
     private func materialize(_ documentID: String, _ doc: Doc) -> [String: Any] {
@@ -109,7 +124,9 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         json.removeValue(forKey: "_rev")
         json.removeValue(forKey: "_id")
         json.removeValue(forKey: "_deleted")
-        docs[documentID] = Doc(rev: newRev, deleted: deleted, json: json, seq: seqCounter)
+        let attachments = extractAttachments(&json)
+        docs[documentID] = Doc(
+            rev: newRev, deleted: deleted, json: json, seq: seqCounter, attachments: attachments)
 
         let result: [String: Any] = ["ok": true, "id": documentID, "rev": newRev]
         // Real CouchDB answers 200 for a tombstone write and 201 for a live one. The mock said
@@ -118,6 +135,25 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         return HTTPResponse(
             status: deleted ? 200 : 201,
             body: (try? JSONSerialization.data(withJSONObject: result)) ?? Data())
+    }
+
+    /// Takes inlined attachment bytes out of the body and leaves the stub CouchDB would leave.
+    /// Modelled rather than smoothed over: a client that expected to read a blob straight out of
+    /// the change feed would pass against a mock that kept the data and fail against a server.
+    private func extractAttachments(
+        _ json: inout [String: Any]
+    ) -> [String: (contentType: String, data: Data)] {
+        guard let inlined = json["_attachments"] as? [String: [String: Any]] else { return [:] }
+        var stored: [String: (contentType: String, data: Data)] = [:]
+        var stubs: [String: [String: Any]] = [:]
+        for (name, blob) in inlined {
+            let contentType = blob["content_type"] as? String ?? "application/octet-stream"
+            let data = (blob["data"] as? String).flatMap { Data(base64Encoded: $0) } ?? Data()
+            stored[name] = (contentType, data)
+            stubs[name] = ["content_type": contentType, "stub": true, "length": data.count]
+        }
+        json["_attachments"] = stubs
+        return stored
     }
 
     private func conflict() -> HTTPResponse {
@@ -148,6 +184,12 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
     }
 
     // MARK: Test helpers
+
+    /// Forgets what has been asked for so far, for tests that assert about the requests a
+    /// *later* step makes.
+    func forgetRequests() {
+        lock.withLock { requestLog.removeAll() }
+    }
 
     func rawDocument(_ documentID: String) -> [String: Any]? {
         lock.withLock { docs[documentID]?.json }
@@ -206,6 +248,16 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
 
     func applyConflictCopy(_ documentID: String, json: Data) throws {
         lock.withLock { conflictCopies.append(documentID) }
+    }
+
+    /// Every asset a held page places whose bytes are not here — the same question the real store
+    /// answers from disk.
+    func missingAssetIDs() throws -> [String] {
+        lock.withLock {
+            Set(documents.values.flatMap(\.referencedAssetIDs))
+                .filter { documents[$0] == nil }
+                .sorted()
+        }
     }
 
     // MARK: Test helpers

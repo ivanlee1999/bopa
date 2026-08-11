@@ -107,6 +107,31 @@ Android ARGB int. `pointsData` is base64 of the SB binary encoding.
 Content-addressed, therefore immutable. A `409` on asset upload means "already present"
 and is a success, not a conflict.
 
+The id is the lowercase hex SHA-256 of the exact bytes — no framing, no normalization — so two
+devices holding the same picture agree on its name without ever comparing notes.
+
+**How the bytes travel.** The document is written in a single `PUT` with the blob inlined as
+`_attachments.blob.data`; a separate attachment write would need the document's revision first,
+turning one immutable upload into two requests that can half-fail. Reading is the other way round:
+the change feed renders an attachment as a `{"stub": true}` placeholder, so a reader that needs
+the bytes fetches them from `GET /{db}/asset:<sha>/blob`.
+
+**Assets are fetched on demand, not followed.** An `asset:` row on the feed is recorded and
+skipped. A device downloads a blob when one of its own pages places it and it does not hold the
+bytes — which keeps it from pulling every picture in the library, and makes a failed download a
+retry rather than lost work. Because the id is a promise about the content, a reader checks the
+hash of what arrives before storing it.
+
+An `images[]` entry whose `assetId` is null is an image whose content the writer does not know —
+its file is missing there. A reader must leave its own copy of that image alone rather than
+treating the null as "this image has no bytes".
+
+Where a device *keeps* the bytes is its own business and never travels. Both apps file a
+downloaded blob under its hash (bopa in the notebook's `images/`, notable in its shared images
+folder), which lets either recover the asset id from the filename in the window between a page
+arriving and its pictures being fetched — so a page pushed in that window still names the images
+it places instead of dropping references to bytes that are on their way.
+
 ## 4. Ordering primitives
 
 ```
@@ -311,7 +336,7 @@ confirmation. This protects against a wiped local database masquerading as inten
 | Write | `PUT /{db}/{docid}` with `_rev` when updating; `201` success (`200` for a tombstone), `409` conflict → §6.1 |
 | Catch-up | `GET /{db}/_changes?feed=normal&since={seq}&include_docs=true&limit=…` |
 | Live | `GET /{db}/_changes?feed=longpoll&since={seq}&include_docs=true&timeout=55000&heartbeat=15000` |
-| Attachment | `PUT /{db}/{docid}/blob?rev=…`, `GET /{db}/{docid}/blob` |
+| Attachment | `GET /{db}/{docid}/blob` — reads only; assets are written inline by the document `PUT` (§3.4) |
 
 **Reading a deleted document takes two requests.** A plain `GET` of a tombstoned document is
 `404 {"error":"not_found","reason":"deleted"}` — CouchDB does not return the body there, and the

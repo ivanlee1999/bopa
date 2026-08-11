@@ -483,6 +483,44 @@
           { "op": "pull" },
           { "op": "expectConflictCopy", "doc": "pgQ" } ] }
       ]
+    },
+
+    {
+      "name": "image-placed-on-one-device-renders-on-the-other",
+      "why": "A page's `images` array only says an image is placed there; the bytes live in a separate content-addressed `asset:` document. Without them the peer knows a picture belongs on the page and has nothing to draw — which is what both apps did until assets actually travelled. `bytes` is base64 of a 1x1 PNG, so both apps hash the same input and must arrive at the same asset id without comparing notes.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbI", "title": "Sketchbook", "pages": ["pgI"], "at": 0 },
+          { "op": "placeImage", "doc": "pgI", "image": "im1", "x": 10, "y": 20,
+            "width": 1, "height": 1, "at": 10,
+            "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+          { "op": "draw", "doc": "pgI", "strokes": ["s1"], "at": 11 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgI", "ids": ["s1"] },
+          { "op": "expectImage", "doc": "pgI", "image": "im1",
+            "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+          { "op": "draw", "doc": "pgI", "strokes": ["s2"], "at": 20 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgI", "ids": ["s1", "s2"] },
+          { "op": "expectImage", "doc": "pgI", "image": "im1",
+            "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+          { "op": "expectClean" } ] },
+        { "device": "boox", "do": [
+          { "op": "placeImage", "doc": "pgI", "image": "im2", "x": 40, "y": 50,
+            "width": 1, "height": 1, "at": 30,
+            "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "pull" },
+          { "op": "expectImage", "doc": "pgI", "image": "im1",
+            "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+          { "op": "expectImage", "doc": "pgI", "image": "im2",
+            "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" } ] }
+      ]
     }
   ]
 }

@@ -10,7 +10,12 @@ public enum CouchMapping {
 
     // MARK: Page
 
-    public static func couchPage(from file: PageFile, deviceID: String) -> CouchPage {
+    /// `notebookDir` is where this page's images live. It is needed because an image travels as a
+    /// content-addressed `asset:` reference while it is stored as a path, and only the file itself
+    /// can say which asset it is.
+    public static func couchPage(
+        from file: PageFile, deviceID: String, notebookDir: URL
+    ) -> CouchPage {
         CouchPage(
             notebookId: file.notebookId,
             title: file.title,
@@ -18,7 +23,7 @@ public enum CouchMapping {
             backgroundType: file.backgroundType,
             strokes: file.strokes.map { couchStroke(from: $0, deviceID: deviceID) },
             deletedStrokes: file.deletedStrokes,
-            images: file.images.map(couchImage(from:)),
+            images: file.images.map { couchImage(from: $0, notebookDir: notebookDir) },
             deletedImages: [],
             createdAt: file.createdAt,
             updatedAt: file.updatedAt,
@@ -28,8 +33,23 @@ public enum CouchMapping {
     /// Rebuilds the on-disk page. `scroll` is device-local and does not travel, so it is carried
     /// over from the copy already on disk rather than reset — otherwise every incoming change
     /// would scroll the reader back to the top.
-    public static func pageFile(from page: CouchPage, id: String, existing: PageFile?) -> PageFile {
-        PageFile(
+    public static func pageFile(
+        from page: CouchPage, id: String, existing: PageFile?, notebookDir: URL
+    ) -> PageFile {
+        let existingImages = Dictionary(
+            (existing?.images ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // What this page already draws, indexed by content. An image arriving from the peer names
+        // bytes, not a filename, so if those bytes are already here — under whatever name they
+        // were imported with — the reference points at the file that has them rather than at one
+        // nothing will ever write.
+        var held: [String: String] = [:]
+        for image in existing?.images ?? [] {
+            guard let uri = image.uri,
+                  let assetID = NotableImageFiles.assetID(forURI: uri, notebookDir: notebookDir)
+            else { continue }
+            held[assetID] = uri
+        }
+        return PageFile(
             id: id,
             notebookId: page.notebookId,
             title: page.title,
@@ -40,7 +60,11 @@ public enum CouchMapping {
             createdAt: page.createdAt,
             updatedAt: page.updatedAt,
             strokes: page.strokes.map(strokeDTO(from:)),
-            images: page.images.map(imageDTO(from:)),
+            images: page.images.map {
+                imageDTO(
+                    from: $0, existing: existingImages[$0.id],
+                    heldAt: $0.assetId.flatMap { held[$0] })
+            },
             deletedStrokes: page.deletedStrokes,
             updatedBy: page.updatedBy)
     }
@@ -67,17 +91,34 @@ public enum CouchMapping {
         return dto
     }
 
-    static func couchImage(from dto: ImageDTO) -> CouchImage {
+    static func couchImage(from dto: ImageDTO, notebookDir: URL) -> CouchImage {
         CouchImage(
-            id: dto.id, assetId: dto.uri, x: dto.x, y: dto.y,
+            id: dto.id,
+            assetId: NotableImageFiles.assetID(forURI: dto.uri, notebookDir: notebookDir),
+            x: dto.x, y: dto.y,
             width: dto.width, height: dto.height,
             createdAt: dto.createdAt, updatedAt: dto.updatedAt)
     }
 
-    static func imageDTO(from image: CouchImage) -> ImageDTO {
-        ImageDTO(
+    /// The local file an incoming image should be drawn from. `heldAt` is where this device
+    /// already keeps those exact bytes, if it does.
+    ///
+    /// A file already here keeps its name — that is the image the user imported over WebDAV, or
+    /// placed on this device, and renaming it to its hash would orphan it for the other backend.
+    /// Anything else is filed under the hash, which is where the downloader will put the bytes.
+    static func imageDTO(from image: CouchImage, existing: ImageDTO?, heldAt: String?) -> ImageDTO {
+        let uri: String?
+        if let assetID = image.assetId, CouchAssetID.sha256Hex(ofAssetID: assetID) != nil {
+            uri = heldAt ?? NotableImageFiles.localURI(forAssetID: assetID)
+        } else {
+            // The peer named no asset — it has not hashed its copy, or the document predates
+            // assets travelling at all. That says nothing about the file this device holds, so
+            // whatever is here keeps its place rather than being forgotten.
+            uri = existing?.uri ?? image.assetId
+        }
+        return ImageDTO(
             id: image.id, x: image.x, y: image.y, width: image.width, height: image.height,
-            uri: image.assetId, createdAt: image.createdAt, updatedAt: image.updatedAt)
+            uri: uri, createdAt: image.createdAt, updatedAt: image.updatedAt)
     }
 
     // MARK: Notebook

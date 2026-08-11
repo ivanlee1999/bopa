@@ -60,19 +60,12 @@ enum BackgroundRenderer {
 
     // MARK: - Page images
 
-    /// Resolves an ImageDTO uri to a file URL. Relative uris ("images/abc.jpg") resolve
-    /// under the notebook dir as-is; device-absolute Android paths (which some synced
-    /// pages carry) resolve by basename under the notebook's `images/` dir.
+    /// Resolves an ImageDTO uri to a file URL. The rule lives in NotableKit because sync needs the
+    /// same one: it turns these files into the content-addressed assets that carry an image to the
+    /// other device, and a second copy of the rule would show up as an image that syncs but never
+    /// appears.
     static func imageFileURL(uri: String?, notebookDir: URL) -> URL? {
-        guard let uri, !uri.isEmpty else { return nil }
-        if uri.hasPrefix("/") {
-            let basename = (uri as NSString).lastPathComponent
-            guard !basename.isEmpty, basename != "/" else { return nil }
-            return notebookDir
-                .appendingPathComponent("images", isDirectory: true)
-                .appendingPathComponent(basename)
-        }
-        return notebookDir.appendingPathComponent(uri)
+        NotableImageFiles.url(uri: uri, notebookDir: notebookDir)
     }
 
     /// Decodes a page's images from disk, keyed to their page-space frames.
