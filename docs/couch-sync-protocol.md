@@ -78,6 +78,7 @@ Deletion: `PUT` the document with `"_deleted": true` while retaining `type`, `de
 ```json
 { "_id": "page:<uuid>", "type": "page", "schema": 1,
   "notebookId": "<uuid>",
+  "title": "Shopping list",
   "background": "blank", "backgroundType": "native",
   "strokes": [ { "id": "<uuid>", "createdAt": "…", "updatedAt": "…", "deviceId": "boox",
                  "pen": "FOUNTAIN", "color": -16777216, "size": 4.48, "maxPressure": 1,
@@ -112,7 +113,7 @@ and is a success, not a conflict.
 millis(ts)         = parsed epoch millis, or Long.MIN_VALUE if unparseable
 scalarKey(doc)     = the doc's scalar fields only, rendered as key-sorted minimal JSON:
                      type, schema, createdAt, updatedAt, updatedBy, and per type —
-                     page:     notebookId, background, backgroundType
+                     page:     notebookId, title, background, backgroundType
                      notebook: title, parentFolderId, defaultBackground, defaultBackgroundType
                      folder:   title, parentFolderId
                      Absent/null values render as `null`.

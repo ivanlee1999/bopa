@@ -239,6 +239,58 @@
       }
     },
     {
+      "name": "page-rename-lww",
+      "kind": "page",
+      "why": "A page named on one device keeps that name on the other: the later write wins. An unnamed page is null, not an empty string, so 'never named' stays distinct from 'named empty'.",
+      "a": {
+        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "title": null,
+        "background": "blank", "backgroundType": "native",
+        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "title": "Shopping list",
+        "background": "blank", "backgroundType": "native",
+        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "title": "Shopping list",
+        "background": "blank", "backgroundType": "native",
+        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-rename-cleared-lww",
+      "kind": "page",
+      "why": "Clearing a page's name is an edit like any other, so the later write wins even though its value is null — a name removed on one device does not come back from the other.",
+      "a": {
+        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "title": "Shopping list",
+        "background": "blank", "backgroundType": "native",
+        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+      },
+      "b": {
+        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "title": null,
+        "background": "blank", "backgroundType": "native",
+        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:09:00Z", "updatedBy": "ipad"
+      },
+      "expected": {
+        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "title": null,
+        "background": "blank", "backgroundType": "native",
+        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:09:00Z", "updatedBy": "ipad"
+      }
+    },
+    {
       "name": "page-identical-inputs",
       "kind": "page",
       "why": "The common case after a settled sync: merging a document with itself changes nothing.",

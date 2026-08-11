@@ -13,6 +13,7 @@ public enum CouchMapping {
     public static func couchPage(from file: PageFile, deviceID: String) -> CouchPage {
         CouchPage(
             notebookId: file.notebookId,
+            title: file.title,
             background: file.background,
             backgroundType: file.backgroundType,
             strokes: file.strokes.map { couchStroke(from: $0, deviceID: deviceID) },
@@ -31,6 +32,7 @@ public enum CouchMapping {
         PageFile(
             id: id,
             notebookId: page.notebookId,
+            title: page.title,
             background: page.background,
             backgroundType: page.backgroundType,
             parentFolderId: existing?.parentFolderId,

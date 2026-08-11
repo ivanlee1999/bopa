@@ -281,6 +281,28 @@ final class NotebookStoreTests: XCTestCase {
             "saving a page dropped a page the sync engine had just added")
     }
 
+    /// bopa cannot name a page — the BOOX can. So an editor that has been holding a page since
+    /// before the rename carries a stale `title`, and writing it back would undo the rename. The
+    /// name is data this app only ever passes through; an autosave must not be able to destroy it.
+    func testSavePageKeepsATitleThatArrivedWhileThePageWasOpen() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        let page = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        XCTAssertNil(page.title, "precondition: a new page starts unnamed")
+
+        // A sync lands the BOOX's rename while the editor still holds the unnamed copy.
+        var renamed = page
+        renamed.title = "Shopping list"
+        try writePageDirectly(renamed, notebookId: notebook.notebookId)
+
+        try store.savePage(page)
+
+        let onDisk = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        XCTAssertEqual(
+            onDisk.title, "Shopping list",
+            "an autosave erased a page name the sync engine had just written")
+    }
+
     func testAddPageBuildsOnTheManifestFromDisk() throws {
         let notebook = try store.createNotebook(title: "Notes")
         var downloaded = notebook
@@ -299,6 +321,15 @@ final class NotebookStoreTests: XCTestCase {
         encoder.outputFormatting = [.withoutEscapingSlashes]
         try encoder.encode(manifest).write(
             to: rootURL.appendingPathComponent("notebooks/\(manifest.notebookId)/manifest.json"),
+            options: .atomic)
+    }
+
+    /// Writes straight to disk, bypassing the store — standing in for the sync engine.
+    private func writePageDirectly(_ page: PageFile, notebookId: String) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        try encoder.encode(page).write(
+            to: rootURL.appendingPathComponent("notebooks/\(notebookId)/pages/\(page.id).json"),
             options: .atomic)
     }
 

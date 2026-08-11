@@ -183,7 +183,7 @@ public struct CouchImage: Codable, Equatable, Sendable {
 
 public struct CouchPage: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
-        case type, schema, notebookId, background, backgroundType
+        case type, schema, notebookId, title, background, backgroundType
         case strokes, deletedStrokes, images, deletedImages
         case createdAt, updatedAt, updatedBy
     }
@@ -191,6 +191,12 @@ public struct CouchPage: Codable, Equatable, Sendable {
     public var type: String
     public var schema: Int
     public var notebookId: String?
+    /// The page's name, or nil for a page nobody has named.
+    ///
+    /// bopa has no UI for setting this — the BOOX does. It is carried anyway, because dropping a
+    /// field this side does not understand would erase the peer's work on the next merge; the same
+    /// reason `CouchMapping.strokeDTO` preserves an unrecognized pen name.
+    public var title: String?
     public var background: String
     public var backgroundType: String
     public var strokes: [CouchStroke]
@@ -203,7 +209,8 @@ public struct CouchPage: Codable, Equatable, Sendable {
 
     public init(
         type: String = CouchDocType.page, schema: Int = couchSchemaVersion,
-        notebookId: String?, background: String = "blank", backgroundType: String = "native",
+        notebookId: String?, title: String? = nil,
+        background: String = "blank", backgroundType: String = "native",
         strokes: [CouchStroke] = [], deletedStrokes: [CouchTombstone] = [],
         images: [CouchImage] = [], deletedImages: [CouchTombstone] = [],
         createdAt: String, updatedAt: String, updatedBy: String
@@ -211,6 +218,7 @@ public struct CouchPage: Codable, Equatable, Sendable {
         self.type = type
         self.schema = schema
         self.notebookId = notebookId
+        self.title = title
         self.background = background
         self.backgroundType = backgroundType
         self.strokes = strokes
@@ -227,6 +235,7 @@ public struct CouchPage: Codable, Equatable, Sendable {
         type = try c.decodeIfPresent(String.self, forKey: .type) ?? CouchDocType.page
         schema = try c.decodeIfPresent(Int.self, forKey: .schema) ?? couchSchemaVersion
         notebookId = try c.decodeIfPresent(String.self, forKey: .notebookId)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
         background = try c.decodeIfPresent(String.self, forKey: .background) ?? "blank"
         backgroundType = try c.decodeIfPresent(String.self, forKey: .backgroundType) ?? "native"
         strokes = try c.decodeIfPresent([CouchStroke].self, forKey: .strokes) ?? []
@@ -243,6 +252,7 @@ public struct CouchPage: Codable, Equatable, Sendable {
         try c.encode(type, forKey: .type)
         try c.encode(schema, forKey: .schema)
         try c.encode(notebookId, forKey: .notebookId)
+        try c.encode(title, forKey: .title)
         try c.encode(background, forKey: .background)
         try c.encode(backgroundType, forKey: .backgroundType)
         try c.encode(strokes, forKey: .strokes)

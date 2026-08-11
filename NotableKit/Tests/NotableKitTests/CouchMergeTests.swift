@@ -144,8 +144,12 @@ final class CouchMergePropertyTests: XCTestCase {
         for _ in 0..<rng.next(4) {
             tombs.append(CouchTombstone(id: "s\(rng.next(8))", deletedAt: stamp(rng.next(30))))
         }
+        // Sometimes nil: an unnamed page is the common case, and it has to survive a merge
+        // against a named one without either side depending on argument order.
+        let titles: [String?] = [nil, "page 0", "page 1", "page 2"]
         return CouchPage(
-            notebookId: "nb", background: rng.next(2) == 0 ? "blank" : "grid",
+            notebookId: "nb", title: titles[rng.next(titles.count)],
+            background: rng.next(2) == 0 ? "blank" : "grid",
             strokes: strokes, deletedStrokes: tombs,
             createdAt: stamp(0), updatedAt: stamp(rng.next(60)), updatedBy: deviceId)
     }
@@ -176,6 +180,65 @@ final class CouchMergePropertyTests: XCTestCase {
             let again = CouchMerge.merge(merged, a)
             XCTAssertTrue(again.strokes.allSatisfy { !removed.contains($0.id) })
         }
+    }
+
+    /// A page's name follows the same last-writer-wins rule as its other scalars, in both argument
+    /// orders. bopa cannot set a title, but it must not lose one the BOOX set — including when the
+    /// later write is what *clears* the name.
+    func testLaterPageRenameWinsInEitherOrder() {
+        let unnamed = CouchPage(
+            notebookId: "nb", title: nil,
+            createdAt: "2026-08-10T06:00:00Z", updatedAt: "2026-08-10T06:00:00Z",
+            updatedBy: "boox")
+        var renamed = unnamed
+        renamed.title = "Shopping list"
+        renamed.updatedAt = "2026-08-10T06:05:00Z"
+        renamed.updatedBy = "ipad"
+
+        XCTAssertEqual(CouchMerge.merge(unnamed, renamed).title, "Shopping list")
+        XCTAssertEqual(CouchMerge.merge(renamed, unnamed).title, "Shopping list")
+
+        var cleared = renamed
+        cleared.title = nil
+        cleared.updatedAt = "2026-08-10T06:10:00Z"
+        cleared.updatedBy = "boox"
+
+        XCTAssertNil(CouchMerge.merge(renamed, cleared).title)
+        XCTAssertNil(CouchMerge.merge(cleared, renamed).title)
+    }
+
+    /// The tiebreak ends in `a.scalarKey >= b.scalarKey`, so any scalar the merge picks but the key
+    /// omits makes both argument orders "win" and the result depend on which document came first.
+    /// Two pages identical except for their name, written in the same millisecond by the same
+    /// device, are the case that catches it.
+    func testPagesDifferingOnlyByTitleStillMergeCommutatively() {
+        let one = CouchPage(
+            notebookId: "nb", title: "Groceries",
+            createdAt: "2026-08-10T06:00:00Z", updatedAt: "2026-08-10T06:00:00Z",
+            updatedBy: "boox")
+        var other = one
+        other.title = "Shopping list"
+
+        XCTAssertEqual(CouchMerge.merge(one, other), CouchMerge.merge(other, one))
+    }
+
+    /// bopa has no UI for page names, which is exactly why this matters: a document decoded and
+    /// re-encoded here must come back carrying the title, or every sync through this device would
+    /// quietly erase a name the BOOX set.
+    func testPageTitleSurvivesDecodeAndReEncode() throws {
+        let json = Data("""
+        {"type":"page","schema":1,"notebookId":"nb","title":"Shopping list",
+         "background":"blank","backgroundType":"native","strokes":[],"deletedStrokes":[],
+         "images":[],"deletedImages":[],"createdAt":"2026-08-10T06:00:00Z",
+         "updatedAt":"2026-08-10T06:00:00Z","updatedBy":"boox"}
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(CouchPage.self, from: json)
+        XCTAssertEqual(decoded.title, "Shopping list")
+
+        let round = try JSONDecoder().decode(
+            CouchPage.self, from: try JSONEncoder().encode(decoded))
+        XCTAssertEqual(round.title, "Shopping list")
     }
 
     func testTimestampsAreComparedChronologicallyNotLexicographically() {
