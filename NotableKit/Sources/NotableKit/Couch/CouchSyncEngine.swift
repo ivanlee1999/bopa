@@ -454,13 +454,18 @@ public actor CouchSyncEngine {
         // A longpoll is never paged: it is one wait for one notification, and the batch that
         // follows is whatever changed while it waited.
         repeat {
+            let asked = state.lastSeq
             let changes = try await client.changes(
-                since: state.lastSeq, longpoll: longpoll, timeoutMs: timeoutMs,
+                since: asked, longpoll: longpoll, timeoutMs: timeoutMs,
                 limit: longpoll ? nil : Self.catchUpBatchSize)
             try await apply(changes, into: &report)
             // The server is caught up when it returns a short batch; a full one may have more
             // behind it. `lastSeq` moved, so the next request asks for what follows.
             guard !longpoll, changes.rows.count >= Self.catchUpBatchSize else { break }
+            // A full batch that did not move the checkpoint would ask the same question forever.
+            // No CouchDB does that, which is exactly why it is worth refusing to loop on it here
+            // rather than finding out on a device.
+            guard state.lastSeq != asked else { break }
         } while !Task.isCancelled
 
         report.fetchedAssets = await fetchMissingAssets()
