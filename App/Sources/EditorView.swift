@@ -20,12 +20,21 @@ struct EditorView: View {
     @State private var drawing = PKDrawing()
     @State private var pageBackground: UIImage?
     @State private var pageImages: [PageImage] = []
+    /// The ids of the strokes the canvas is currently showing — what was loaded into it, or what
+    /// was last exported out of it. Two jobs: it is the baseline `savePage` derives tombstones
+    /// from, and it is how "the file holds ink the canvas does not" is decided.
+    @State private var canvasStrokeIDs: Set<String> = []
+    /// Bumped whenever `drawing` is replaced from outside the canvas, which is the only cue
+    /// `EditorCanvasView` has to reload it without a page switch.
+    @State private var contentRevision = 0
+    /// Sync wrote something and the canvas has not caught up. Survives until it is safe to act on.
+    @State private var remoteInkPending = false
     @State private var dirty = false
     @State private var saveTask: Task<Void, Never>?
     @State private var loadError: String?
     @State private var saveError: String?
     @StateObject private var undoController = CanvasUndoController()
-    @State private var scrollState = CanvasScrollState()
+    @State private var liveState = CanvasLiveState()
     @State private var viewport = CanvasViewportController()
 
     private var manifest: NotebookManifest? { store.manifest(id: notebookId) }
@@ -66,6 +75,15 @@ struct EditorView: View {
             // last stroke loses it.
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { saveNow() }
+            }
+            // The CouchDB pull loop rewrites page files with no regard for what is open, so the
+            // editor has to hear about it or it would keep drawing on a stale copy.
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: NotebookStore.didApplyRemoteChangesNotification)
+            ) { _ in
+                remoteInkPending = true
+                foldInRemoteInk()
             }
             .alert(
                 "Couldn’t save this page", isPresented: .constant(saveError != nil),
@@ -220,6 +238,7 @@ struct EditorView: View {
             } else {
                 EditorCanvasView(
                     pageId: pageId,
+                    contentRevision: contentRevision,
                     background: pageBackground,
                     images: pageImages,
                     pageScroll: page?.scroll ?? 0,
@@ -228,9 +247,10 @@ struct EditorView: View {
                     config: handwriting.config,
                     toolSelection: toolSelection,
                     undoController: undoController,
-                    scrollState: scrollState,
+                    liveState: liveState,
                     viewport: viewport,
-                    onChanged: scheduleSave)
+                    onChanged: scheduleSave,
+                    onIdle: foldInRemoteInk)
 
                 if canChangeTemplate {
                     Kicker("\(pageTemplate.displayName) · native", color: Modernist.neutral600)
@@ -266,13 +286,40 @@ struct EditorView: View {
                 notebookDir: notebookDir,
                 storeRoot: store.rootURL)
             pageImages = BackgroundRenderer.pageImages(for: loaded, notebookDir: notebookDir)
+            canvasStrokeIDs = Set(loaded.strokes.map(\.id))
+            contentRevision += 1
             // Seed with the persisted offset so a save before any scroll preserves it.
-            scrollState.pageY = CGFloat(max(loaded.scroll, 0))
+            liveState.pageY = CGFloat(max(loaded.scroll, 0))
             dirty = false
             loadError = nil
         } catch {
             loadError = String(describing: error)
         }
+    }
+
+    /// Puts ink sync wrote underneath the editor onto the canvas.
+    ///
+    /// Never while a stroke is being drawn: replacing `drawing` reloads the canvas, and that
+    /// cancels the stroke in flight — losing exactly the kind of ink this exists to protect. The
+    /// flag keeps until the pencil lifts, which `onIdle` reports.
+    ///
+    /// The reconciling itself is `savePage`'s: flushing first leaves the file holding the union of
+    /// both copies, so this only has to decide whether the canvas is now out of date and reload.
+    private func foldInRemoteInk() {
+        guard remoteInkPending, !liveState.isDrawing, let pageId else { return }
+        saveNow()
+        guard let onDisk = try? store.loadPage(notebookId: notebookId, pageId: pageId) else {
+            return  // a torn or missing read is not a reason to drop what is on the canvas
+        }
+        remoteInkPending = false
+
+        let erased = Set(onDisk.deletedStrokes.map(\.id))
+        let arrived = onDisk.strokes.contains { !canvasStrokeIDs.contains($0.id) }
+        let erasedElsewhere = canvasStrokeIDs.contains { erased.contains($0) }
+        // Most applied documents are some other page, or this page's own echo. Reloading for those
+        // would throw away the undo stack for nothing.
+        guard arrived || erasedElsewhere else { return }
+        open(pageId: pageId)
     }
 
     private func addPage() {
@@ -314,15 +361,22 @@ struct EditorView: View {
     private func saveNow() {
         saveTask?.cancel()
         guard var page else { return }
-        let scroll = max(0, Int(scrollState.pageY.rounded()))
+        let scroll = max(0, Int(liveState.pageY.rounded()))
         guard dirty || scroll != page.scroll else { return }
+        // What the canvas held going into this save. `savePage` needs it to tell ink the user
+        // erased from ink that arrived from the BOOX while this page was open — the file cannot
+        // answer that, because sync may have rewritten it since.
+        let baseline = canvasStrokeIDs
         // `page.strokes` is the set we last loaded or wrote, so identity chains forward across
         // repeated saves: an untouched stroke keeps its id and its exact bytes.
         page.strokes = PencilKitBridge.strokeDTOs(from: drawing, source: page.strokes)
         page.scroll = scroll
+        canvasStrokeIDs = Set(page.strokes.map(\.id))
         self.page = page
         do {
-            try store.savePage(page)
+            // Take back what was written, not what was offered: it may carry strokes that landed
+            // underneath us, and the next save's tombstones are derived against it.
+            self.page = try store.savePage(page, baselineStrokeIDs: baseline)
             dirty = false
         } catch {
             // Leave `dirty` set so the next flush retries. Clearing it on a failed write — which
@@ -332,12 +386,15 @@ struct EditorView: View {
     }
 }
 
-/// Reference box for the canvas's current scroll offset in unzoomed page space, written
-/// by the canvas coordinator on every scroll and read at save time. A plain class (not
-/// observable) on purpose: scrolling must not trigger SwiftUI re-renders.
+/// Reference box for what the canvas is doing right now, written by the canvas coordinator and
+/// read by the editor. A plain class (not observable) on purpose: neither scrolling nor drawing
+/// may trigger SwiftUI re-renders.
 @MainActor
-final class CanvasScrollState {
+final class CanvasLiveState {
+    /// Current scroll offset in unzoomed page space, read at save time.
     var pageY: CGFloat = 0
+    /// Whether a stroke is being drawn. Reloading the canvas while one is in flight cancels it.
+    var isDrawing = false
 }
 
 /// Lets the SwiftUI chrome drive the canvas's zoom. Attached the same way the undo
@@ -406,6 +463,10 @@ struct EditorCanvasView: UIViewRepresentable {
     /// `PKCanvasView.drawing` cancels any in-flight stroke, and PKDrawing's equality is
     /// identity-like, so a value-compare guard cannot prevent that (found by UI-test bisect).
     var pageId: String?
+    /// Bumped by the editor whenever it replaces `drawing` behind the canvas's back — a page
+    /// (re)load, including one caused by sync writing ink underneath an open page. The same
+    /// reload rules apply as for `pageId`, which is why it is a second key rather than a flag.
+    var contentRevision: Int = 0
     var background: UIImage?
     var images: [PageImage] = []
     /// Persisted unzoomed page-space y offset, applied on page switches.
@@ -418,9 +479,11 @@ struct EditorCanvasView: UIViewRepresentable {
     /// else is mirrored back onto it rather than competing with it.
     var toolSelection: ToolSelection = ToolSelection()
     var undoController: CanvasUndoController = CanvasUndoController()
-    var scrollState: CanvasScrollState = CanvasScrollState()
+    var liveState: CanvasLiveState = CanvasLiveState()
     var viewport: CanvasViewportController = CanvasViewportController()
     var onChanged: () -> Void
+    /// The pencil lifted. The editor uses it to retry work it would not do mid-stroke.
+    var onIdle: () -> Void = {}
 
     /// Logical page width shared with the BOOX (Notable uses the device's pixel width;
     /// strokes beyond this width would clip on the tablet).
@@ -474,11 +537,15 @@ struct EditorCanvasView: UIViewRepresentable {
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)
         container.setImages(images)
-        // Load canvas content ONLY on page switches (found by UI-test bisect): assigning
-        // canvas.drawing on ordinary renders cancels in-flight strokes, and PKDrawing
-        // equality is identity-like, so a != guard cannot prevent that.
-        guard context.coordinator.loadedPageId != pageId else { return }
+        // Load canvas content ONLY when the editor says the drawing was replaced — a page switch
+        // or a reload (found by UI-test bisect): assigning canvas.drawing on ordinary renders
+        // cancels in-flight strokes, and PKDrawing equality is identity-like, so a != guard cannot
+        // prevent that. The editor only bumps `contentRevision` when no stroke is in flight.
+        guard context.coordinator.loadedPageId != pageId
+            || context.coordinator.loadedRevision != contentRevision
+        else { return }
         context.coordinator.loadedPageId = pageId
+        context.coordinator.loadedRevision = contentRevision
         context.coordinator.programmaticUpdate = true
         canvas.drawing = drawing
         context.coordinator.programmaticUpdate = false
@@ -509,6 +576,8 @@ struct EditorCanvasView: UIViewRepresentable {
         let parent: EditorCanvasView
         var programmaticUpdate = false
         var loadedPageId: String?
+        /// Last `contentRevision` pushed onto the canvas. `-1` means "nothing loaded yet".
+        var loadedRevision = -1
         weak var container: CanvasContainerView?
         var toolSelection: ToolSelection?
         /// Last rail revision pushed onto the canvas. `-1` means "nothing applied yet".
@@ -664,15 +733,26 @@ struct EditorCanvasView: UIViewRepresentable {
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             container?.updateContentGeometry()
-            parent.scrollState.pageY =
+            parent.liveState.pageY =
                 scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
         }
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             container?.canvasZoomDidChange()
             container?.updateContentGeometry()
-            parent.scrollState.pageY =
+            parent.liveState.pageY =
                 scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
+        }
+
+        // Bracketing every stroke: the editor must not reload the canvas between these two, and
+        // wants to know the moment it may.
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+            parent.liveState.isDrawing = true
+        }
+
+        func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            parent.liveState.isDrawing = false
+            parent.onIdle()
         }
 
         init(_ parent: EditorCanvasView) {
