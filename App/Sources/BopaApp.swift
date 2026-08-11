@@ -13,16 +13,21 @@ struct BopaApp: App {
             if CommandLine.arguments.contains("--bare-canvas") {
                 DiagnosticHost()
             } else {
+                // No NavigationStack: the library is two plain columns and the editor is
+                // presented full screen, so nothing here pushes.
                 ZStack(alignment: .top) {
-                    NavigationStack {
-                        LibraryView()
-                    }
+                    LibraryView()
                     SyncStatusCapsule()
                 }
                 .environmentObject(store)
                 .environmentObject(syncCoordinator)
                 .environmentObject(handwriting)
                 .environmentObject(backendHost)
+                .tint(Modernist.ink)
+                // The Modernist tokens describe one ground — a light one. There is no dark
+                // variant to switch to, and half of the chrome inverting while the paper
+                // stays paper would be worse than not following the system at all.
+                .preferredColorScheme(.light)
                 .task {
                     // Attached here rather than in init: SwiftUI creates the scene's state
                     // objects independently, so the host cannot take them as constructor

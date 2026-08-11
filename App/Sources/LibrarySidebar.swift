@@ -58,36 +58,38 @@ struct LibrarySidebar: View {
     @State private var serverConfigured = SyncSettings.isServerConfigured
 
     var body: some View {
-        List(selection: $selection) {
-            Section {
-                row(
-                    title: "All Notes", systemImage: "tray.full",
-                    count: store.totalNotebookCount, provenance: .unknown)
-                    .tag(LibrarySelection.root)
-                    .accessibilityIdentifier("sidebar.allNotes")
-            }
+        VStack(spacing: 0) {
+            masthead
+            ScrollView {
+                VStack(spacing: 0) {
+                    row(
+                        tag: .root, title: "All Notes", systemImage: "tray.full",
+                        count: store.totalNotebookCount, provenance: .unknown)
+                        .accessibilityIdentifier("sidebar.allNotes")
 
-            let tree = FolderNode.tree(from: store)
-            if !tree.isEmpty {
-                Section("Folders") {
-                    OutlineGroup(tree, children: \.children) { node in
-                        row(
-                            title: node.title, systemImage: "folder",
-                            count: node.itemCount, provenance: node.provenance)
-                            .tag(LibrarySelection.folder(node.id))
+                    let tree = FolderNode.tree(from: store)
+                    if !tree.isEmpty {
+                        SectionHeading("Folders")
+                            .padding(.horizontal, 20)
+                            .padding(.top, 18)
+                            .padding(.bottom, 4)
+                        // Plain buttons rather than `List(selection:)`: outside a
+                        // NavigationSplitView a list's single selection only responds in
+                        // edit mode, and its highlight is a rounded system capsule.
+                        OutlineGroup(tree, children: \.children) { node in
+                            row(
+                                tag: .folder(node.id), title: node.title,
+                                systemImage: "folder",
+                                count: node.itemCount, provenance: node.provenance)
+                        }
                     }
                 }
+                .padding(.bottom, 16)
             }
-
-        }
-        .listStyle(.sidebar)
-        .navigationTitle("bopa")
-        // Outside the List, not Sections in it. The legend rows are not tappable, and a real
-        // control sitting among selectable folder rows would be selectable too — the footer is
-        // where both belong.
-        .safeAreaInset(edge: .bottom) {
             footer
         }
+        .background(Modernist.paper)
+        .tint(Modernist.ink)
         .onReceive(NotificationCenter.default.publisher(
             for: SyncSettings.didChangeNotification)
         ) { _ in
@@ -95,25 +97,55 @@ struct LibrarySidebar: View {
         }
     }
 
-    private func row(
-        title: String, systemImage: String, count: Int, provenance: SyncProvenance
-    ) -> some View {
-        HStack(spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            ProvenanceBadge(provenance: provenance, size: 11)
-            Text("\(count)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("\(count) items")
+    /// The wordmark, on the design's status strip: a label and a rule, nothing else.
+    private var masthead: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Kicker("bopa", color: Modernist.ink)
+            ModernistRule(heavy: true)
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .background(Modernist.paper)
+    }
+
+    private func row(
+        tag: LibrarySelection, title: String, systemImage: String, count: Int,
+        provenance: SyncProvenance
+    ) -> some View {
+        let selected = selection == tag
+        return Button {
+            selection = tag
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14))
+                    .frame(width: 18)
+                Text(title)
+                    .font(Modernist.font(14, .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                ProvenanceBadge(
+                    provenance: provenance, size: 11,
+                    color: selected ? Modernist.paper : nil)
+                Text("\(count)")
+                    .font(Modernist.font(11).monospacedDigit())
+                    .accessibilityLabel("\(count) items")
+            }
+            .foregroundStyle(selected ? Modernist.paper : Modernist.ink)
+            .padding(.horizontal, 20)
+            .frame(height: 40)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? Modernist.ink : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// Pinned under the tree: the sync control, then what the badges mean.
     private var footer: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Divider()
+            ModernistRule(heavy: true)
             syncControl
             if store.hasSyncedAtLeastOnce {
                 legend
@@ -123,7 +155,7 @@ struct LibrarySidebar: View {
         .padding(.horizontal, 20)
         .padding(.top, 4)
         .padding(.bottom, 10)
-        .background(.bar)
+        .background(Modernist.paper)
     }
 
     /// Manual sync, next to the tree it refreshes rather than buried in the settings sheet.
@@ -143,9 +175,19 @@ struct LibrarySidebar: View {
                         Image(systemName: "arrow.triangle.2.circlepath")
                         Text("Sync now")
                     }
+                    // Flush left, per the system: a button wider than its label starts the
+                    // text at the left padding edge rather than centring it.
+                    Spacer(minLength: 0)
                 }
-                .font(.subheadline.weight(.medium))
+                .font(Modernist.font(13, .bold))
+                .padding(.horizontal, 10)
+                .frame(height: 36)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(Rectangle().stroke(Modernist.ink, lineWidth: Modernist.ruleHair))
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(serverConfigured ? Modernist.ink : Modernist.neutral500)
             .disabled(!serverConfigured || coordinator.isSyncing)
             .accessibilityIdentifier("sidebar.syncNow")
 
@@ -153,8 +195,8 @@ struct LibrarySidebar: View {
             // gone by the time you look for it. An unconfigured server explains the dead button.
             if let detail = syncDetail {
                 Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Modernist.font(11))
+                    .foregroundStyle(Modernist.neutral700)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -182,8 +224,8 @@ struct LibrarySidebar: View {
             ProvenanceBadge(provenance: provenance, size: 11)
                 .accessibilityHidden(true)
             Text(text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Modernist.font(11))
+                .foregroundStyle(Modernist.neutral700)
         }
     }
 }
