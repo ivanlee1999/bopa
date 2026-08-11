@@ -212,20 +212,26 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     /// alongside under a fresh identity, so a document this build cannot understand costs the
     /// user a duplicate rather than their work.
     public func applyConflictCopy(_ documentID: String, json: Data) throws {
-        guard let (type, _) = CouchDocID.split(documentID), type == CouchDocType.page ||
-                type == CouchDocType.notebook
-        else { return }
+        // Every shape gets a copy, folders included. §6.5's promise is that nothing is discarded,
+        // and a folder quietly dropped here is a folder the user never learns went missing.
+        guard CouchDocID.split(documentID) != nil else { return }
 
         let stamp = ISO8601DateFormatter().string(from: Date()).prefix(10)
-        let newNotebookId = UUID().uuidString.lowercased()
-        let newPageId = UUID().uuidString.lowercased()
+        // Derived from the document and its bytes rather than minted fresh, so re-reading the same
+        // unreadable document produces the same copy instead of another one. The feed is replayed
+        // from the start whenever a checkpoint is lost — which this design treats as safe — and
+        // fresh ids turned every replay into a fresh set of duplicates in the library. Content is
+        // part of the name because a *new* unreadable revision genuinely is a different thing.
+        let identity = CouchAssetID.sha256Hex(Data(documentID.utf8) + json)
+        let newNotebookId = uuidShaped(identity.prefix(32))
+        let newPageId = uuidShaped(identity.suffix(32))
         let now = NotableDate.format(Date())
 
         // Whatever could not be decoded is preserved verbatim next to the notebook, because the
         // point of this path is that we do not understand it well enough to rewrite it.
         let manifest = NotebookManifest(
             notebookId: newNotebookId,
-            title: "Unreadable sync copy (\(stamp))",
+            title: "Unreadable sync copy (conflict \(stamp) \(deviceID))",
             pageIds: [newPageId],
             createdAt: now, updatedAt: now, serverTimestamp: now, updatedBy: deviceID)
         let page = PageFile(
@@ -237,6 +243,14 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         try write(json, to: notebookDir(newNotebookId)
             .appendingPathComponent("original-\(documentID.replacingOccurrences(of: ":", with: "-")).json"))
         didApplyChanges?()
+    }
+
+    /// Lays 32 hex characters out in the 8-4-4-4-12 shape the rest of the store expects of an id.
+    private func uuidShaped(_ hex: some StringProtocol) -> String {
+        let c = Array(hex)
+        guard c.count == 32 else { return UUID().uuidString.lowercased() }
+        let groups = [0..<8, 8..<12, 12..<16, 16..<20, 20..<32]
+        return groups.map { String(c[$0]) }.joined(separator: "-")
     }
 
     // MARK: Image blobs
