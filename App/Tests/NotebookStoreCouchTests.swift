@@ -98,9 +98,11 @@ final class NotebookStoreCouchTests: XCTestCase {
     private func applyFromTheBoox(_ page: PageFile) throws {
         var incoming = page
         incoming.updatedAt = NotableDate.format(Date())
+        let notebookDir = rootURL.appendingPathComponent(
+            "notebooks/\(page.notebookId ?? "")", isDirectory: true)
         try FileCouchStore(rootURL: rootURL, deviceID: "boox")
-            .apply(CouchDocID.page(page.id), .page(
-                CouchMapping.couchPage(from: incoming, deviceID: "boox")))
+            .apply(CouchDocID.page(page.id), .page(CouchMapping.couchPage(
+                from: incoming, deviceID: "boox", notebookDir: notebookDir)))
     }
 
     /// The bug: the editor loads a page, the BOOX's ink lands in the file while it is open, and
@@ -209,16 +211,27 @@ final class NotebookStoreCouchTests: XCTestCase {
             try store.loadPage(notebookId: manifest.notebookId, pageId: pageId),
             baselineStrokeIDs: [])
 
+        // Its bytes land first, as sync delivers them — under the hash that names them, which is
+        // the uri a page arriving over CouchDB carries.
+        let bytes = Data("a picture".utf8)
+        let uri = try XCTUnwrap(NotableImageFiles.localURI(forAssetID: CouchAssetID.forBytes(bytes)))
+        let images = rootURL.appendingPathComponent(
+            "notebooks/\(manifest.notebookId)/images", isDirectory: true)
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        try bytes.write(to: images.appendingPathComponent((uri as NSString).lastPathComponent))
+
         var fromBoox = onCanvas
         fromBoox.images = [
             ImageDTO(
-                id: "img", x: 0, y: 0, width: 10, height: 10, uri: "images/a.png",
+                id: "img", x: 0, y: 0, width: 10, height: 10, uri: uri,
                 createdAt: NotableDate.format(Date()), updatedAt: NotableDate.format(Date()))
         ]
         try applyFromTheBoox(fromBoox)
 
         let written = try store.savePage(onCanvas, baselineStrokeIDs: [])
         XCTAssertEqual(written.images.map(\.id), ["img"])
+        // And it still points at the picture, not at a name nothing will ever write.
+        XCTAssertEqual(written.images.map(\.uri), [uri])
     }
 
     // MARK: Change reporting

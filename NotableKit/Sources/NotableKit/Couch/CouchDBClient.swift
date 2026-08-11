@@ -209,31 +209,22 @@ public struct CouchDBClient: Sendable {
 
     // MARK: - Attachments
 
-    public func putAttachment(
-        _ documentID: String, name: String = "blob", rev: String?, contentType: String, data: Data
-    ) async throws -> String {
-        let response = try await send(HTTPRequest(
-            method: "PUT", path: path("\(documentID)/\(name)"),
-            query: rev.map { [HTTPQueryItem("rev", $0)] } ?? [],
-            headers: ["Content-Type": contentType], body: data))
-        switch response.status {
-        case 200, 201, 202:
-            guard let result = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
-                  let newRev = result["rev"] as? String
-            else { throw CouchError.malformedResponse("attachment PUT returned no rev") }
-            return newRev
-        case 409:
-            throw CouchError.conflict(documentID: documentID)
-        default:
-            throw error(for: response, path: path(documentID))
-        }
-    }
-
-    public func getAttachment(_ documentID: String, name: String = "blob") async throws -> Data? {
+    /// Assets are *written* by `put`, which carries the blob inline in the document — see
+    /// `CouchAsset`. Only the read needs its own request: the change feed reports an asset
+    /// document as a stub, so the bytes are fetched when a page turns out to need them.
+    ///
+    /// Fetches an attachment's bytes plus the type the server serves them with. Nil when either the
+    /// document or the attachment is absent — for a content-addressed asset that is a peer which
+    /// has not uploaded the bytes yet, not an error.
+    public func getAttachment(
+        _ documentID: String, name: String = CouchAssetID.blobName
+    ) async throws -> (data: Data, contentType: String)? {
         let response = try await send(HTTPRequest(
             method: "GET", path: path("\(documentID)/\(name)")))
         switch response.status {
-        case 200: return response.body
+        case 200:
+            return (response.body,
+                    response.header("Content-Type") ?? CouchAssetID.contentType(of: response.body))
         case 404: return nil
         default: throw error(for: response, path: path(documentID))
         }

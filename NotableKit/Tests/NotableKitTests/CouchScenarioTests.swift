@@ -212,6 +212,24 @@ private final class ScenarioDevice {
             store.set(docID(op), .page(page))
             markDirty(docID(op))
 
+        case "placeImage":
+            var page = try page(op)
+            let bytes = try imageBytes(op)
+            let assetID = CouchAssetID.forBytes(bytes)
+            // The bytes land in this device's own store first, exactly as importing a picture
+            // does; sync's job is to notice the page now names an asset and carry it across.
+            store.set(assetID, .asset(CouchAsset(data: bytes, at: at, updatedBy: deviceID)))
+            page.images.append(CouchImage(
+                id: op["image"] as? String ?? "",
+                assetId: assetID,
+                x: op["x"] as? Int ?? 0, y: op["y"] as? Int ?? 0,
+                width: op["width"] as? Int ?? 0, height: op["height"] as? Int ?? 0,
+                createdAt: at, updatedAt: at))
+            page.updatedAt = at
+            page.updatedBy = deviceID
+            store.set(docID(op), .page(page))
+            markDirty(docID(op))
+
         case "setBackground":
             var page = try page(op)
             page.background = op["background"] as? String ?? "blank"
@@ -305,6 +323,22 @@ private final class ScenarioDevice {
             let expected = (op["ids"] as? [String] ?? []).sorted()
             let actual = try page(op).strokes.map(\.id).sorted()
             XCTAssertEqual(actual, expected, "[\(scenario)] \(describe(op)) strokes")
+
+        case "expectImage":
+            let bytes = try imageBytes(op)
+            let assetID = CouchAssetID.forBytes(bytes)
+            let placed = try page(op).images.first { $0.id == op["image"] as? String }
+            XCTAssertEqual(
+                placed?.assetId, assetID,
+                "[\(scenario)] \(describe(op)) should place \(assetID)")
+            // The reference is only half of it: without the bytes the peer cannot draw anything,
+            // which is the whole failure this scenario exists to catch.
+            guard case .asset(let held)? = try store.load(assetID) else {
+                XCTFail("[\(scenario)] \(describe(op)) holds no bytes for \(assetID)")
+                break
+            }
+            XCTAssertEqual(
+                held.data, bytes, "[\(scenario)] \(describe(op)) holds different bytes")
 
         case "expectPageIds":
             let expected = (op["pages"] as? [String] ?? []).map(rawID)
@@ -409,6 +443,15 @@ private final class ScenarioDevice {
         "step \(step) \(op["op"] as? String ?? "?") \(op["doc"] as? String ?? "?")"
     }
 
+    /// The picture an image op works with, base64 in the script so both apps hash the same bytes
+    /// and therefore agree on the asset id without ever comparing notes.
+    private func imageBytes(_ op: [String: Any]) throws -> Data {
+        guard let base64 = op["bytes"] as? String, let bytes = Data(base64Encoded: base64) else {
+            throw ScenarioError("\(describe(op)) needs `bytes` as base64")
+        }
+        return bytes
+    }
+
     private func body(_ op: [String: Any]) throws -> CouchDocBody {
         guard let body = try store.load(docID(op)) else {
             throw ScenarioError("\(describe(op)): this device holds no \(docID(op))")
@@ -452,6 +495,16 @@ private final class ScenarioStore: CouchLocalStore, @unchecked Sendable {
         lock.withLock { docs[documentID] = body }
     }
 
+    /// Every asset a held page places whose bytes are not here — the same question the real stores
+    /// answer from disk and from Room.
+    func missingAssetIDs() throws -> [String] {
+        lock.withLock {
+            Set(docs.values.flatMap(\.referencedAssetIDs))
+                .filter { docs[$0] == nil }
+                .sorted()
+        }
+    }
+
     /// Protocol §6.5: the local copy is left exactly as it is. Recording the id is enough to assert
     /// that — the real store materializes the remote document under a fresh identity.
     func applyConflictCopy(_ documentID: String, json: Data) throws {
@@ -481,6 +534,8 @@ private enum ScenarioCoding {
             return (try? decoder.decode(CouchNotebook.self, from: data)).map(CouchDocBody.notebook)
         case CouchDocType.folder:
             return (try? decoder.decode(CouchFolder.self, from: data)).map(CouchDocBody.folder)
+        case CouchDocType.asset:
+            return (try? decoder.decode(CouchAsset.self, from: data)).map(CouchDocBody.asset)
         default:
             return nil
         }
@@ -493,6 +548,9 @@ private enum ScenarioCoding {
         case .page(let page): data = try? encoder.encode(page)
         case .notebook(let notebook): data = try? encoder.encode(notebook)
         case .folder(let folder): data = try? encoder.encode(folder)
+        // The blob rides along in `_attachments`, so a device that downloaded a picture in one
+        // step still has it in the next — which is what makes the assertion about bytes real.
+        case .asset(let asset): data = try? encoder.encode(asset)
         case .deleted(let tombstone): data = try? encoder.encode(tombstone)
         }
         return data.flatMap { String(data: $0, encoding: .utf8) }

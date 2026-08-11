@@ -343,6 +343,98 @@ final class CouchSyncEngineTests: XCTestCase {
                           "a notebook must never land before the pages it names")
     }
 
+    // MARK: Images
+
+    private let picture = Data("the bytes of a picture".utf8)
+    private var pictureID: String { CouchAssetID.forBytes(picture) }
+
+    private func pageWithPicture(updatedAt: Int, by device: String) -> CouchPage {
+        var page = page(updatedAt: updatedAt, by: device)
+        page.images = [CouchImage(
+            id: "i1", assetId: pictureID, x: 0, y: 0, width: 4, height: 4,
+            createdAt: stamp(1), updatedAt: stamp(1))]
+        return page
+    }
+
+    /// Nobody queues an asset — the app only ever edits a page. The bytes are derived from the
+    /// page being sent, and they go first, so the peer never reads a reference to nothing.
+    func testAnImagesBytesAreSentBeforeThePageThatPlacesThem() async throws {
+        ipadStore.set(pageID, .page(pageWithPicture(updatedAt: 5, by: "ipad")))
+        ipadStore.set(pictureID, .asset(CouchAsset(
+            data: picture, at: stamp(1), updatedBy: "ipad")))
+        await ipad.markDirty([pageID])
+
+        let flush = await ipad.flush()
+        XCTAssertEqual(flush.pushed, [pictureID, pageID])
+
+        let puts = server.requestLog.filter { $0.method == "PUT" }.map(\.path)
+        XCTAssertLessThan(
+            puts.firstIndex { $0.contains("asset:") }!, puts.firstIndex { $0.contains("page:") }!)
+    }
+
+    /// Content-addressed means an id can only ever hold one thing. A second device offering the
+    /// same picture is told 409, and that is the upload succeeding.
+    func testTheSamePictureFromTwoDevicesIsNotAConflict() async throws {
+        for (engine, store, device) in [(ipad!, ipadStore!, "ipad"), (boox!, booxStore!, "boox")] {
+            store.set(pageID, .page(pageWithPicture(updatedAt: 5, by: device)))
+            store.set(pictureID, .asset(CouchAsset(
+                data: picture, at: stamp(1), updatedBy: device)))
+            await engine.markDirty([pageID])
+        }
+
+        _ = await ipad.flush()
+        let second = await boox.flush()
+        XCTAssertTrue(second.failures.isEmpty, "a duplicate upload is not a failure")
+        XCTAssertTrue(second.pushed.contains(pictureID))
+
+        // And a third attempt does not even reach the wire: the revision says it is already there.
+        server.forgetRequests()
+        await boox.markDirty([pageID])
+        _ = await boox.flush()
+        XCTAssertFalse(server.requestLog.contains { $0.path.contains("asset:") })
+    }
+
+    /// The other half: a page arrives naming a picture, and the bytes have to follow.
+    func testPullFetchesTheBytesOfAPictureThePageNames() async throws {
+        ipadStore.set(pageID, .page(pageWithPicture(updatedAt: 5, by: "ipad")))
+        ipadStore.set(pictureID, .asset(CouchAsset(
+            data: picture, at: stamp(1), updatedBy: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        let pulled = try await boox.pull()
+        XCTAssertEqual(pulled.fetchedAssets, [pictureID])
+        guard case .asset(let held)? = booxStore.body(pictureID) else {
+            return XCTFail("the picture never arrived")
+        }
+        XCTAssertEqual(held.data, picture)
+        XCTAssertEqual(held.contentType, "application/octet-stream")
+
+        // Nothing left owed, so the next pull does not go asking again.
+        server.forgetRequests()
+        _ = try await boox.pull()
+        XCTAssertFalse(server.requestLog.contains { $0.path.hasSuffix("/blob") })
+    }
+
+    /// A download that fails is retried, not forgotten: the reference stays owed.
+    func testAPictureThatCouldNotBeFetchedIsTriedAgainOnTheNextPull() async throws {
+        ipadStore.set(pageID, .page(pageWithPicture(updatedAt: 5, by: "ipad")))
+        ipadStore.set(pictureID, .asset(CouchAsset(
+            data: picture, at: stamp(1), updatedBy: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        server.failingDocumentIDs["\(pictureID)/blob"] = 503
+        var pulled = try await boox.pull()
+        XCTAssertEqual(pulled.fetchedAssets, [])
+        XCTAssertNil(booxStore.body(pictureID))
+        XCTAssertEqual(try booxStore.missingAssetIDs(), [pictureID])
+
+        server.failingDocumentIDs.removeAll()
+        pulled = try await boox.pull()
+        XCTAssertEqual(pulled.fetchedAssets, [pictureID])
+    }
+
     /// A wiped local database looks exactly like "the user deleted everything"; the guard makes
     /// the difference a human decision rather than a silent mass delete.
     func testMassDeletionIsRefusedRatherThanPushed() async throws {
