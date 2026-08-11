@@ -324,12 +324,78 @@ final class NotebookStore: ObservableObject {
 
     // MARK: - Folder queries
 
-    func folders(in parentFolderId: String?) -> [FolderDTO] {
-        folders.filter { $0.parentFolderId == parentFolderId }
+    /// Ids of the folders the root has to show, because nothing else will.
+    ///
+    /// A folder can stop reaching the root without anything local going wrong: the peer is allowed
+    /// to delete a folder that still has children here (protocol §6.4 deletes the folder alone),
+    /// and a half-merged `folders.json` can leave a chain pointing at nothing or looping back on
+    /// itself. The merge deliberately repairs neither — the library absorbs it. Hiding the
+    /// remainder would lose real notebooks whose files are still on disk.
+    ///
+    /// Adoption is deliberately *not* "every folder that cannot reach the root": in an orphaned
+    /// subtree every descendant fails that test too, and adopting them all would list each one at
+    /// the root as well as under its own parent. Only the folders with nowhere else to appear are
+    /// taken — the ones whose parent id names no folder we hold, plus one entry point per cycle,
+    /// without which a loop would have no way in at all. Everything below them nests as usual, so
+    /// each folder is drawn exactly once.
+    private var rootAdoptedFolderIDs: Set<String> {
+        let parents = Dictionary(
+            folders.map { ($0.id, $0.parentFolderId) }, uniquingKeysWith: { first, _ in first })
+        var adopted: Set<String> = []
+        for (id, parent) in parents {
+            // Nil parent means it sits at the root already; a parent id we hold no folder for
+            // means the root is the only place left to draw it.
+            let parentIsPresent = parent.map { parents[$0] != nil } ?? false
+            if !parentIsPresent { adopted.insert(id) }
+        }
+
+        // Whatever is left either climbs to one of those or goes round forever. Walking each
+        // chain once and settling it keeps this linear even when every folder shares an ancestor.
+        var settled: Set<String> = []
+        for id in parents.keys where !settled.contains(id) {
+            var path: [String] = []
+            var position: [String: Int] = [:]
+            var cursor: String? = id
+            while let current = cursor, !settled.contains(current) {
+                if let start = position[current] {
+                    // A loop closes here. Its lowest id is the entry point, chosen by id so the
+                    // sidebar does not reshuffle itself between launches.
+                    if let entry = path[start...].min() { adopted.insert(entry) }
+                    break
+                }
+                position[current] = path.count
+                path.append(current)
+                guard let parent = parents[current] ?? nil else { break }
+                cursor = parent
+            }
+            settled.formUnion(path)
+        }
+        return adopted
     }
 
+    /// Subfolders of `parentFolderId`. The root additionally adopts the folders that nothing else
+    /// would draw, so an orphaned subtree stays reachable instead of vanishing from the sidebar.
+    func folders(in parentFolderId: String?) -> [FolderDTO] {
+        guard parentFolderId == nil else {
+            return folders.filter { $0.parentFolderId == parentFolderId }
+        }
+        let adopted = rootAdoptedFolderIDs
+        return folders.filter { adopted.contains($0.id) }
+    }
+
+    /// Notebooks directly inside `parentFolderId`. The root additionally adopts every notebook
+    /// whose `parentFolderId` names a folder that is gone — the case a peer's folder deletion
+    /// leaves behind. A notebook filed under a folder that still exists stays there even if that
+    /// folder is itself orphaned, because `folders(in: nil)` has already surfaced the folder.
     func notebooks(in parentFolderId: String?) -> [NotebookManifest] {
-        notebooks.filter { $0.parentFolderId == parentFolderId }
+        guard parentFolderId == nil else {
+            return notebooks.filter { $0.parentFolderId == parentFolderId }
+        }
+        let known = Set(folders.map(\.id))
+        return notebooks.filter { notebook in
+            guard let parent = notebook.parentFolderId else { return true }
+            return !known.contains(parent)
+        }
     }
 
     func folder(id: String) -> FolderDTO? {

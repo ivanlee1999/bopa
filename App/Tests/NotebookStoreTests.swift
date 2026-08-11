@@ -74,6 +74,110 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(store.folders.count, 1)
     }
 
+    // MARK: Folders that stopped reaching the root
+
+    /// Drops folders from `folders.json` behind the store's back, the way applying a peer's
+    /// folder tombstone does — the one route to an orphan, since `deleteFolder` refuses a
+    /// folder that still has children.
+    private func dropFoldersOnDisk(ids: Set<String>) throws {
+        let kept = try foldersOnDisk().folders.filter { !ids.contains($0.id) }
+        let file = FoldersFile(folders: kept, serverTimestamp: NotableDate.format(Date()))
+        try JSONEncoder().encode(file)
+            .write(to: rootURL.appendingPathComponent("folders.json"))
+        store.refresh()
+    }
+
+    func testNotebookWhoseFolderWasDeletedFallsBackToRoot() throws {
+        let folder = try store.createFolder(title: "Semester")
+        let filed = try store.createNotebook(title: "U", parentFolderId: folder.id)
+
+        try dropFoldersOnDisk(ids: [folder.id])
+
+        // The manifest is left alone — the sync layer does not repair the parent (protocol
+        // §6.4), so the library is what has to absorb it.
+        XCTAssertEqual(store.manifest(id: filed.notebookId)?.parentFolderId, folder.id)
+        XCTAssertEqual(store.notebooks(in: nil).map(\.title), ["U"])
+        XCTAssertEqual(store.totalNotebookCount, 1)
+    }
+
+    func testOrphanedSubfolderSurfacesAtRootStillHoldingItsNotebook() throws {
+        let parent = try store.createFolder(title: "Semester")
+        let child = try store.createFolder(title: "Week 1", parentFolderId: parent.id)
+        _ = try store.createNotebook(title: "Filed", parentFolderId: child.id)
+
+        try dropFoldersOnDisk(ids: [parent.id])
+
+        // The child is adopted by the root; the notebook stays inside it, because its own
+        // folder still exists and is now reachable again.
+        XCTAssertEqual(store.folders(in: nil).map(\.id), [child.id])
+        XCTAssertEqual(store.notebooks(in: child.id).map(\.title), ["Filed"])
+        XCTAssertTrue(store.notebooks(in: nil).isEmpty)
+
+        let tree = FolderNode.tree(from: store)
+        XCTAssertEqual(tree.map(\.title), ["Week 1"])
+        XCTAssertEqual(tree[0].itemCount, 1)
+    }
+
+    func testRootAdoptionDoesNotDisturbFoldersThatStillReachIt() throws {
+        let parent = try store.createFolder(title: "Work")
+        let child = try store.createFolder(title: "Projects", parentFolderId: parent.id)
+        _ = try store.createNotebook(title: "Loose")
+        _ = try store.createNotebook(title: "Filed", parentFolderId: child.id)
+
+        XCTAssertEqual(store.folders(in: nil).map(\.id), [parent.id])
+        XCTAssertEqual(store.folders(in: parent.id).map(\.id), [child.id])
+        XCTAssertEqual(store.notebooks(in: nil).map(\.title), ["Loose"])
+        XCTAssertEqual(store.itemCount(in: child.id), 1)
+        XCTAssertTrue(store.isFolderEmpty(parent.id) == false)
+    }
+
+    /// Deleting the top of a nested subtree must not flatten it. Every folder below the deleted
+    /// one still names a parent that exists, so only the top survivor is adopted by the root —
+    /// listing the descendants there too would draw each of them twice.
+    func testOrphanedSubtreeKeepsItsNestingInsteadOfFlattening() throws {
+        let top = try store.createFolder(title: "Semester")
+        let middle = try store.createFolder(title: "Week 1", parentFolderId: top.id)
+        let leaf = try store.createFolder(title: "Monday", parentFolderId: middle.id)
+
+        try dropFoldersOnDisk(ids: [top.id])
+
+        XCTAssertEqual(store.folders(in: nil).map(\.id), [middle.id])
+        XCTAssertEqual(store.folders(in: middle.id).map(\.id), [leaf.id])
+
+        let tree = FolderNode.tree(from: store)
+        XCTAssertEqual(tree.map(\.title), ["Week 1"])
+        XCTAssertEqual(try XCTUnwrap(tree[0].children).map(\.title), ["Monday"])
+        XCTAssertEqual(drawnFolderIDs(tree).sorted(), [middle.id, leaf.id].sorted())
+    }
+
+    /// A `parentFolderId` loop from a hand-edited or half-merged file has no folder the root can
+    /// reach it by. One member is adopted so the loop is drawn at all, and the rest nest beneath
+    /// it — still exactly once each, rather than taking their notebooks into hiding.
+    func testFolderCycleGetsExactlyOneEntryPoint() throws {
+        let first = try store.createFolder(title: "A")
+        let second = try store.createFolder(title: "B", parentFolderId: first.id)
+        var file = try foldersOnDisk()
+        file.folders = file.folders.map { folder in
+            var folder = folder
+            if folder.id == first.id { folder.parentFolderId = second.id }
+            return folder
+        }
+        try JSONEncoder().encode(file)
+            .write(to: rootURL.appendingPathComponent("folders.json"))
+        store.refresh()
+
+        // Lowest id wins, so the sidebar does not reshuffle between launches.
+        XCTAssertEqual(store.folders(in: nil).map(\.id), [min(first.id, second.id)])
+        XCTAssertEqual(drawnFolderIDs(FolderNode.tree(from: store)).sorted(),
+                       [first.id, second.id].sorted())
+    }
+
+    /// Every folder id the sidebar actually draws, in tree order, so a test can prove nothing is
+    /// hidden *and* nothing is duplicated.
+    private func drawnFolderIDs(_ nodes: [FolderNode]) -> [String] {
+        nodes.flatMap { [$0.id] + drawnFolderIDs($0.children ?? []) }
+    }
+
     // MARK: Paper templates
 
     func testCreateNotebookStampsTemplateOnManifestAndFirstPage() throws {
