@@ -512,6 +512,38 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertTrue(server.documentIDs().isEmpty, "nothing should have reached the server")
     }
 
+    /// The guard asks whether these deletions are most of the library. It used to ask that of
+    /// `revs`, which is never pruned — so a device that had seen a hundred notebooks come and go
+    /// counted all hundred, and deleting the ten it actually had left no longer looked like most of
+    /// anything. A guard that grows unable to trip is worse than none, since it still reads as one.
+    func testTheDeletionGuardMeasuresAgainstWhatTheDeviceHoldsNotWhatItHasEverSeen() async throws {
+        // Two hundred notebooks this device pushed and has since stopped holding. They are gone
+        // from the library but still named in `revs`, which nothing prunes.
+        var old: [String] = []
+        for index in 0..<200 {
+            let id = CouchDocID.notebook("old\(index)")
+            old.append(id)
+            ipadStore.set(id, .notebook(CouchNotebook(
+                title: "old", pageIds: [], createdAt: stamp(0), updatedAt: stamp(1),
+                updatedBy: "ipad")))
+        }
+        await ipad.markDirty(old)
+        _ = await ipad.flush()
+        for id in old { ipadStore.remove(id) }
+
+        var ids: [String] = []
+        for index in 0..<12 {
+            let id = CouchDocID.notebook("nb\(index)")
+            ids.append(id)
+            ipadStore.set(id, .deleted(CouchDeletedDoc(
+                type: CouchDocType.notebook, deletedAt: stamp(10), updatedBy: "ipad")))
+        }
+        await ipad.markDirty(ids)
+
+        let report = await ipad.flush()
+        XCTAssertTrue(report.blockedByDeletionGuard, "wiping the whole library should still ask")
+    }
+
     /// The guard exists to question a suspicious *deletion*. Stopping the rest of the queue with it
     /// meant a drawing could not sync either — and since the confirmation the warning asks for does
     /// not exist yet, that was a permanent stall rather than a prompt.
