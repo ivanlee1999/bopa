@@ -229,6 +229,31 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertTrue(server.isDeleted(notebookID), "the deletion must still stand on the server")
     }
 
+    /// A `200` from `open_revs=all` that cannot be read must be reported, not read as "the document
+    /// is absent" — absent is what sends the pusher back round as a create, and a create over a
+    /// tombstone resurrects it. Failing keeps the work dirty, which is the safe direction.
+    func testAnUnreadableTombstoneFetchFailsRatherThanReadingAsAbsent() async throws {
+        let client = CouchDBClient(transport: NonsenseOnOpenRevs(), database: "notes")
+        do {
+            _ = try await client.getRaw(CouchDocID.notebook("nb1"))
+            XCTFail("an unreadable revision list should not come back as nil")
+        } catch let error as CouchError {
+            guard case .malformedResponse = error else {
+                return XCTFail("expected a malformed-response error, got \(error)")
+            }
+        }
+    }
+
+    /// 404 on the plain GET (the document is deleted), then a 200 whose body is not a revision list.
+    private struct NonsenseOnOpenRevs: HTTPTransport {
+        func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+            guard request.query.contains(where: { $0.name == "open_revs" }) else {
+                return HTTPResponse(status: 404)
+            }
+            return HTTPResponse(status: 200, body: Data("{\"error\":\"nope\"}".utf8))
+        }
+    }
+
     func testOfflineEditsQueueAndDrainOnReconnect() async throws {
         server.isOffline = true
         ipadStore.set(pageID, .page(page(strokes: [stroke("s1", at: 1, device: "ipad")],

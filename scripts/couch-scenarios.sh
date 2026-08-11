@@ -9,15 +9,19 @@
 # do disagree.
 #
 #   ./scripts/couch-scenarios.sh [couchdb-url]
+#   NOTABLE_DIR=~/src/notable ./scripts/couch-scenarios.sh
 #
-# Needs a CouchDB with the `notes` database (docs/deploy/couchdb) and the notable checkout.
+# Needs a reachable CouchDB (docs/deploy/couchdb; the run creates and drops its own database) and a
+# notable checkout — a sibling directory by default, NOTABLE_DIR otherwise.
 set -uo pipefail
 
 COUCH_URL="${1:-${COUCH_URL:-http://127.0.0.1:5984}}"
 COUCH_USER="${COUCH_USER:-sync}"
 COUCH_PASSWORD="${COUCH_PASSWORD:-testsyncpw}"
-NOTABLE_DIR="${NOTABLE_DIR:-/Users/ivan/workspace/eink/notable}"
 BOPA_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# A sibling checkout by default; set NOTABLE_DIR when yours lives elsewhere. Checked below rather
+# than guessed at, so a wrong path says so instead of failing inside Gradle.
+NOTABLE_DIR="${NOTABLE_DIR:-$BOPA_DIR/../notable}"
 SCENARIO_FILE="${SCENARIO_FILE:-$BOPA_DIR/docs/couch-sync-vectors/interop-scenarios.json}"
 
 # A fresh run id per run namespaces every document, so repeated runs share a database without
@@ -25,12 +29,20 @@ SCENARIO_FILE="${SCENARIO_FILE:-$BOPA_DIR/docs/couch-sync-vectors/interop-scenar
 RUN_ID="${COUCH_SCENARIO_RUN:-$(date +%s)-$$}"
 STATE_DIR="${COUCH_SCENARIO_STATE_DIR:-$(mktemp -d)}"
 
-export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
-export ANDROID_HOME="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
-
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m%s\033[0m\n' "$*"; }
+
+# Fill in the usual Homebrew locations, but only when they are really there: pointing JAVA_HOME at
+# a directory that does not exist is worse than leaving it unset, because Gradle then stops looking.
+default_dir() {
+  local name=$1 path=$2
+  [ -n "${!name:-}" ] && return 0
+  [ -d "$path" ] && export "$name=$path"
+  return 0
+}
+default_dir JAVA_HOME /opt/homebrew/opt/openjdk@21
+default_dir ANDROID_HOME /opt/homebrew/share/android-commandlinetools
+[ -n "${ANDROID_HOME:-}" ] && export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 
 # A database per run. Every device replays the change feed from zero, so sharing one database with
 # past runs means every run re-reads every run before it — and each device's local store ends up
@@ -38,6 +50,9 @@ fail() { printf '\033[1;31m%s\033[0m\n' "$*"; }
 COUCH_DATABASE="${COUCH_DATABASE:-scenarios-$(printf '%s' "$RUN_ID" | tr -c 'a-z0-9' '-')}"
 
 say "preflight: $COUCH_URL"
+[ -x "$NOTABLE_DIR/gradlew" ] || {
+  fail "no notable checkout at $NOTABLE_DIR — set NOTABLE_DIR to yours"; exit 1; }
+[ -f "$SCENARIO_FILE" ] || { fail "no scenario file at $SCENARIO_FILE"; exit 1; }
 curl -fsS --user "$COUCH_USER:$COUCH_PASSWORD" "$COUCH_URL/_up" >/dev/null || {
   fail "cannot reach the server"; exit 1; }
 curl -fsS --user "$COUCH_USER:$COUCH_PASSWORD" -X PUT "$COUCH_URL/$COUCH_DATABASE" >/dev/null || {
