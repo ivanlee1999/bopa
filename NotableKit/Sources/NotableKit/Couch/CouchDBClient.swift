@@ -81,10 +81,22 @@ public struct CouchDBClient: Sendable {
             throw error(for: response, path: path(documentID))
         }
         // `[{"ok": {…}}, {"missing": "…"}]` — only the readable leaves carry `ok`.
-        guard let leaves = try? JSONSerialization.jsonObject(with: response.body) as? [[String: Any]],
-              let document = leaves.compactMap({ $0["ok"] as? [String: Any] }).first,
+        //
+        // Anything else from a 200 is reported, never read as "absent": absent is what sends the
+        // pusher back round as a create, and a create over a tombstone is exactly the resurrection
+        // this method exists to prevent. A document the server would not describe has to stay dirty
+        // and be retried, not be overwritten on a guess.
+        guard let leaves = try? JSONSerialization.jsonObject(with: response.body) as? [[String: Any]]
+        else {
+            throw CouchError.malformedResponse(
+                "GET \(documentID)?open_revs=all did not return a list of revisions")
+        }
+        guard let document = leaves.compactMap({ $0["ok"] as? [String: Any] }).first,
               let json = try? JSONSerialization.data(withJSONObject: document)
-        else { return nil }
+        else {
+            throw CouchError.malformedResponse(
+                "GET \(documentID)?open_revs=all returned no readable revision")
+        }
         let meta = try metadata(from: json, documentID: documentID)
         return (meta.rev, meta.deleted, json)
     }
