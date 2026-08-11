@@ -23,7 +23,7 @@ final class HandwritingSettingsTests: XCTestCase {
         // come from the docked rail (the only tool UI there is).
         XCTAssertTrue(config.fingerDrawing)
         XCTAssertFalse(config.scrollLocked)
-        XCTAssertEqual(config.zoomOnOpen, .fitWidth)
+        XCTAssertEqual(config.pageFit, .fitWidth)
         XCTAssertEqual(config.doubleTapAction, .system)
         XCTAssertEqual(config.squeezeAction, .system)
         XCTAssertEqual(config.defaultTemplate, .blank)
@@ -33,7 +33,7 @@ final class HandwritingSettingsTests: XCTestCase {
         var config = HandwritingConfig()
         config.fingerDrawing = false
         config.scrollLocked = true
-        config.zoomOnOpen = .actualSize
+        config.pageFit = .actualSize
         config.doubleTapAction = .eraser
         config.squeezeAction = .undo
         config.defaultTemplate = .dotted
@@ -59,6 +59,14 @@ final class HandwritingSettingsTests: XCTestCase {
         let config = HandwritingConfig.load(from: defaults)
         XCTAssertEqual(config.defaultTemplate, .blank)
         XCTAssertEqual(config.doubleTapAction, .system)
+    }
+
+    /// The page fit outgrew its "zoom on open" name but kept its defaults key, so anyone who
+    /// had already chosen "actual size" keeps it instead of being silently re-fitted.
+    func testPageFitStillReadsTheOriginalDefaultsKey() {
+        defaults.set("actualSize", forKey: "handwriting.zoomOnOpen")
+
+        XCTAssertEqual(HandwritingConfig.load(from: defaults).pageFit, .actualSize)
     }
 
     /// A pencil gesture set to the retired "Show/hide tool palette" must not fall back to

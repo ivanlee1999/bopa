@@ -53,16 +53,19 @@ enum PencilAction: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// How much of the page is shown when a page opens.
-enum ZoomOnOpen: String, CaseIterable, Identifiable, Sendable {
+/// How wide the page is drawn relative to the screen.
+enum PageFit: String, CaseIterable, Identifiable, Sendable {
+    /// Scale the page so its width exactly fills the screen, and keep it there through
+    /// scrolling and rotation until a pinch takes it off the fit.
     case fitWidth
+    /// Draw the page at 1:1 and leave the zoom entirely to the user.
     case actualSize
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .fitWidth: "Fit width"
+        case .fitWidth: "Fit to screen"
         case .actualSize: "Actual size"
         }
     }
@@ -76,7 +79,7 @@ struct HandwritingConfig: Equatable, Sendable {
     var fingerDrawing = true
     /// Freezes panning/zooming so a stray drag cannot shift the page mid-sentence.
     var scrollLocked = false
-    var zoomOnOpen: ZoomOnOpen = .fitWidth
+    var pageFit: PageFit = .fitWidth
     var doubleTapAction: PencilAction = .system
     var squeezeAction: PencilAction = .system
     /// Paper for newly created notebooks and pages. Existing pages keep the template
@@ -86,7 +89,9 @@ struct HandwritingConfig: Equatable, Sendable {
     enum Key {
         static let fingerDrawing = "handwriting.fingerDrawing"
         static let scrollLocked = "handwriting.scrollLocked"
-        static let zoomOnOpen = "handwriting.zoomOnOpen"
+        /// Keeps its original name: the setting grew from "zoom applied on open" into the
+        /// sticky page fit, and renaming the key would silently reset everyone's choice.
+        static let pageFit = "handwriting.zoomOnOpen"
         static let doubleTapAction = "handwriting.pencilDoubleTap"
         static let squeezeAction = "handwriting.pencilSqueeze"
         static let defaultTemplate = "handwriting.defaultTemplate"
@@ -101,8 +106,8 @@ struct HandwritingConfig: Equatable, Sendable {
         if let value = defaults.object(forKey: Key.scrollLocked) as? Bool {
             config.scrollLocked = value
         }
-        if let raw = defaults.string(forKey: Key.zoomOnOpen), let value = ZoomOnOpen(rawValue: raw) {
-            config.zoomOnOpen = value
+        if let raw = defaults.string(forKey: Key.pageFit), let value = PageFit(rawValue: raw) {
+            config.pageFit = value
         }
         if let raw = defaults.string(forKey: Key.doubleTapAction),
            let value = PencilAction.stored(raw) {
@@ -124,7 +129,7 @@ struct HandwritingConfig: Equatable, Sendable {
     func save(to defaults: UserDefaults) {
         defaults.set(fingerDrawing, forKey: Key.fingerDrawing)
         defaults.set(scrollLocked, forKey: Key.scrollLocked)
-        defaults.set(zoomOnOpen.rawValue, forKey: Key.zoomOnOpen)
+        defaults.set(pageFit.rawValue, forKey: Key.pageFit)
         defaults.set(doubleTapAction.rawValue, forKey: Key.doubleTapAction)
         defaults.set(squeezeAction.rawValue, forKey: Key.squeezeAction)
         defaults.set(defaultTemplate.name, forKey: Key.defaultTemplate)
@@ -213,16 +218,24 @@ struct HandwritingSettingsSections: View {
 
         Section {
             Toggle("Lock page scrolling", isOn: config.scrollLocked)
-            Picker("Open pages at", selection: config.zoomOnOpen) {
-                ForEach(ZoomOnOpen.allCases) { mode in
+            Picker("Page width", selection: config.pageFit) {
+                ForEach(PageFit.allCases) { mode in
                     Text(mode.label).tag(mode)
                 }
             }
+            .accessibilityIdentifier("settings.pageFit")
         } header: {
             Text("Canvas")
         } footer: {
-            if config.scrollLocked.wrappedValue && !config.fingerDrawing.wrappedValue {
-                Text("With scrolling locked and finger drawing off, the page cannot be moved.")
+            VStack(alignment: .leading, spacing: 6) {
+                Text(config.pageFit.wrappedValue == .fitWidth
+                    ? "The page is scaled so its width fills the screen, and stays that way "
+                        + "as you scroll or rotate. Pinching leaves the fit; the editor's ••• "
+                        + "menu puts you back on it."
+                    : "The page is drawn at its true size — 1404pt wide, the same as on the BOOX.")
+                if config.scrollLocked.wrappedValue && !config.fingerDrawing.wrappedValue {
+                    Text("With scrolling locked and finger drawing off, the page cannot be moved.")
+                }
             }
         }
 
