@@ -14,18 +14,20 @@ public enum NotableImageFiles {
         notebookDir.appendingPathComponent(directoryName, isDirectory: true)
     }
 
-    /// Resolves an `ImageDTO` uri to a file. Relative uris (`"images/abc.jpg"`) resolve under the
-    /// notebook directory as they are; a device-absolute Android path — which pages written on the
-    /// BOOX carry — resolves by basename under the notebook's `images/`, since only the name of
-    /// such a path means anything here.
+    /// Resolves an `ImageDTO` uri to a file under the notebook's `images/`.
+    ///
+    /// Only the name is used, never the path around it. A device-absolute Android path — which
+    /// pages written on the BOOX carry — has no meaning here beyond its last component, and a
+    /// relative uri is deliberately treated the same way: the uri arrives inside a document
+    /// another device wrote, so `images/../manifest.json` would otherwise be a way for a peer to
+    /// aim a read or a download at a file that is not an image. Every real uri is already
+    /// `images/<name>`, so nothing legitimate resolves differently.
     public static func url(uri: String?, notebookDir: URL) -> URL? {
         guard let uri, !uri.isEmpty else { return nil }
-        if uri.hasPrefix("/") {
-            let basename = (uri as NSString).lastPathComponent
-            guard !basename.isEmpty, basename != "/" else { return nil }
-            return directory(in: notebookDir).appendingPathComponent(basename)
-        }
-        return notebookDir.appendingPathComponent(uri)
+        let basename = (uri as NSString).lastPathComponent
+        guard !basename.isEmpty, basename != "/", basename != ".", basename != ".."
+        else { return nil }
+        return directory(in: notebookDir).appendingPathComponent(basename)
     }
 
     /// The uri to store for an asset this device is about to hold: the hash itself, no extension.

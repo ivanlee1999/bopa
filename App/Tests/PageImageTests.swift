@@ -29,6 +29,19 @@ final class PageImageTests: XCTestCase {
         XCTAssertNil(BackgroundRenderer.imageFileURL(uri: "", notebookDir: notebookDir))
     }
 
+    /// A uri arrives inside a document another device wrote, so it cannot be allowed to point
+    /// anywhere but at an image of this notebook.
+    func testAURICannotClimbOutOfTheImagesDirectory() {
+        for escape in ["images/../manifest.json", "../../folders.json", "images/..", "."] {
+            let url = BackgroundRenderer.imageFileURL(uri: escape, notebookDir: notebookDir)
+            guard let url else { continue }
+            XCTAssertEqual(
+                url.deletingLastPathComponent().standardizedFileURL.path,
+                "/store/notebooks/nb-1/images",
+                "`\(escape)` resolved outside the notebook's images/")
+        }
+    }
+
     // MARK: - Loading
 
     private func makePage(images: [ImageDTO]) -> PageFile {

@@ -114,7 +114,11 @@ public enum CouchMapping {
             // The peer named no asset — it has not hashed its copy, or the document predates
             // assets travelling at all. That says nothing about the file this device holds, so
             // whatever is here keeps its place rather than being forgotten.
-            uri = existing?.uri ?? image.assetId
+            //
+            // What is *not* kept is the peer's own `assetId` text. Before assets travelled it held
+            // the writer's local path, which never named anything here; adopting it now would let
+            // a document decide which file this device reads.
+            uri = existing?.uri
         }
         return ImageDTO(
             id: image.id, x: image.x, y: image.y, width: image.width, height: image.height,
