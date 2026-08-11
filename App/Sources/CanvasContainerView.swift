@@ -141,16 +141,25 @@ final class CanvasContainerView: UIView {
         applyScroll(pageY: anchorY)
     }
 
-    /// Fits the page to the view's width now, and re-arms the sticky fit so later width
-    /// changes keep it there. The way back after a pinch has taken the page off the fit.
+    /// Fits the page to the view's width now and marks it as sitting on the fit — the way
+    /// back after a pinch has taken it off. Whether later width changes *keep* it fitted is
+    /// `keepsFitToWidth`'s business, which mirrors the user's preference: this deliberately
+    /// does not switch that on, or the canvas would start re-fitting rotations behind the
+    /// back of a setting that says "actual size". Callers that mean to change the mode set
+    /// the preference, and the config is pushed down from there.
     func fitToWidth() {
         guard bounds.width > 0 else { return }
         let fit = fitWidthZoom
         allowZoom(fit)
+        // Re-arming is the cheap half and happens either way; moving the page is only work
+        // when it is actually somewhere else. Being asked twice — the ••• menu both sets the
+        // preference and fits, and the config change fits again — must not fit twice.
+        let alreadyFitted = isFitToWidth && canvas.zoomScale == fit
+        isFitToWidth = true
+        guard !alreadyFitted else { return }
         // Same page-space anchor as a rotation: re-fitting changes the scale, not the place.
         let anchorY = canvas.contentOffset.y / max(canvas.zoomScale, 0.01)
         canvas.zoomScale = fit
-        isFitToWidth = true
         applyScroll(pageY: anchorY)
         updateContentGeometry()
     }
