@@ -219,14 +219,14 @@ public struct CouchDBClient: Sendable {
     public func getAttachment(
         _ documentID: String, name: String = CouchAssetID.blobName
     ) async throws -> (data: Data, contentType: String)? {
-        let response = try await send(HTTPRequest(
-            method: "GET", path: path("\(documentID)/\(name)")))
+        let attachmentPath = path("\(documentID)/\(name)")
+        let response = try await send(HTTPRequest(method: "GET", path: attachmentPath))
         switch response.status {
         case 200:
             return (response.body,
                     response.header("Content-Type") ?? CouchAssetID.contentType(of: response.body))
         case 404: return nil
-        default: throw error(for: response, path: path(documentID))
+        default: throw error(for: response, path: attachmentPath)
         }
     }
 
