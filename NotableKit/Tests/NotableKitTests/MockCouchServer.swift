@@ -301,6 +301,10 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
         lock.withLock { conflictCopies.append(documentID) }
     }
 
+    func allDocumentIDs() throws -> [String] {
+        lock.withLock { documents.keys.sorted() }
+    }
+
     /// Every asset a held page places whose bytes are not here — the same question the real store
     /// answers from disk.
     func missingAssetIDs() throws -> [String] {
@@ -315,6 +319,12 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
 
     func set(_ documentID: String, _ body: CouchDocBody) {
         lock.withLock { documents[documentID] = body }
+    }
+
+    /// Drops a document without tombstoning it — a notebook this device no longer holds, the way
+    /// one looks after its deletion was applied and reaped.
+    func remove(_ documentID: String) {
+        lock.withLock { documents[documentID] = nil }
     }
 
     func page(_ documentID: String) -> CouchPage? {

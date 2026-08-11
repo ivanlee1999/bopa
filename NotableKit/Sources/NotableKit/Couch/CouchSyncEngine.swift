@@ -165,6 +165,11 @@ public protocol CouchLocalStore: Sendable {
     /// under a new identity — protocol §6.5. Never overwrite on this path.
     func applyConflictCopy(_ documentID: String, json: Data) throws
 
+    /// Every document this device holds, including the tombstones it has yet to push. Used as the
+    /// denominator for §6.7's mass-deletion guard: "most of what this device knows" is a question
+    /// about the library, and only the store can answer it.
+    func allDocumentIDs() throws -> [String]
+
     /// `asset:<sha256>` ids a local page places but whose bytes this device does not hold — an
     /// image the peer drew in, whose blob has still to be fetched.
     ///
@@ -177,6 +182,12 @@ public protocol CouchLocalStore: Sendable {
 public extension CouchLocalStore {
     /// A store that holds no images has none to fetch. Saves every test double from restating it.
     func missingAssetIDs() throws -> [String] { [] }
+
+    /// A store that cannot enumerate itself reports nothing, which makes §6.7's guard *more*
+    /// cautious rather than less: with no library to compare against, any large batch of deletions
+    /// looks like most of it. Erring towards asking is the right direction for a guard, and since
+    /// it only holds back the deletions themselves, a false positive costs nothing else.
+    func allDocumentIDs() throws -> [String] { [] }
 
     /// Writes content that is not the result of a merge — seeding a store, or landing bytes whose
     /// document nothing local can contradict. There is no snapshot to preserve content against, so
@@ -413,10 +424,15 @@ public actor CouchSyncEngine {
     private func exceedsDeletionGuard(_ queue: [String]) -> Bool {
         let tombstones = queue.filter { isNotebookTombstone($0) }
         guard tombstones.count >= 10 else { return false }
-        let knownNotebooks = state.revs.keys.filter {
+        // What this device actually holds, not every id it has ever synced. `revs` is never pruned,
+        // so a library that has seen a hundred notebooks come and go kept all hundred in the
+        // denominator — and the guard quietly stopped being able to trip at all, which is the one
+        // thing it must not do. Deleted notebooks are still counted as known: they are exactly what
+        // is being asked about.
+        let known = Set(((try? store.allDocumentIDs()) ?? []) + tombstones).filter {
             CouchDocID.split($0)?.type == CouchDocType.notebook
         }
-        return tombstones.count * 2 > knownNotebooks.count
+        return tombstones.count * 2 > known.count
     }
 
     // MARK: Pull
