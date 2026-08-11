@@ -15,6 +15,7 @@ struct LibraryView: View {
     @State private var selection: LibrarySelection? = .root
     @State private var showsSidebar: Bool?
     @State private var openNotebook: OpenNotebook?
+    @State private var resolvingConflict: NotebookConflict?
 
     /// Identifiable wrapper so the editor can be driven by `fullScreenCover(item:)`.
     struct OpenNotebook: Identifiable, Hashable {
@@ -29,7 +30,7 @@ struct LibraryView: View {
     var body: some View {
         HStack(spacing: 0) {
             if sidebarVisible {
-                LibrarySidebar(selection: $selection)
+                LibrarySidebar(selection: $selection, openNotebook: open)
                     .frame(width: horizontalSizeClass == .compact ? nil : 300)
                     .overlay(alignment: .trailing) {
                         Rectangle()
@@ -42,7 +43,7 @@ struct LibraryView: View {
                     folderId: selection?.folderId,
                     selection: $selection,
                     toggleSidebar: { showsSidebar = !sidebarVisible },
-                    openNotebook: { openNotebook = OpenNotebook(id: $0) })
+                    openNotebook: open)
             }
         }
         .background(Modernist.paper)
@@ -71,6 +72,21 @@ struct LibraryView: View {
         .fullScreenCover(item: $openNotebook) { target in
             EditorView(notebookId: target.id, onClose: { openNotebook = nil })
                 .environmentObject(store)
+        }
+        // Presented here rather than in either column, because both open notebooks: the
+        // sidebar's tree and the grid's covers go through `open` alike.
+        .sheet(item: $resolvingConflict) { conflict in
+            ConflictResolutionView(conflict: conflict)
+        }
+    }
+
+    /// A conflicted notebook opens the chooser, not the editor — editing a copy whose fate
+    /// is undecided would just add a third version. Notable does the same on the BOOX.
+    private func open(_ notebookId: String) {
+        if let conflict = coordinator.conflict(for: notebookId) {
+            resolvingConflict = conflict
+        } else {
+            openNotebook = OpenNotebook(id: notebookId)
         }
     }
 }
@@ -102,7 +118,6 @@ private struct FolderContentsView: View {
     @State private var deletingNotebookId: String?
     @State private var showingDeleteNotebook = false
     @State private var showingSyncSettings = false
-    @State private var resolvingConflict: NotebookConflict?
 
     private var subfolders: [FolderDTO] { store.folders(in: folderId) }
     private var notebooks: [NotebookManifest] { store.notebooks(in: folderId) }
@@ -131,9 +146,6 @@ private struct FolderContentsView: View {
             NavigationStack {
                 SettingsView(backendHost: backendHost)
             }
-        }
-        .sheet(item: $resolvingConflict) { conflict in
-            ConflictResolutionView(conflict: conflict)
         }
         .alert("New notebook", isPresented: $showingNewNotebook) {
             TextField("Title", text: $newNotebookTitle)
@@ -200,14 +212,7 @@ private struct FolderContentsView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .bottom, spacing: 12) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Kicker(folderId == nil ? "Library" : "Folder")
-                    Text(title)
-                        .font(Modernist.display(30))
-                        .tracking(Modernist.displayTracking(30))
-                        .foregroundStyle(Modernist.ink)
-                        .lineLimit(1)
-                }
+                titleBlock
                 Spacer(minLength: 8)
                 Button {
                     toggleSidebar()
@@ -251,6 +256,51 @@ private struct FolderContentsView: View {
         }
         .padding(.horizontal, 22)
         .padding(.top, 8)
+    }
+
+    /// Kicker and display title. Inside a folder the whole block is the rename control — the
+    /// name you want to change is the one you are already looking at, and the pencil beside it
+    /// says so without spending another 48pt square on a header that already carries four.
+    @ViewBuilder
+    private var titleBlock: some View {
+        if let folderId {
+            Button {
+                beginRenameFolder(folderId)
+            } label: {
+                VStack(alignment: .leading, spacing: 1) {
+                    Kicker("Folder")
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        titleText
+                        Image(systemName: "pencil")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Modernist.neutral700)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Rename folder \(title)")
+            .accessibilityIdentifier("library.renameFolder")
+        } else {
+            VStack(alignment: .leading, spacing: 1) {
+                Kicker("Library")
+                titleText
+            }
+        }
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(Modernist.display(30))
+            .tracking(Modernist.displayTracking(30))
+            .foregroundStyle(Modernist.ink)
+            .lineLimit(1)
+    }
+
+    private func beginRenameFolder(_ id: String) {
+        renamingFolderId = id
+        renameTitle = store.folder(id: id)?.title ?? ""
+        showingRenameFolder = true
     }
 
     @ViewBuilder
@@ -315,6 +365,9 @@ private struct FolderContentsView: View {
             .padding(.top, 16)
             .padding(.bottom, 40)
         }
+        // Named so a test can say *which* column it means: since the sidebar became a tree, a
+        // notebook's title is on screen twice — once on its card here, once on its row there.
+        .accessibilityIdentifier("library.contents")
     }
 
     // MARK: Rows and cards
@@ -350,9 +403,7 @@ private struct FolderContentsView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button {
-                renamingFolderId = folder.id
-                renameTitle = folder.title
-                showingRenameFolder = true
+                beginRenameFolder(folder.id)
             } label: {
                 Label("Rename", systemImage: "pencil")
             }
@@ -398,14 +449,10 @@ private struct FolderContentsView: View {
         .contextMenu { notebookMenu(notebook) }
     }
 
-    /// A conflicted notebook opens the chooser, not the editor — editing a copy whose fate
-    /// is undecided would just add a third version. Notable does the same on the BOOX.
+    /// Opening goes up to `LibraryView`, which owns the conflict chooser: the sidebar's tree
+    /// opens notebooks too, and both have to route a conflicted one the same way.
     private func open(_ notebook: NotebookManifest) {
-        if let conflict = coordinator.conflict(for: notebook.notebookId) {
-            resolvingConflict = conflict
-        } else {
-            openNotebook(notebook.notebookId)
-        }
+        openNotebook(notebook.notebookId)
     }
 
     private func notebookCard(_ notebook: NotebookManifest) -> some View {

@@ -15,9 +15,11 @@ final class EraserUITests: XCTestCase {
 
     @MainActor
     private func openNotebook(_ app: XCUIApplication, titled title: String) -> XCUIElement {
-        let row = app.staticTexts[title]
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "notebook \(title) should be listed")
-        row.tap()
+        // Scoped to the grid: the sidebar tree lists the same notebook, so the bare title
+        // matches twice.
+        let card = app.descendants(matching: .any)["library.contents"].staticTexts[title]
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "notebook \(title) should be listed")
+        card.tap()
         let canvas = app.descendants(matching: .any)["editor.canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 10), "canvas should appear")
         return canvas

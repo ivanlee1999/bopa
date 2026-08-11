@@ -15,9 +15,11 @@ final class DrawingUITests: XCTestCase {
         textField.typeText(title)
         app.buttons["Create"].tap()
 
-        let row = app.staticTexts[title]
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
-        row.tap()
+        // Scoped to the grid: the sidebar tree lists the same notebook, so the bare title
+        // matches twice.
+        let card = app.descendants(matching: .any)["library.contents"].staticTexts[title]
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        card.tap()
 
         let canvas = app.descendants(matching: .any)["editor.canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 5), "canvas should appear")
