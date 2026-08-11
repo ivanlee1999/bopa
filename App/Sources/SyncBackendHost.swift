@@ -66,7 +66,13 @@ final class SyncBackendHost: ObservableObject {
             settings: settings, rootURL: store.rootURL,
             onChange: { [weak store] in
                 // The engine applies changes off the main actor; the library has to be told on it.
-                Task { @MainActor in store?.refresh() }
+                // The editor too: unlike the WebDAV run, this can rewrite the page someone is
+                // drawing on, so "sync touched the disk" has to be an event and not just a refresh.
+                Task { @MainActor in
+                    store?.refresh()
+                    NotificationCenter.default.post(
+                        name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+                }
             })
         else {
             store.didChangeDocuments = nil

@@ -11,6 +11,13 @@ final class NotebookStore: ObservableObject {
     /// by `refresh()`, which sync itself calls — that would be a feedback loop.
     static let didChangeLocallyNotification = Notification.Name("dev.ivan.bopa.storeDidChange")
 
+    /// Posted after *sync* wrote files underneath the app — the CouchDB pull loop applying merged
+    /// documents. The editor listens so ink that arrived while a page was open reaches the canvas
+    /// instead of sitting in a file nobody re-reads. Deliberately separate from
+    /// `didChangeLocallyNotification`, which is the push trigger and must not fire for downloads.
+    static let didApplyRemoteChangesNotification =
+        Notification.Name("dev.ivan.bopa.storeDidApplyRemoteChanges")
+
     @Published private(set) var notebooks: [NotebookManifest] = []
     @Published private(set) var folders: [FolderDTO] = []
     /// What the server held at the end of the last sync; nil until this library has
@@ -126,24 +133,56 @@ final class NotebookStore: ObservableObject {
     /// fresh as the last `refresh()`, and sync writes manifests from another thread throughout a
     /// run. Writing a cached copy back would resurrect a stale `pageIds` over a newer one, and the
     /// next upload's orphan cleanup would then delete the pages it omits.
-    func savePage(_ page: PageFile) throws {
+    ///
+    /// The page is reconciled against the file rather than written over it, by the same rule the
+    /// CouchDB merge uses: erasure beats drawing, everything else survives. That is needed because
+    /// the CouchDB backend has no equivalent of the WebDAV engine's `uploadOnly` guard — its pull
+    /// loop applies merged documents to disk while the editor holds a page open — so by the time an
+    /// autosave lands, the file can hold ink this caller never saw.
+    ///
+    /// - Parameter baselineStrokeIDs: the ids the caller was working from, i.e. what it loaded or
+    ///   last wrote. The file is *not* a safe stand-in: diffing against ink that arrived from the
+    ///   BOOX would read it as ink the user erased and tombstone it on every device. Pass nil only
+    ///   when the caller holds nothing in memory across the read and the write.
+    /// - Returns: the page as it was actually written — the caller's content plus whatever landed
+    ///   underneath it, which is what the caller must hold from here on.
+    @discardableResult
+    func savePage(_ page: PageFile, baselineStrokeIDs: Set<String>? = nil) throws -> PageFile {
         guard let notebookId = page.notebookId,
               var manifest = readManifestFromDisk(notebookId)
-        else { return }
+        else { return page }
         var page = page
         let now = NotableDate.format(Date())
         page.updatedAt = now
         page.updatedBy = deviceID
 
-        // Whatever is no longer here was erased. Recording it is what stops the other device's
-        // copy of an erased stroke from coming back on the next merge — absence alone cannot be
-        // told apart from "that stroke has not reached this device yet".
-        let previous = readPageFromDisk(notebookId: notebookId, pageId: page.id)
+        let onDisk = readPageFromDisk(notebookId: notebookId, pageId: page.id)
+        let baseline = baselineStrokeIDs ?? Set(onDisk?.strokes.map(\.id) ?? [])
+        let saved = Set(page.strokes.map(\.id))
+
+        // Whatever the caller *had* and no longer has was erased. Recording it is what stops the
+        // other device's copy of an erased stroke from coming back on the next merge — absence
+        // alone cannot be told apart from "that stroke has not reached this device yet".
         page.deletedStrokes = CouchTombstones.derive(
-            previousIDs: Set(previous?.strokes.map(\.id) ?? []),
-            currentIDs: Set(page.strokes.map(\.id)),
-            existing: previous?.deletedStrokes ?? [],
+            previousIDs: baseline,
+            currentIDs: saved,
+            existing: onDisk?.deletedStrokes ?? [],
             deletedAt: now)
+        let erased = Set(page.deletedStrokes.map(\.id))
+
+        // Erasure beats drawing: a stroke the other device tombstoned goes, even though this
+        // caller still holds it.
+        page.strokes.removeAll { erased.contains($0.id) }
+        // Ink that reached this file after the caller loaded it was never the caller's to drop, so
+        // it is folded back in rather than overwritten. Appended rather than sorted in: the merge
+        // imposes the canonical z-order, and re-sorting here would shuffle the user's own ink.
+        page.strokes += (onDisk?.strokes ?? []).filter {
+            !saved.contains($0.id) && !baseline.contains($0.id) && !erased.contains($0.id)
+        }
+        // Images travel the same way and the editor never removes them, so an add-wins union is
+        // the whole rule (the page format carries no image tombstones).
+        let savedImages = Set(page.images.map(\.id))
+        page.images += (onDisk?.images ?? []).filter { !savedImages.contains($0.id) }
 
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
@@ -152,6 +191,7 @@ final class NotebookStore: ObservableObject {
         try writeManifest(manifest)
         refreshAfterLocalChange(
             documents: [CouchDocID.page(page.id), CouchDocID.notebook(notebookId)])
+        return page
     }
 
     private func readPageFromDisk(notebookId: String, pageId: String) -> PageFile? {
