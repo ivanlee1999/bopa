@@ -30,8 +30,10 @@ final class CanvasContainerView: UIView {
     /// their zoom across a rotation.
     private var isFitToWidth = true
 
-    /// Whether the first layout zooms the page to fit the view's width (otherwise 1:1).
-    var fitWidthOnOpen = true
+    /// Whether the page is kept fitted to the view's width: fitted on open, re-fitted on
+    /// every width change, until a pinch takes it off the fit. Off means "actual size":
+    /// open at 1:1 and leave the zoom alone.
+    var keepsFitToWidth = true
     var pageWidth: CGFloat = 1404 {
         didSet { paperView.pageWidth = pageWidth }
     }
@@ -88,17 +90,30 @@ final class CanvasContainerView: UIView {
         updateContentGeometry()
     }
 
-    /// The zoom at which the page exactly fills the view's width, capped at 1:1 — a page is
-    /// never blown up just because the window is wide.
+    /// The zoom at which the page exactly fills the view's width. Uncapped in both
+    /// directions: a landscape iPad is wider than the 1404pt page, and "fit width" there
+    /// means filling the screen rather than leaving the page marooned in empty desk.
+    static func fitZoom(viewWidth: CGFloat, pageWidth: CGFloat) -> CGFloat {
+        guard viewWidth > 0, pageWidth > 0 else { return 1 }
+        return viewWidth / pageWidth
+    }
+
     private var fitWidthZoom: CGFloat {
-        guard bounds.width > 0, pageWidth > 0 else { return 1 }
-        return min(bounds.width / pageWidth, 1)
+        Self.fitZoom(viewWidth: bounds.width, pageWidth: pageWidth)
+    }
+
+    /// Widens the scroll view's zoom range so the fit is actually reachable — the fit can
+    /// fall outside the configured range at either end (a narrow window needs less than the
+    /// minimum, a landscape iPad more than the maximum), and a clamped fit is not a fit.
+    private func allowZoom(_ fit: CGFloat) {
+        canvas.minimumZoomScale = min(canvas.minimumZoomScale, fit)
+        canvas.maximumZoomScale = max(canvas.maximumZoomScale, fit)
     }
 
     private func applyInitialZoom() {
         let fit = fitWidthZoom
-        canvas.minimumZoomScale = min(canvas.minimumZoomScale, fit)
-        if fitWidthOnOpen {
+        allowZoom(fit)
+        if keepsFitToWidth {
             canvas.zoomScale = fit
             isFitToWidth = true
         } else {
@@ -113,17 +128,31 @@ final class CanvasContainerView: UIView {
     /// from the wider layout, so it cannot be pinched back into view.
     private func adjustZoomForNewWidth() {
         let fit = fitWidthZoom
-        // Never leave the user unable to zoom out far enough to see the whole page width.
-        canvas.minimumZoomScale = min(canvas.minimumZoomScale, fit)
+        // Never leave the user unable to reach the zoom that fits the new width.
+        allowZoom(fit)
         // The offset is in (zoomed) view points, so re-derive it from the page-space
         // position: rotating should keep you where you were writing, not jump the page.
         let anchorY = canvas.contentOffset.y / max(canvas.zoomScale, 0.01)
         // A zoomed-in page keeps its zoom (you were writing at that size); only the
-        // minimum above changes, so the narrower screen can still be pinched back to fit.
-        if isFitToWidth {
+        // range above changes, so the narrower screen can still be pinched back to fit.
+        if keepsFitToWidth, isFitToWidth {
             canvas.zoomScale = fit
         }
         applyScroll(pageY: anchorY)
+    }
+
+    /// Fits the page to the view's width now, and re-arms the sticky fit so later width
+    /// changes keep it there. The way back after a pinch has taken the page off the fit.
+    func fitToWidth() {
+        guard bounds.width > 0 else { return }
+        let fit = fitWidthZoom
+        allowZoom(fit)
+        // Same page-space anchor as a rotation: re-fitting changes the scale, not the place.
+        let anchorY = canvas.contentOffset.y / max(canvas.zoomScale, 0.01)
+        canvas.zoomScale = fit
+        isFitToWidth = true
+        applyScroll(pageY: anchorY)
+        updateContentGeometry()
     }
 
     /// Called by the canvas delegate whenever the zoom changes. Remembers whether the page

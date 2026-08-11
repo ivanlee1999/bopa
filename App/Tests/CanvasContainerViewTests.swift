@@ -10,9 +10,15 @@ final class CanvasContainerViewTests: XCTestCase {
 
     private let portrait = CGRect(x: 0, y: 0, width: 834, height: 1210)
     private let landscape = CGRect(x: 0, y: 0, width: 1210, height: 834)
+    /// Wider than the 1404pt page — an external display under Stage Manager. Every built-in
+    /// iPad screen is narrower than the page, so this is the only way to reach the fit
+    /// above 1:1.
+    private let wide = CGRect(x: 0, y: 0, width: 1900, height: 1000)
 
+    /// Uncapped on purpose: "fit width" fills the screen, so a landscape iPad wider than the
+    /// 1404pt page scales the page UP rather than leaving it in a band of empty desk.
     private func fit(_ width: CGFloat) -> CGFloat {
-        min(width / EditorCanvasView.pageWidth, 1)
+        width / EditorCanvasView.pageWidth
     }
 
     /// A container configured the way `EditorCanvasView.makeUIView` configures it, laid out
@@ -43,9 +49,34 @@ final class CanvasContainerViewTests: XCTestCase {
 
     func testOpensAtOneToOneWhenFitWidthIsOff() {
         let container = makeContainer()
-        container.fitWidthOnOpen = false
+        container.keepsFitToWidth = false
         rotate(container, to: portrait)
         XCTAssertEqual(container.canvas.zoomScale, 1, accuracy: 0.001)
+    }
+
+    /// "Actual size" means the zoom is the user's business: a rotation must not quietly
+    /// re-fit the page even when the old zoom happened to be the old width's fit.
+    func testActualSizeKeepsItsZoomAcrossRotation() {
+        let container = makeContainer(portrait)
+        container.keepsFitToWidth = false
+        rotate(container, to: landscape)
+        XCTAssertEqual(container.canvas.zoomScale, fit(portrait.width), accuracy: 0.001)
+    }
+
+    /// The page fills a window wider than itself instead of stopping at 1:1 with desk on
+    /// either side — what "fit width" means everywhere else it appears.
+    func testAWindowWiderThanThePageScalesThePageUp() {
+        let container = makeContainer(wide)
+        XCTAssertEqual(container.canvas.zoomScale, fit(wide.width), accuracy: 0.001)
+        XCTAssertGreaterThan(container.canvas.zoomScale, 1)
+    }
+
+    /// The fit is only a fit if the scroll view will actually hold it: the configured
+    /// maximum (3) is below the fit for a wide enough window, and a clamped fit is not one.
+    func testMaximumZoomAlwaysAllowsFittingTheCurrentWidth() {
+        let container = makeContainer(CGRect(x: 0, y: 0, width: 5000, height: 1000))
+        XCTAssertGreaterThanOrEqual(container.canvas.maximumZoomScale, fit(5000))
+        XCTAssertEqual(container.canvas.zoomScale, fit(5000), accuracy: 0.001)
     }
 
     func testRotatingToLandscapeRefitsThePageToTheWiderScreen() {
@@ -76,6 +107,35 @@ final class CanvasContainerViewTests: XCTestCase {
 
         rotate(container, to: landscape)
         XCTAssertEqual(container.canvas.zoomScale, 1.5, accuracy: 0.001)
+    }
+
+    // MARK: - Re-fitting on demand
+
+    /// The ••• menu's "Fit page width" after a pinch: back on the fit, and armed again, so
+    /// the next rotation keeps it there rather than preserving the pinched-in zoom.
+    func testFitToWidthReEngagesAfterAPinch() {
+        let container = makeContainer(portrait)
+        container.canvas.zoomScale = 2
+        container.canvasZoomDidChange()
+
+        container.fitToWidth()
+        XCTAssertEqual(container.canvas.zoomScale, fit(portrait.width), accuracy: 0.001)
+
+        rotate(container, to: landscape)
+        XCTAssertEqual(container.canvas.zoomScale, fit(landscape.width), accuracy: 0.001)
+    }
+
+    /// Re-fitting changes the scale, not the place: you stay on the line you were writing.
+    func testFitToWidthKeepsThePagePosition() {
+        let container = makeContainer(portrait)
+        container.canvas.zoomScale = 2
+        container.canvasZoomDidChange()
+        container.canvas.contentOffset.y = 1200 * 2
+
+        container.fitToWidth()
+
+        let pageY = container.canvas.contentOffset.y / container.canvas.zoomScale
+        XCTAssertEqual(pageY, 1200, accuracy: 1)
     }
 
     // MARK: - Scroll position

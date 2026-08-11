@@ -26,6 +26,7 @@ struct EditorView: View {
     @State private var saveError: String?
     @StateObject private var undoController = CanvasUndoController()
     @State private var scrollState = CanvasScrollState()
+    @State private var viewport = CanvasViewportController()
 
     private var manifest: NotebookManifest? { store.manifest(id: notebookId) }
     private var pageIndex: Int {
@@ -183,6 +184,16 @@ struct EditorView: View {
             Toggle(isOn: $handwriting.config.scrollLocked) {
                 Label("Lock scrolling", systemImage: "lock")
             }
+
+            // The way back onto the fit after a pinch. Also switches the preference on, so
+            // "fit it now" and "keep it fitted" are the same gesture rather than two.
+            Button {
+                handwriting.config.pageFit = .fitWidth
+                viewport.fitToWidth()
+            } label: {
+                Label("Fit page width", systemImage: "arrow.left.and.right")
+            }
+            .accessibilityIdentifier("editor.fitWidth")
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .semibold))
@@ -214,6 +225,7 @@ struct EditorView: View {
                     toolSelection: toolSelection,
                     undoController: undoController,
                     scrollState: scrollState,
+                    viewport: viewport,
                     onChanged: scheduleSave)
 
                 if canChangeTemplate {
@@ -324,6 +336,20 @@ final class CanvasScrollState {
     var pageY: CGFloat = 0
 }
 
+/// Lets the SwiftUI chrome drive the canvas's zoom. Attached the same way the undo
+/// controller attaches to the page's undo manager, and deliberately not observable: the
+/// commands travel one way and nothing here feeds back into a re-render.
+@MainActor
+final class CanvasViewportController {
+    private weak var container: CanvasContainerView?
+
+    func attach(_ container: CanvasContainerView) {
+        self.container = container
+    }
+
+    func fitToWidth() { container?.fitToWidth() }
+}
+
 /// Bridges the canvas's NSUndoManager to SwiftUI button state. PencilKit registers
 /// drawing edits with the responder chain's undo manager (the one CanvasContainerView
 /// owns); this observes that manager's notifications so the toolbar buttons
@@ -389,6 +415,7 @@ struct EditorCanvasView: UIViewRepresentable {
     var toolSelection: ToolSelection = ToolSelection()
     var undoController: CanvasUndoController = CanvasUndoController()
     var scrollState: CanvasScrollState = CanvasScrollState()
+    var viewport: CanvasViewportController = CanvasViewportController()
     var onChanged: () -> Void
 
     /// Logical page width shared with the BOOX (Notable uses the device's pixel width;
@@ -409,6 +436,7 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.maximumZoomScale = 3
 
         undoController.attach(container.pageUndoManager)
+        viewport.attach(container)
 
         // Seed the canvas from the rail: the rail is the only tool UI, so whatever it shows
         // is what the canvas must be holding from the first stroke on.
@@ -494,13 +522,19 @@ struct EditorCanvasView: UIViewRepresentable {
         /// `canvas.drawing` (which would cancel an in-flight stroke).
         func apply(_ newConfig: HandwritingConfig, to container: CanvasContainerView) {
             guard newConfig != config || !didApplyConfig else { return }
+            let previousFit = didApplyConfig ? config.pageFit : nil
             config = newConfig
             didApplyConfig = true
             let canvas = container.canvas
 
             canvas.drawingPolicy = config.fingerDrawing ? .anyInput : .pencilOnly
             canvas.isScrollEnabled = !config.scrollLocked
-            container.fitWidthOnOpen = config.zoomOnOpen == .fitWidth
+            container.keepsFitToWidth = config.pageFit == .fitWidth
+            // Switching the preference on acts on the page you are looking at, rather than
+            // waiting for the next one to be opened.
+            if let previousFit, previousFit != config.pageFit, config.pageFit == .fitWidth {
+                container.fitToWidth()
+            }
 
             // Only claim the pencil gestures when the user asked for something other than
             // the system behaviour; otherwise leave them to PencilKit.
