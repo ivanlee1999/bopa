@@ -274,7 +274,10 @@ struct EditorView: View {
         open(pageId: manifest.pageIds[index])
     }
 
-    private func open(pageId newPageId: String) {
+    /// - Returns: whether the page loaded. Callers that are retrying something use it; the
+    ///   ordinary ones do not, because `loadError` already puts the failure on screen.
+    @discardableResult
+    private func open(pageId newPageId: String) -> Bool {
         do {
             let loaded = try store.loadPage(notebookId: notebookId, pageId: newPageId)
             page = loaded
@@ -292,8 +295,10 @@ struct EditorView: View {
             liveState.pageY = CGFloat(max(loaded.scroll, 0))
             dirty = false
             loadError = nil
+            return true
         } catch {
             loadError = String(describing: error)
+            return false
         }
     }
 
@@ -305,21 +310,29 @@ struct EditorView: View {
     ///
     /// The reconciling itself is `savePage`'s: flushing first leaves the file holding the union of
     /// both copies, so this only has to decide whether the canvas is now out of date and reload.
+    ///
+    /// The flag is cleared only once that has actually happened. Sync writes these files while this
+    /// reads them, so a read here can lose a race it will win a moment later — and dropping the
+    /// flag on the way past would leave the canvas stale until some *other* document happened to
+    /// arrive. Retries are driven by pencil-lifts and further applies, so a page that cannot be
+    /// read at all costs a file read, not a spin.
     private func foldInRemoteInk() {
         guard remoteInkPending, !liveState.isDrawing, let pageId else { return }
         saveNow()
         guard let onDisk = try? store.loadPage(notebookId: notebookId, pageId: pageId) else {
             return  // a torn or missing read is not a reason to drop what is on the canvas
         }
-        remoteInkPending = false
 
         let erased = Set(onDisk.deletedStrokes.map(\.id))
         let arrived = onDisk.strokes.contains { !canvasStrokeIDs.contains($0.id) }
         let erasedElsewhere = canvasStrokeIDs.contains { erased.contains($0) }
         // Most applied documents are some other page, or this page's own echo. Reloading for those
         // would throw away the undo stack for nothing.
-        guard arrived || erasedElsewhere else { return }
-        open(pageId: pageId)
+        guard arrived || erasedElsewhere else {
+            remoteInkPending = false  // the canvas already matches the file
+            return
+        }
+        if open(pageId: pageId) { remoteInkPending = false }
     }
 
     private func addPage() {
@@ -374,8 +387,10 @@ struct EditorView: View {
         canvasStrokeIDs = Set(page.strokes.map(\.id))
         self.page = page
         do {
-            // Take back what was written, not what was offered: it may carry strokes that landed
-            // underneath us, and the next save's tombstones are derived against it.
+            // Take back what was written rather than what was offered: `savePage` reconciles
+            // against the file, so only the returned copy matches what is now on disk. That is
+            // what `page` is supposed to be, and `page.strokes` is the `source:` the next export
+            // re-identifies against.
             self.page = try store.savePage(page, baselineStrokeIDs: baseline)
             dirty = false
         } catch {
