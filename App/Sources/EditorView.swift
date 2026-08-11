@@ -186,7 +186,11 @@ struct EditorView: View {
             }
 
             // The way back onto the fit after a pinch. Also switches the preference on, so
-            // "fit it now" and "keep it fitted" are the same gesture rather than two.
+            // "fit it now" and "keep it fitted" are the same gesture rather than two. Both
+            // steps are needed: the preference alone does nothing when it was already on
+            // (which is the pinched-away case this exists for), and the direct fit alone
+            // would leave "actual size" selected. `fitToWidth` is idempotent, so the config
+            // change reaching the canvas afterwards does not fit a second time.
             Button {
                 handwriting.config.pageFit = .fitWidth
                 viewport.fitToWidth()

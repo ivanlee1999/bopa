@@ -125,6 +125,36 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertEqual(container.canvas.zoomScale, fit(landscape.width), accuracy: 0.001)
     }
 
+    /// The ••• menu both sets the preference and fits, and the preference reaching the canvas
+    /// fits again — so being asked twice has to land in exactly the same place as being asked
+    /// once, not re-anchor off the position the first fit just produced.
+    func testFittingTwiceIsTheSameAsFittingOnce() {
+        let container = makeContainer(portrait)
+        container.canvas.zoomScale = 2
+        container.canvasZoomDidChange()
+        container.canvas.contentOffset.y = 1200 * 2
+
+        container.fitToWidth()
+        let zoom = container.canvas.zoomScale
+        let offset = container.canvas.contentOffset.y
+
+        container.fitToWidth()
+        XCTAssertEqual(container.canvas.zoomScale, zoom, accuracy: 0.0001)
+        XCTAssertEqual(container.canvas.contentOffset.y, offset, accuracy: 0.0001)
+    }
+
+    /// Fitting says where the page sits, not what mode it is in: "actual size" must not start
+    /// re-fitting rotations behind the back of the setting.
+    func testFitToWidthDoesNotTurnTheStickyModeOn() {
+        let container = makeContainer(portrait)
+        container.keepsFitToWidth = false
+        container.fitToWidth()
+        XCTAssertEqual(container.canvas.zoomScale, fit(portrait.width), accuracy: 0.001)
+
+        rotate(container, to: landscape)
+        XCTAssertEqual(container.canvas.zoomScale, fit(portrait.width), accuracy: 0.001)
+    }
+
     /// Re-fitting changes the scale, not the place: you stay on the line you were writing.
     func testFitToWidthKeepsThePagePosition() {
         let container = makeContainer(portrait)
