@@ -61,6 +61,18 @@ final class HandwritingSettingsTests: XCTestCase {
         XCTAssertEqual(config.doubleTapAction, .system)
     }
 
+    /// A pencil gesture set to the retired "Show/hide tool palette" must not fall back to
+    /// `.system` — that would hand the gesture to the system-wide Apple Pencil preference,
+    /// which is exactly what choosing an action overrode.
+    func testRetiredPencilActionLoadsAsDoNothing() {
+        defaults.set("toggleToolPicker", forKey: HandwritingConfig.Key.doubleTapAction)
+        defaults.set("toggleToolPicker", forKey: HandwritingConfig.Key.squeezeAction)
+
+        let config = HandwritingConfig.load(from: defaults)
+        XCTAssertEqual(config.doubleTapAction, .ignore)
+        XCTAssertEqual(config.squeezeAction, .ignore)
+    }
+
     @MainActor
     func testSettingsObjectPersistsOnMutation() {
         let settings = HandwritingSettings(defaults: defaults)

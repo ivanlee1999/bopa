@@ -593,8 +593,15 @@ struct EditorCanvasView: UIViewRepresentable {
                 break
             case .eraser:
                 if currentTool is PKEraserTool {
+                    // Falling back to the rail's ink rather than a fixed black: toggling out
+                    // of the eraser before ever using another tool (the canvas can open
+                    // holding one) must not silently reset the colour the rail is showing.
+                    // `toolSelection?.pkTool` can't stand in here — while the eraser is
+                    // selected it returns the eraser, and the toggle would do nothing.
+                    let ink = toolSelection?.ink.uiColor ?? .black
                     selectFromOutsideTheRail(
-                        previousTool ?? PKInkingTool(.pen, color: .black, width: 5))
+                        previousTool
+                            ?? PKInkingTool(.pen, color: ink, width: ToolSelection.Kind.pen.width))
                 } else {
                     selectFromOutsideTheRail(PKEraserTool(.bitmap))
                 }

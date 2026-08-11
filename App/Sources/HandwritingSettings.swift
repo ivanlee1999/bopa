@@ -27,11 +27,26 @@ enum PencilAction: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    /// Reads a stored action, translating the ones earlier builds could write. A retired
+    /// action becomes "do nothing" rather than falling through to the default: the user
+    /// picked it precisely to take the gesture away from the system, and quietly handing
+    /// it back would make the pencil start doing something they never asked for.
+    static func stored(_ raw: String) -> PencilAction? {
+        if let action = PencilAction(rawValue: raw) { return action }
+        switch raw {
+        // "Show/hide tool palette", retired with PencilKit's floating picker.
+        case "toggleToolPicker": return .ignore
+        default: return nil
+        }
+    }
+
     var label: String {
         switch self {
         case .system: "System setting"
         case .ignore: "Do nothing"
-        case .eraser: "Switch between eraser and pen"
+        // Not "…and pen": toggling out of the eraser goes back to whatever was in hand
+        // before it, and only reaches for a pen when nothing else has been used yet.
+        case .eraser: "Switch between current tool and eraser"
         case .previousTool: "Switch to previous tool"
         case .undo: "Undo"
         }
@@ -90,11 +105,11 @@ struct HandwritingConfig: Equatable, Sendable {
             config.zoomOnOpen = value
         }
         if let raw = defaults.string(forKey: Key.doubleTapAction),
-           let value = PencilAction(rawValue: raw) {
+           let value = PencilAction.stored(raw) {
             config.doubleTapAction = value
         }
         if let raw = defaults.string(forKey: Key.squeezeAction),
-           let value = PencilAction(rawValue: raw) {
+           let value = PencilAction.stored(raw) {
             config.squeezeAction = value
         }
         if let raw = defaults.string(forKey: Key.defaultTemplate) {
