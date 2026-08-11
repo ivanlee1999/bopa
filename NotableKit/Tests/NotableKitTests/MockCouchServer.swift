@@ -25,6 +25,7 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
     /// Forces a status for documents whose id is listed, for failure injection.
     var failingDocumentIDs: [String: Int] = [:]
     private(set) var requestLog: [(method: String, path: String)] = []
+    private var changeBatchSizes: [Int] = []
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         try lock.withLock {
@@ -164,7 +165,8 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
 
     private func changes(_ request: HTTPRequest) -> HTTPResponse {
         let since = Int(request.query.first { $0.name == "since" }?.value ?? "0") ?? 0
-        let rows = docs
+        let limit = (request.query.first { $0.name == "limit" }?.value).flatMap(Int.init)
+        var rows = docs
             .filter { $0.value.seq > since }
             .sorted { $0.value.seq < $1.value.seq }
             .map { id, doc -> [String: Any] in
@@ -178,12 +180,35 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
                 if doc.deleted { row["deleted"] = true }
                 return row
             }
-        let result: [String: Any] = ["results": rows, "last_seq": String(seqCounter)]
+        // `limit` is honoured, and `last_seq` is then the sequence of the last row actually
+        // returned — not the server's newest. A mock that ignored the limit and reported the end of
+        // the feed would let a client "page" by asking once and being handed everything, which is
+        // exactly the behaviour paging exists to avoid.
+        var lastSeq = seqCounter
+        if let limit, rows.count > limit {
+            rows = Array(rows.prefix(limit))
+            lastSeq = (rows.last?["seq"] as? Int) ?? seqCounter
+        }
+        changeBatchSizes.append(rows.count)
+        let result: [String: Any] = ["results": rows, "last_seq": String(lastSeq)]
         return HTTPResponse(
             status: 200, body: (try? JSONSerialization.data(withJSONObject: result)) ?? Data())
     }
 
     // MARK: Test helpers
+
+    /// How many times the change feed has been read — the way a test tells one request handing
+    /// back everything from a genuine walk through the feed.
+    func changeRequestCount() -> Int {
+        lock.withLock { requestLog.filter { $0.path.hasSuffix("_changes") }.count }
+    }
+
+    /// The most rows any single `_changes` response carried. Request *count* cannot tell paging
+    /// from its absence — an unpaged read is one big response followed by an empty one, which is
+    /// two requests either way — but the size of the largest response can.
+    func largestChangeBatch() -> Int {
+        lock.withLock { changeBatchSizes.max() ?? 0 }
+    }
 
     /// Forgets what has been asked for so far, for tests that assert about the requests a
     /// *later* step makes.

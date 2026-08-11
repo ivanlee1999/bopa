@@ -535,6 +535,33 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertFalse(report.stillDirty.contains(pageID))
     }
 
+    /// A catch-up from `0` — a fresh install, or any device whose checkpoint was lost — used to
+    /// ask for the whole library in one response and hold it all in memory before applying any of
+    /// it. It arrives in batches now, each one checkpointed as it lands.
+    func testACatchUpLongerThanOneBatchPagesThroughTheWholeFeed() async throws {
+        let total = CouchSyncEngine.catchUpBatchSize + 25
+        for index in 0..<total {
+            let id = CouchDocID.page("p\(index)")
+            booxStore.set(id, .page(page(strokes: [stroke("s\(index)", at: index, device: "boox")],
+                                         updatedAt: 5, by: "boox")))
+            await boox.markDirty([id])
+        }
+        _ = await boox.flush()
+
+        let report = try await ipad.pull()
+
+        XCTAssertEqual(report.applied.count, total, "every page should have arrived")
+        XCTAssertGreaterThan(server.changeRequestCount(), 1, "and over more than one request")
+        // The point is the size of each response, not the number of them: an unpaged read is one
+        // big response followed by an empty one, which is also two requests.
+        XCTAssertLessThanOrEqual(
+            server.largestChangeBatch(), CouchSyncEngine.catchUpBatchSize,
+            "no single response should have carried the whole library")
+        // A second pull has nothing left to do: the checkpoint moved past everything applied.
+        let again = try await ipad.pull()
+        XCTAssertTrue(again.applied.isEmpty)
+    }
+
     func testUnauthorizedStopsImmediatelyAndKeepsWork() async throws {
         server.failingDocumentIDs[pageID] = 401
         ipadStore.set(pageID, .page(page(updatedAt: 5, by: "ipad")))
