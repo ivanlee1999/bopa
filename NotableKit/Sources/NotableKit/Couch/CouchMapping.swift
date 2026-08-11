@@ -33,8 +33,12 @@ public enum CouchMapping {
     /// Rebuilds the on-disk page. `scroll` is device-local and does not travel, so it is carried
     /// over from the copy already on disk rather than reset — otherwise every incoming change
     /// would scroll the reader back to the top.
+    /// - Parameter keeping: strokes already on disk that the merge never saw, appended after the
+    ///   merged ink. They are the newest thing on the page, so last — which is also topmost — is
+    ///   where they belong. See `FileCouchStore.survivingStrokes`.
     public static func pageFile(
-        from page: CouchPage, id: String, existing: PageFile?, notebookDir: URL
+        from page: CouchPage, id: String, existing: PageFile?, notebookDir: URL,
+        keeping surviving: [StrokeDTO] = []
     ) -> PageFile {
         let existingImages = Dictionary(
             (existing?.images ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -59,7 +63,7 @@ public enum CouchMapping {
             scroll: existing?.scroll ?? 0,
             createdAt: page.createdAt,
             updatedAt: page.updatedAt,
-            strokes: page.strokes.map(strokeDTO(from:)),
+            strokes: page.strokes.map(strokeDTO(from:)) + surviving,
             images: page.images.map {
                 imageDTO(
                     from: $0, existing: existingImages[$0.id],

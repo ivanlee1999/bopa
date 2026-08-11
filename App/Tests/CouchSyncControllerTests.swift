@@ -15,10 +15,15 @@ final class CouchSyncControllerTests: XCTestCase {
         private var _flushReport = CouchSyncEngine.FlushReport()
         private var _pullReport = CouchSyncEngine.PullReport()
         private var _pullError: Error?
+        private var _pendingCount = 0
 
         var flushCount: Int { lock.withLock { _flushCount } }
         /// The `longpoll` flag of each pull, newest last.
         var pullCalls: [Bool] { lock.withLock { _pullCalls } }
+
+        /// Documents left in the outbox — what a flush that failed while offline leaves behind.
+        func setPendingCount(_ count: Int) { lock.withLock { _pendingCount = count } }
+        func pendingCount() async -> Int { lock.withLock { _pendingCount } }
 
         func setFlushReport(_ report: CouchSyncEngine.FlushReport) {
             lock.withLock { _flushReport = report }
@@ -69,7 +74,8 @@ final class CouchSyncControllerTests: XCTestCase {
             editQuietPeriod: quiet,
             sleeper: { try await sleeper.sleep($0) },
             flush: { await engine.flush() },
-            pull: { try await engine.pull(longpoll: $0) })
+            pull: { try await engine.pull(longpoll: $0) },
+            pending: { await engine.pendingCount() })
     }
 
     // MARK: Push
@@ -179,6 +185,38 @@ final class CouchSyncControllerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(
             engine.flushCount, 1,
             "a pull that found local-only content should push it without waiting")
+    }
+
+    /// Reconnecting has to drain the outbox, not just deliver what the feed carried. Edits made
+    /// while offline stayed dirty because their flush failed; the pull that succeeds afterwards is
+    /// the first sign the network is back, and nothing else will retry them until the user writes
+    /// again or taps Sync now.
+    func testAPullThatBringsNothingBackStillPushesWorkLeftPendingByAnOfflineFlush() async throws {
+        let engine = EngineSpy()
+        engine.setPendingCount(2)  // two documents a flush could not send while offline
+        // The feed has nothing for us: no applied rows, and so nothing to push back either.
+        engine.setPullReport(CouchSyncEngine.PullReport())
+
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))
+        controller.start()
+        try await Task.sleep(for: .milliseconds(80))
+        controller.stop()
+
+        XCTAssertGreaterThanOrEqual(
+            engine.flushCount, 1,
+            "a successful pull with documents still pending should flush the outbox")
+    }
+
+    /// The converse: an idle feed with an empty outbox must not push on every pass.
+    func testAnIdlePullWithNothingPendingDoesNotPush() async throws {
+        let engine = EngineSpy()
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(80))
+        controller.stop()
+
+        XCTAssertEqual(engine.flushCount, 0, "nothing queued means nothing to send")
     }
 
     func testAFailingPullBacksOffInsteadOfSpinning() async throws {

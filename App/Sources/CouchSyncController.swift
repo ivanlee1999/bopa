@@ -15,6 +15,8 @@ final class CouchSyncController: ObservableObject {
     typealias Flush = @Sendable () async -> CouchSyncEngine.FlushReport
     /// Waits for the server to report a change, or returns when the wait times out.
     typealias Pull = @Sendable (_ longpoll: Bool) async throws -> CouchSyncEngine.PullReport
+    /// How many documents are still waiting in the engine's outbox.
+    typealias Pending = @Sendable () async -> Int
     typealias Sleeper = @Sendable (TimeInterval) async throws -> Void
 
     enum Status: Equatable {
@@ -49,6 +51,7 @@ final class CouchSyncController: ObservableObject {
 
     private let flush: Flush
     private let pull: Pull
+    private let pending: Pending
     private let sleeper: Sleeper
     private let now: @MainActor () -> Date
 
@@ -63,7 +66,8 @@ final class CouchSyncController: ObservableObject {
         now: @escaping @MainActor () -> Date = Date.init,
         sleeper: @escaping Sleeper = { try await Task.sleep(for: .seconds($0)) },
         flush: @escaping Flush,
-        pull: @escaping Pull
+        pull: @escaping Pull,
+        pending: @escaping Pending = { 0 }
     ) {
         self.editQuietPeriod = editQuietPeriod
         self.retryFloor = retryFloor
@@ -73,6 +77,7 @@ final class CouchSyncController: ObservableObject {
         self.sleeper = sleeper
         self.flush = flush
         self.pull = pull
+        self.pending = pending
     }
 
     /// Wires the controller to a real engine.
@@ -85,7 +90,8 @@ final class CouchSyncController: ObservableObject {
             editQuietPeriod: editQuietPeriod,
             sleeper: sleeper,
             flush: { await engine.flush() },
-            pull: { longpoll in try await engine.pull(longpoll: longpoll) })
+            pull: { longpoll in try await engine.pull(longpoll: longpoll) },
+            pending: { await engine.pendingCount })
     }
 
     var isRunning: Bool { pullTask != nil }
@@ -111,7 +117,15 @@ final class CouchSyncController: ObservableObject {
                     self.apply(report)
                     // Anything the server lacked is now queued; send it without waiting for the
                     // edit timer, which will not fire because the user is not writing.
-                    if !report.pushBack.isEmpty { await self.pushNow() }
+                    //
+                    // The outbox is checked too, not just what this pull brought back. A pull that
+                    // succeeds is the first proof the network returned, and edits made while it was
+                    // gone are still sitting dirty from a flush that failed offline. Pushing only
+                    // on `pushBack` would leave them there until the user typed something else or
+                    // tapped Sync now — a reconnect has to drain the outbox, not merely deliver
+                    // what the feed happened to carry.
+                    let stillQueued = await self.pending()
+                    if !report.pushBack.isEmpty || stillQueued > 0 { await self.pushNow() }
 
                     // A long poll is supposed to block until something happens, so an empty
                     // result should be rare and slow. When it is neither — a proxy that answers

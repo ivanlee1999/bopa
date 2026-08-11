@@ -101,7 +101,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         }
     }
 
-    public func apply(_ documentID: String, _ body: CouchDocBody) throws {
+    public func apply(_ documentID: String, _ body: CouchDocBody, basedOn: CouchDocBody?) throws {
         guard let (type, id) = CouchDocID.split(documentID) else { return }
 
         switch body {
@@ -110,7 +110,8 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             let existing = readPage(notebookId: notebookId, pageId: id)
             let dir = notebookDir(notebookId)
             let file = CouchMapping.pageFile(
-                from: page, id: id, existing: existing, notebookDir: dir)
+                from: page, id: id, existing: existing, notebookDir: dir,
+                keeping: survivingStrokes(in: existing, merged: page, basedOn: basedOn))
             try write(encoder.encode(file), to: pageURL(notebookId: notebookId, pageId: id))
             lock.withLock { pageIndex[id] = notebookId }
             noteWantedAssets(of: file, notebookDir: dir)
@@ -155,6 +156,25 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             clearDeletion(documentID)
         }
         didApplyChanges?()
+    }
+
+    /// Strokes on disk that this merge never saw, and so cannot have decided against.
+    ///
+    /// Computing a merge takes a network round trip, and `savePage` goes on writing throughout.
+    /// Without this, a stroke drawn during that window reads as "present locally, absent from the
+    /// result" and is dropped — no tombstone written, nothing left dirty, so the ink is gone from
+    /// the file and was never pushed. `basedOn` nil means there was no merge to speak of (a seed,
+    /// or a document this device had never held), and the body is taken as given.
+    private func survivingStrokes(
+        in existing: PageFile?, merged: CouchPage, basedOn: CouchDocBody?
+    ) -> [StrokeDTO] {
+        guard let existing, case .page(let snapshot)? = basedOn else { return [] }
+        let seen = Set(snapshot.strokes.map(\.id))
+        let kept = Set(merged.strokes.map(\.id))
+        let tombstoned = Set(merged.deletedStrokes.map(\.id))
+        return existing.strokes.filter {
+            !seen.contains($0.id) && !kept.contains($0.id) && !tombstoned.contains($0.id)
+        }
     }
 
     /// Protocol §6.5. The local copy is left exactly as it is and the remote one is written

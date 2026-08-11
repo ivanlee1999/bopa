@@ -491,7 +491,7 @@ private final class ScenarioStore: CouchLocalStore, @unchecked Sendable {
 
     func load(_ documentID: String) throws -> CouchDocBody? { lock.withLock { docs[documentID] } }
 
-    func apply(_ documentID: String, _ body: CouchDocBody) throws {
+    func apply(_ documentID: String, _ body: CouchDocBody, basedOn: CouchDocBody?) throws {
         lock.withLock { docs[documentID] = body }
     }
 

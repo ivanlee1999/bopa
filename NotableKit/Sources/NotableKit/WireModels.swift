@@ -346,12 +346,26 @@ public struct FolderDTO: Codable, Equatable, Sendable {
 /// ISO-8601 UTC timestamps in `java.time.Instant.toString()` style: fractional seconds are
 /// printed only when non-zero, and both variants must parse.
 public enum NotableDate {
-    private static func formatter(fractional: Bool) -> ISO8601DateFormatter {
+    // Two shared instances rather than a fresh formatter per call. `parse` runs inside the merge's
+    // sort comparators (`CouchMerge.orderKey`), so a page with a couple of thousand strokes would
+    // otherwise allocate and configure tens of thousands of formatters per merge — and merges run
+    // on every change row and every 409 retry. Sharing is safe: an `ISO8601DateFormatter` is
+    // thread-safe for parsing and formatting once configured, and these two are configured here
+    // and never mutated afterwards — which is exactly what `nonisolated(unsafe)` asserts, since
+    // Foundation has never marked the class `Sendable`.
+    nonisolated(unsafe) private static let fractionalFormatter = makeFormatter(fractional: true)
+    nonisolated(unsafe) private static let plainFormatter = makeFormatter(fractional: false)
+
+    private static func makeFormatter(fractional: Bool) -> ISO8601DateFormatter {
         let f = ISO8601DateFormatter()
         f.formatOptions = fractional
             ? [.withInternetDateTime, .withFractionalSeconds]
             : [.withInternetDateTime]
         return f
+    }
+
+    private static func formatter(fractional: Bool) -> ISO8601DateFormatter {
+        fractional ? fractionalFormatter : plainFormatter
     }
 
     public static func parse(_ string: String) -> Date? {
