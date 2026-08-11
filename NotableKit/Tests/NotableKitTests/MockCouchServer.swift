@@ -36,7 +36,9 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
             if let status = failingDocumentIDs[tail] { return HTTPResponse(status: status) }
 
             switch request.method {
-            case "GET": return get(tail)
+            case "GET":
+                let openRevs = request.query.contains { $0.name == "open_revs" }
+                return openRevs ? openRevsAll(tail) : get(tail)
             case "PUT": return put(tail, request)
             default: return HTTPResponse(status: 405)
             }
@@ -45,14 +47,37 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
 
     // MARK: Verbs
 
+    /// A plain GET, which for a *deleted* document is a 404 — CouchDB does not hand back a
+    /// tombstone's body here. Modelling that rather than smoothing it over is what catches a client
+    /// that reads "deleted" as "never existed" and re-creates the document.
     private func get(_ documentID: String) -> HTTPResponse {
         guard let doc = docs[documentID] else { return HTTPResponse(status: 404) }
+        guard !doc.deleted else {
+            let body = #"{"error":"not_found","reason":"deleted"}"#.data(using: .utf8) ?? Data()
+            return HTTPResponse(status: 404, body: body)
+        }
+        return HTTPResponse(status: 200, body: encode(materialize(documentID, doc)))
+    }
+
+    /// `?open_revs=all` with `Accept: application/json`: the leaf revisions, including deleted ones,
+    /// wrapped one per element. This is the only way to read a tombstone's body back.
+    private func openRevsAll(_ documentID: String) -> HTTPResponse {
+        guard let doc = docs[documentID] else { return HTTPResponse(status: 404) }
+        let leaves = [["ok": materialize(documentID, doc)]]
+        let data = (try? JSONSerialization.data(withJSONObject: leaves)) ?? Data()
+        return HTTPResponse(status: 200, body: data)
+    }
+
+    private func materialize(_ documentID: String, _ doc: Doc) -> [String: Any] {
         var json = doc.json
         json["_id"] = documentID
         json["_rev"] = doc.rev
         if doc.deleted { json["_deleted"] = true }
-        let data = (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
-        return HTTPResponse(status: 200, body: data)
+        return json
+    }
+
+    private func encode(_ json: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
     }
 
     private func put(_ documentID: String, _ request: HTTPRequest) -> HTTPResponse {
@@ -64,6 +89,10 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         let deleted = json["_deleted"] as? Bool ?? false
 
         if let existing = docs[documentID] {
+            // Deleting what is already deleted is a 409 even when the revision is current — a
+            // client that answers a peer's tombstone by writing the same tombstone back therefore
+            // never converges, it just burns its retries.
+            if existing.deleted && deleted { return conflict() }
             // A stale revision is the whole point of the conflict path; a tombstone may be
             // overwritten without one, which is how a deleted document gets resurrected.
             if !existing.deleted || providedRev != nil {

@@ -42,17 +42,9 @@ public struct CouchDBClient: Sendable {
     public func get<Body: Decodable & Sendable>(
         _ documentID: String, as type: Body.Type
     ) async throws -> Stored<Body>? {
-        let response = try await send(HTTPRequest(method: "GET", path: path(documentID)))
-        switch response.status {
-        case 200:
-            let meta = try metadata(from: response.body, documentID: documentID)
-            let body = try JSONDecoder().decode(Body.self, from: response.body)
-            return Stored(id: documentID, rev: meta.rev, deleted: meta.deleted, body: body)
-        case 404:
-            return nil
-        default:
-            throw error(for: response, path: path(documentID))
-        }
+        guard let raw = try await getRaw(documentID) else { return nil }
+        let body = try JSONDecoder().decode(Body.self, from: raw.json)
+        return Stored(id: documentID, rev: raw.rev, deleted: raw.deleted, body: body)
     }
 
     /// Raw fetch used when a document must be inspected before its type is known — the
@@ -64,10 +56,37 @@ public struct CouchDBClient: Sendable {
             let meta = try metadata(from: response.body, documentID: documentID)
             return (meta.rev, meta.deleted, response.body)
         case 404:
-            return nil
+            // A plain GET of a deleted document is a 404 (`{"error":"not_found","reason":"deleted"}`),
+            // not a 200 carrying `_deleted`. Telling "tombstoned" apart from "never existed" needs a
+            // second request — and it matters: a caller that reads a tombstone as absent re-creates
+            // the document, which silently undoes the peer's deletion.
+            return try await getDeleted(documentID)
         default:
             throw error(for: response, path: path(documentID))
         }
+    }
+
+    /// The winning leaf via `?open_revs=all`, which — unlike a plain GET — returns deleted
+    /// revisions, body and all. 404 here means the document genuinely never existed.
+    private func getDeleted(
+        _ documentID: String
+    ) async throws -> (rev: String, deleted: Bool, json: Data)? {
+        let response = try await send(HTTPRequest(
+            method: "GET", path: path(documentID),
+            query: [HTTPQueryItem("open_revs", "all")],
+            // Without this CouchDB answers multipart/mixed, which nothing here can parse.
+            headers: ["Accept": "application/json"]))
+        guard response.status == 200 else {
+            if response.status == 404 { return nil }
+            throw error(for: response, path: path(documentID))
+        }
+        // `[{"ok": {…}}, {"missing": "…"}]` — only the readable leaves carry `ok`.
+        guard let leaves = try? JSONSerialization.jsonObject(with: response.body) as? [[String: Any]],
+              let document = leaves.compactMap({ $0["ok"] as? [String: Any] }).first,
+              let json = try? JSONSerialization.data(withJSONObject: document)
+        else { return nil }
+        let meta = try metadata(from: json, documentID: documentID)
+        return (meta.rev, meta.deleted, json)
     }
 
     /// Writes a document, returning the new revision. `rev` must be the revision this device last
