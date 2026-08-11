@@ -166,13 +166,19 @@ public struct CouchDBClient: Sendable {
         ]
         if longpoll {
             query.append(HTTPQueryItem("timeout", String(timeoutMs)))
-            // Without a heartbeat an idle proxy can silently drop a long-held connection.
-            query.append(HTTPQueryItem("heartbeat", "15000"))
+            // No `heartbeat`, deliberately. CouchDB treats it as *overriding* `timeout`: given
+            // both, it holds the connection open until something actually changes, however long
+            // that takes — and its keep-alive bytes reset URLSession's idle timer in turn, so the
+            // call never returned on its own either. It was added to stop an idle proxy dropping
+            // a long-held connection; losing that costs a retry, where keeping it cost the whole
+            // rhythm of the pull loop.
         }
         if let limit { query.append(HTTPQueryItem("limit", String(limit))) }
 
         let response = try await send(HTTPRequest(
-            method: "GET", path: path("_changes"), query: query))
+            method: "GET", path: path("_changes"), query: query,
+            // Outlast the window the server was asked to hold the connection open for.
+            timeout: longpoll ? TimeInterval(timeoutMs) / 1000 + 15 : nil))
         guard response.status == 200 else {
             throw error(for: response, path: path("_changes"))
         }
