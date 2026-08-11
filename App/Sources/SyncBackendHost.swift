@@ -175,6 +175,14 @@ final class SyncBackendHost: ObservableObject {
         couchStore?.recordDeletion(CouchDocID.notebook(notebookId))
     }
 
+    /// A folder's deletion needs recording for the same reason a notebook's does: rewriting
+    /// `folders.json` only says which folders remain, and "absent from a list" is not something the
+    /// peer can tell apart from "not arrived yet". Without a tombstone the folder document stays
+    /// live on the server and comes back the next time either device syncs.
+    func noteDeleted(folderId: String) {
+        couchStore?.recordDeletion(CouchDocID.folder(folderId))
+    }
+
     var statusDetail: String? {
         switch backend {
         case .off: return nil

@@ -415,6 +415,9 @@ private struct FolderContentsView: View {
             }
             if store.isFolderEmpty(folder.id) {
                 Button(role: .destructive) {
+                    // Recorded before the folder goes, and persisted, so the tombstone still gets
+                    // pushed if this happened offline or the app is killed before the next sync.
+                    backendHost.noteDeleted(folderId: folder.id)
                     try? store.deleteFolder(id: folder.id)
                 } label: {
                     Label("Delete", systemImage: "trash")

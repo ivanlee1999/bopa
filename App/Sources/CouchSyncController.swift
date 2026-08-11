@@ -184,9 +184,10 @@ final class CouchSyncController: ObservableObject {
         pendingCount = report.stillDirty.count
 
         if report.blockedByDeletionGuard {
+            let count = report.deletionsHeldBack
             status = .failed(
-                "Refusing to delete \(report.stillDirty.count) notebooks at once. "
-                    + "If that is really what you want, confirm in Sync settings.")
+                "Holding back \(count) notebook deletion\(count == 1 ? "" : "s") that would remove "
+                    + "most of this library. Everything else is still syncing.")
         } else if let firstFailure = report.failures.values.sorted().first {
             status = .failed(firstFailure)
         } else {
