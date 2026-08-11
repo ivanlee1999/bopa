@@ -224,6 +224,42 @@ final class FileCouchStoreTests: XCTestCase {
         try JSONEncoder().encode(file).write(to: url)
     }
 
+    /// Hashing an image means reading the whole file, and the same page is loaded several times per
+    /// sync — to order the push, to push, and again on every merge. Caching that is only safe if a
+    /// file the user replaces is hashed afresh, so both halves are checked here.
+    func testAPlacedImageIsNotRehashedUntilItChanges() throws {
+        try placeImage(named: "holiday.png", in: "nb1", on: "p1")
+        let imageURL = root
+            .appendingPathComponent("notebooks/nb1/images/holiday.png")
+
+        func loadedAssetID() throws -> String? {
+            guard case .page(let page)? = try store.load(CouchDocID.page("p1")) else { return nil }
+            return page.images.first?.assetId
+        }
+
+        XCTAssertEqual(try loadedAssetID(), pictureAssetID)
+
+        // Rewritten with different bytes of the same length, and the modification date put back.
+        // Nothing the cache key looks at has changed, so a cached answer is the *stale* one — which
+        // is exactly what proves the file was not read a second time. It also states the cache's
+        // blind spot outright: content swapped without moving the clock or the size is not noticed.
+        let pinned = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: pinned], ofItemAtPath: imageURL.path)
+        XCTAssertEqual(try loadedAssetID(), pictureAssetID)
+
+        let sameLength = Data(String(repeating: "x", count: pictureBytes.count).utf8)
+        try sameLength.write(to: imageURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: pinned], ofItemAtPath: imageURL.path)
+        XCTAssertEqual(try loadedAssetID(), pictureAssetID, "a repeat load should not re-read")
+
+        // A file of a different size is a different file, and must hash afresh.
+        let replacement = Data("an entirely different picture, of another length".utf8)
+        try replacement.write(to: imageURL)
+        XCTAssertEqual(try loadedAssetID(), CouchAssetID.forBytes(replacement))
+    }
+
     /// What a placed image looks like on the wire: a reference to the hash of its bytes, not to
     /// wherever this device happens to keep the file.
     func testAPlacedImageTravelsAsTheHashOfItsBytes() throws {

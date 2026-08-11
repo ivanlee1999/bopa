@@ -26,6 +26,8 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     /// pageId → notebookId. A page document names only the page, but its file lives under the
     /// notebook, so the directory has to be searched; the answer is worth keeping.
     private var pageIndex: [String: String] = [:]
+    /// "<path>|<mtime>|<size>" → sha256. See `cachedSHA256(of:)`.
+    private var hashCache: [String: String] = [:]
 
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -78,7 +80,8 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
                   let page = readPage(notebookId: notebookId, pageId: id)
             else { return nil }
             return .page(CouchMapping.couchPage(
-                from: page, deviceID: deviceID, notebookDir: notebookDir(notebookId)))
+                from: page, deviceID: deviceID, notebookDir: notebookDir(notebookId),
+                sha256: cachedSHA256(of:)))
 
         case CouchDocType.folder:
             guard let folder = readFolders().first(where: { $0.id == id }) else { return nil }
@@ -156,6 +159,34 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             clearDeletion(documentID)
         }
         didApplyChanges?()
+    }
+
+    /// The hash of a file's bytes, remembered for as long as the file does not change.
+    ///
+    /// Hashing an image means reading the whole file, and the same page is loaded repeatedly — once
+    /// to decide push order, again to push, and again on every merge that touches it. A photo
+    /// placed on a page was being read off disk several times per sync for an answer that had not
+    /// changed since the last one.
+    ///
+    /// Keyed by modification date and size rather than by path alone, so an image the user replaces
+    /// is hashed afresh: the id has to keep describing the bytes, or it stops being an address.
+    private func cachedSHA256(of url: URL) -> String? {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let stamp = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970
+        let size = (attributes?[.size] as? NSNumber)?.intValue
+        // Nothing to key on means nothing to trust: hash it, and do not remember the answer.
+        guard let stamp, let size else { return CouchAssetID.sha256Hex(contentsOf: url) }
+
+        let key = "\(url.path)|\(stamp)|\(size)"
+        if let known = lock.withLock({ hashCache[key] }) { return known }
+        guard let hash = CouchAssetID.sha256Hex(contentsOf: url) else { return nil }
+        lock.withLock {
+            // A page's images, a few pages deep. Cleared wholesale rather than aged, because the
+            // entries are cheap and the cost of a miss is one file read.
+            if hashCache.count >= 512 { hashCache.removeAll() }
+            hashCache[key] = hash
+        }
+        return hash
     }
 
     /// Strokes on disk that this merge never saw, and so cannot have decided against.
