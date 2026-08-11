@@ -15,68 +15,133 @@ enum LibrarySelection: Hashable {
     }
 }
 
-/// One node of the sidebar's folder tree, resolved out of `folders.json` ahead of
-/// rendering so row bodies never have to walk the store.
-struct FolderNode: Identifiable, Hashable {
-    let id: String
+/// One node of the sidebar's library tree — a folder, or a notebook filed inside one — resolved
+/// out of the store ahead of rendering so row bodies never have to walk it.
+struct LibraryNode: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case folder
+        case notebook
+    }
+
+    let kind: Kind
+    /// The folder id or the notebook id. Not the row identity: the two id spaces are
+    /// independent, so `id` below namespaces them before the tree is diffed.
+    let itemId: String
     let title: String
-    let itemCount: Int
+    /// Direct children for a folder, pages for a notebook — whichever number the row shows.
+    let count: Int
     let provenance: SyncProvenance
     /// `nil` (not `[]`) for leaves — that is what suppresses the disclosure triangle.
-    var children: [FolderNode]?
+    var children: [LibraryNode]?
 
-    /// Builds the root-level nodes. A `parentFolderId` cycle (possible in a hand-edited or
-    /// half-merged folders.json) is broken by tracking the ids already on the path.
+    var id: String {
+        switch kind {
+        case .folder: return "folder:\(itemId)"
+        case .notebook: return "notebook:\(itemId)"
+        }
+    }
+
+    /// Builds the root-level nodes: the folder tree, each folder holding its subfolders and then
+    /// its notebooks, followed by the notebooks that sit at the library root. A `parentFolderId`
+    /// cycle (possible in a hand-edited or half-merged folders.json) is broken by tracking the ids
+    /// already on the path.
     @MainActor
-    static func tree(from store: NotebookStore) -> [FolderNode] {
-        func build(parent: String?, ancestors: Set<String>) -> [FolderNode] {
+    static func tree(from store: NotebookStore) -> [LibraryNode] {
+        func notebooks(in folderId: String?) -> [LibraryNode] {
+            store.notebooks(in: folderId).map { notebook in
+                LibraryNode(
+                    kind: .notebook,
+                    itemId: notebook.notebookId,
+                    title: notebook.title,
+                    count: notebook.pageIds.count,
+                    provenance: store.provenance(ofNotebook: notebook.notebookId),
+                    children: nil)
+            }
+        }
+        func build(parent: String?, ancestors: Set<String>) -> [LibraryNode] {
             store.folders(in: parent).compactMap { folder in
                 guard !ancestors.contains(folder.id) else { return nil }
-                let children = build(
-                    parent: folder.id, ancestors: ancestors.union([folder.id]))
-                return FolderNode(
-                    id: folder.id,
+                let children =
+                    build(parent: folder.id, ancestors: ancestors.union([folder.id]))
+                    + notebooks(in: folder.id)
+                return LibraryNode(
+                    kind: .folder,
+                    itemId: folder.id,
                     title: folder.title,
-                    itemCount: store.itemCount(in: folder.id),
+                    count: store.itemCount(in: folder.id),
                     provenance: store.provenance(ofFolder: folder.id),
                     children: children.isEmpty ? nil : children)
             }
         }
-        return build(parent: nil, ancestors: [])
+        return build(parent: nil, ancestors: []) + notebooks(in: nil)
+    }
+
+    /// The tree as the flat row list the sidebar draws, depth carried alongside for indentation.
+    ///
+    /// Flattened here rather than drawn by a recursive view: `OutlineGroup` starts every node
+    /// collapsed, and the point of this sidebar is that the folders and their notes are already
+    /// on screen. `collapsed` therefore holds what the user has explicitly shut, so a folder that
+    /// arrives from a sync shows its contents without being opened first.
+    static func flattened(
+        _ nodes: [LibraryNode], collapsed: Set<String>, depth: Int = 0
+    ) -> [LibraryRow] {
+        nodes.flatMap { node -> [LibraryRow] in
+            let row = LibraryRow(node: node, depth: depth)
+            guard let children = node.children, !collapsed.contains(node.id) else { return [row] }
+            return [row] + flattened(children, collapsed: collapsed, depth: depth + 1)
+        }
     }
 }
 
-/// Left column of the library: the root item, then the nesting folder tree. Each row
-/// carries its item count and a provenance glyph (on server / local only).
+/// A node placed at its depth in the flattened tree.
+struct LibraryRow: Identifiable {
+    let node: LibraryNode
+    let depth: Int
+
+    var id: String { node.id }
+}
+
+/// Left column of the library: the root item, then the whole library as a tree — every folder,
+/// nested, with the notebooks filed in it underneath. Each row carries its count and a provenance
+/// glyph (on server / local only); folders and notebooks can be renamed from their own row.
 struct LibrarySidebar: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var backendHost: SyncBackendHost
     @Binding var selection: LibrarySelection?
+    /// Tapping a note in the tree opens it, the same as tapping its cover in the grid.
+    let openNotebook: (String) -> Void
+
+    /// What the user has explicitly shut. Everything else is open — see `flattened`.
+    @State private var collapsed: Set<String> = []
+    @State private var renaming: RenameTarget?
+    @State private var showingRename = false
+    @State private var renameTitle = ""
+
+    /// What a rename alert is pointed at. One alert serves both kinds, because at any moment
+    /// only one row is being renamed.
+    private enum RenameTarget: Hashable {
+        case folder(String)
+        case notebook(String)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             masthead
             ScrollView {
                 VStack(spacing: 0) {
-                    row(
-                        tag: .root, title: "All Notes", systemImage: "tray.full",
-                        count: store.totalNotebookCount, provenance: .unknown)
-                        .accessibilityIdentifier("sidebar.allNotes")
+                    rootRow
 
-                    let tree = FolderNode.tree(from: store)
+                    let tree = LibraryNode.tree(from: store)
                     if !tree.isEmpty {
-                        SectionHeading("Folders")
+                        SectionHeading("Library")
                             .padding(.horizontal, 20)
                             .padding(.top, 18)
                             .padding(.bottom, 4)
                         // Plain buttons rather than `List(selection:)`: outside a
                         // NavigationSplitView a list's single selection only responds in
                         // edit mode, and its highlight is a rounded system capsule.
-                        OutlineGroup(tree, children: \.children) { node in
-                            row(
-                                tag: .folder(node.id), title: node.title,
-                                systemImage: "folder",
-                                count: node.itemCount, provenance: node.provenance)
+                        ForEach(LibraryNode.flattened(tree, collapsed: collapsed)) { row in
+                            treeRow(row)
                         }
                     }
                 }
@@ -86,6 +151,11 @@ struct LibrarySidebar: View {
         }
         .background(Modernist.paper)
         .tint(Modernist.ink)
+        .alert(renameAlertTitle, isPresented: $showingRename) {
+            TextField("Name", text: $renameTitle)
+            Button("Rename") { commitRename() }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     /// The wordmark, on the design's status strip: a label and a rule, nothing else.
@@ -100,37 +170,179 @@ struct LibrarySidebar: View {
         .background(Modernist.paper)
     }
 
-    private func row(
-        tag: LibrarySelection, title: String, systemImage: String, count: Int,
-        provenance: SyncProvenance
-    ) -> some View {
-        let selected = selection == tag
+    // MARK: Rows
+
+    private var rootRow: some View {
+        let selected = selection == .root
         return Button {
-            selection = tag
+            selection = .root
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 14))
-                    .frame(width: 18)
-                Text(title)
-                    .font(Modernist.font(14, .semibold))
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                ProvenanceBadge(
-                    provenance: provenance, size: 11,
-                    color: selected ? Modernist.paper : nil)
-                Text("\(count)")
-                    .font(Modernist.font(11).monospacedDigit())
-                    .accessibilityLabel("\(count) items")
-            }
-            .foregroundStyle(selected ? Modernist.paper : Modernist.ink)
-            .padding(.horizontal, 20)
-            .frame(height: 40)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected ? Modernist.ink : .clear)
-            .contentShape(Rectangle())
+            rowBody(
+                title: "All Notes", systemImage: "tray.full", weight: .semibold,
+                count: store.totalNotebookCount, countUnit: "notebooks",
+                provenance: .unknown, selected: selected)
         }
         .buttonStyle(.plain)
+        .foregroundStyle(selected ? Modernist.paper : Modernist.ink)
+        .padding(.horizontal, 20)
+        .background(selected ? Modernist.ink : .clear)
+        .accessibilityIdentifier("sidebar.allNotes")
+    }
+
+    @ViewBuilder
+    private func treeRow(_ row: LibraryRow) -> some View {
+        switch row.node.kind {
+        case .folder: folderRow(row)
+        case .notebook: notebookRow(row)
+        }
+    }
+
+    /// A folder. The disclosure triangle is a sibling button rather than part of the row's own
+    /// button — a button nested inside another button's label never sees a tap — so collapsing a
+    /// folder and selecting it stay separate gestures on the same row.
+    private func folderRow(_ row: LibraryRow) -> some View {
+        let node = row.node
+        let selected = selection == .folder(node.itemId)
+        return HStack(spacing: 4) {
+            disclosure(for: node)
+            Button {
+                selection = .folder(node.itemId)
+            } label: {
+                rowBody(
+                    title: node.title, systemImage: "folder", weight: .semibold,
+                    count: node.count, countUnit: "items",
+                    provenance: node.provenance, selected: selected)
+            }
+            .buttonStyle(.plain)
+        }
+        .foregroundStyle(selected ? Modernist.paper : Modernist.ink)
+        .padding(.leading, indent(row.depth))
+        .padding(.trailing, 20)
+        .background(selected ? Modernist.ink : .clear)
+        .accessibilityIdentifier("sidebar.folder.\(node.itemId)")
+        .contextMenu {
+            Button {
+                beginRename(.folder(node.itemId), current: node.title)
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            if store.isFolderEmpty(node.itemId) {
+                Button(role: .destructive) {
+                    if selection == .folder(node.itemId) { selection = .root }
+                    try? store.deleteFolder(id: node.itemId)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    /// A notebook, one step further in than the folder holding it. Never selected: tapping it
+    /// opens the editor, so the sidebar's selection stays a statement about *where* you are.
+    private func notebookRow(_ row: LibraryRow) -> some View {
+        let node = row.node
+        return HStack(spacing: 4) {
+            Spacer().frame(width: disclosureWidth)
+            Button {
+                openNotebook(node.itemId)
+            } label: {
+                rowBody(
+                    title: node.title, systemImage: "doc.text", weight: .regular,
+                    count: node.count, countUnit: node.count == 1 ? "page" : "pages",
+                    provenance: node.provenance, selected: false)
+            }
+            .buttonStyle(.plain)
+        }
+        .foregroundStyle(Modernist.ink)
+        .padding(.leading, indent(row.depth))
+        .padding(.trailing, 20)
+        .accessibilityIdentifier("sidebar.notebook.\(node.itemId)")
+        .contextMenu {
+            Button {
+                beginRename(.notebook(node.itemId), current: node.title)
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+        }
+    }
+
+    /// Shared row interior, so a folder, a note and the root item line up on the same grid.
+    private func rowBody(
+        title: String, systemImage: String, weight: Font.Weight, count: Int, countUnit: String,
+        provenance: SyncProvenance, selected: Bool
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14))
+                .frame(width: 18)
+            Text(title)
+                .font(Modernist.font(14, weight))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            ProvenanceBadge(
+                provenance: provenance, size: 11,
+                color: selected ? Modernist.paper : nil)
+            Text("\(count)")
+                .font(Modernist.font(11).monospacedDigit())
+                .accessibilityLabel("\(count) \(countUnit)")
+        }
+        .frame(height: 40)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func disclosure(for node: LibraryNode) -> some View {
+        if node.children != nil {
+            let shut = collapsed.contains(node.id)
+            Button {
+                if shut {
+                    collapsed.remove(node.id)
+                } else {
+                    collapsed.insert(node.id)
+                }
+            } label: {
+                Image(systemName: shut ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: disclosureWidth, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(shut ? "Expand \(node.title)" : "Collapse \(node.title)")
+        } else {
+            Spacer().frame(width: disclosureWidth)
+        }
+    }
+
+    private let disclosureWidth: CGFloat = 18
+
+    /// The triangle sits in the 20pt gutter the rest of the panel keeps clear, so the tree's
+    /// glyph column stays put whether or not a row can be opened. It is inset by enough that it
+    /// still reads as inside the panel rather than clipped to its edge.
+    private func indent(_ depth: Int) -> CGFloat {
+        10 + CGFloat(depth) * 16
+    }
+
+    // MARK: Renaming
+
+    private var renameAlertTitle: String {
+        if case .notebook = renaming { return "Rename notebook" }
+        return "Rename folder"
+    }
+
+    private func beginRename(_ target: RenameTarget, current: String) {
+        renaming = target
+        renameTitle = current
+        showingRename = true
+    }
+
+    private func commitRename() {
+        let title = renameTitle.trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty, let renaming else { return }
+        switch renaming {
+        case .folder(let id): try? store.renameFolder(id: id, title: title)
+        case .notebook(let id): try? store.renameNotebook(id: id, title: title)
+        }
     }
 
     /// Pinned under the tree: the sync control, then what the badges mean.
