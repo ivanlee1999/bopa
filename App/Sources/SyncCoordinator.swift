@@ -311,13 +311,15 @@ struct SyncStatusCapsule: View {
                             .controlSize(.small)
                     }
                     Text(text)
-                        .font(.caption)
+                        .font(Modernist.font(11, .semibold))
                         .lineLimit(2)
                 }
+                .foregroundStyle(Modernist.paper)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(.quaternary))
+                .padding(.vertical, 7)
+                // A square ink chip, not a floating capsule: the one transient thing in
+                // the app still has to look like it belongs to the same drawing.
+                .background(Modernist.ink)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }

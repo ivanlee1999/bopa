@@ -47,12 +47,12 @@ final class CanvasContainerView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .secondarySystemBackground
+        // Desk and page: a flat ground with the sheet edged rather than floated, so the
+        // page reads as drawn on the surface instead of hovering over it.
+        backgroundColor = UIColor(hex: 0xEEECE9)
         pageSheet.backgroundColor = .white
-        pageSheet.layer.shadowColor = UIColor.black.cgColor
-        pageSheet.layer.shadowOpacity = 0.12
-        pageSheet.layer.shadowRadius = 8
-        pageSheet.layer.shadowOffset = CGSize(width: 0, height: 2)
+        pageSheet.layer.borderColor = UIColor(hex: 0x7D7979).cgColor
+        pageSheet.layer.borderWidth = 1
         addSubview(pageSheet)
         paperView.pageWidth = pageWidth
         addSubview(paperView)

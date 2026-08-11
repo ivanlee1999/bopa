@@ -8,8 +8,13 @@ struct EditorView: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var handwriting: HandwritingSettings
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let notebookId: String
+    /// Dismisses the editor. The chrome is drawn here rather than in a navigation bar, so
+    /// the presenter hands the close action down instead of contributing a toolbar item.
+    var onClose: (() -> Void)?
 
+    @StateObject private var toolSelection = ToolSelection()
     @State private var pageId: String?
     @State private var page: PageFile?
     @State private var drawing = PKDrawing()
@@ -46,8 +51,156 @@ struct EditorView: View {
         return false
     }
 
+    /// The one-handed layout: the rail docks along the bottom instead of the left edge.
+    private var isCompact: Bool { horizontalSizeClass == .compact }
+
     var body: some View {
-        Group {
+        chrome
+            .background(Modernist.canvas)
+            .toolbar(.hidden, for: .navigationBar)
+            .onAppear { if pageId == nil { openInitialPage() } }
+            .onDisappear { saveNow() }
+            // Leaving the app does not pop the editor, so the debounced save has to be flushed
+            // here too — otherwise switching apps or locking the iPad within two seconds of the
+            // last stroke loses it.
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { saveNow() }
+            }
+            .alert(
+                "Couldn’t save this page", isPresented: .constant(saveError != nil),
+                presenting: saveError
+            ) { _ in
+                Button("OK") { saveError = nil }
+            } message: { error in
+                Text("Your strokes are still here and bopa will try again. \(error)")
+            }
+    }
+
+    // MARK: Chrome
+
+    /// Rail and bar are docked, not floating: nothing here moves, overlaps the page or
+    /// waits to be dragged out of the way.
+    @ViewBuilder
+    private var chrome: some View {
+        if isCompact {
+            VStack(spacing: 0) {
+                topBar
+                canvasArea
+                ToolRail(selection: toolSelection, undo: undoController, vertical: false)
+            }
+        } else {
+            HStack(spacing: 0) {
+                ToolRail(selection: toolSelection, undo: undoController, vertical: true)
+                VStack(spacing: 0) {
+                    topBar
+                    canvasArea
+                        .ignoresSafeArea(edges: .bottom)
+                }
+            }
+            .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                onClose?()
+            } label: {
+                Image(systemName: "chevron.backward")
+                    .font(.system(size: 17, weight: .semibold))
+            }
+            .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .accessibilityLabel("Library")
+            .accessibilityIdentifier("editor.close")
+
+            Text(manifest?.title ?? "Notebook")
+                .font(Modernist.font(15, .bold))
+                .foregroundStyle(Modernist.ink)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            if let manifest { pageControls(manifest) }
+            optionsMenu
+        }
+        .padding(.horizontal, 8)
+        .frame(height: Modernist.hit)
+        .background(Modernist.rail)
+        .overlay(alignment: .bottom) { ModernistRule() }
+    }
+
+    private func pageControls(_ manifest: NotebookManifest) -> some View {
+        HStack(spacing: 2) {
+            Button {
+                openPage(at: pageIndex - 1)
+            } label: {
+                Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
+            }
+            .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .disabled(pageIndex == 0)
+            .accessibilityLabel("Previous page")
+
+            Text("\(pageIndex + 1) / \(manifest.pageIds.count)")
+                .font(Modernist.font(11, .medium).monospacedDigit())
+                .foregroundStyle(Modernist.neutral700)
+
+            Button {
+                openPage(at: pageIndex + 1)
+            } label: {
+                Image(systemName: "chevron.right").font(.system(size: 15, weight: .semibold))
+            }
+            .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .disabled(pageIndex >= manifest.pageIds.count - 1)
+            .accessibilityLabel("Next page")
+
+            Button {
+                addPage()
+            } label: {
+                Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
+            }
+            .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .accessibilityLabel("Add page")
+        }
+    }
+
+    private var optionsMenu: some View {
+        Menu {
+            Menu {
+                Picker("Paper", selection: paperBinding) {
+                    ForEach(NativeTemplate.builtIn, id: \.name) { template in
+                        Label(template.displayName, systemImage: template.symbolName)
+                            .tag(template)
+                    }
+                }
+            } label: {
+                Label("Paper", systemImage: "doc.plaintext")
+            }
+            .disabled(!canChangeTemplate)
+
+            Toggle(isOn: $handwriting.config.fingerDrawing) {
+                Label("Finger draws", systemImage: "hand.point.up.left")
+            }
+            Toggle(isOn: $handwriting.config.scrollLocked) {
+                Label("Lock scrolling", systemImage: "lock")
+            }
+            Toggle(isOn: $handwriting.config.showsToolPicker) {
+                Label("Tool palette", systemImage: "paintpalette")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 34, height: 34)
+                .foregroundStyle(Modernist.ink)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Options")
+        .accessibilityIdentifier("editor.options")
+    }
+
+    /// The page plus the paper it is drawn on, captioned with which paper that is — the
+    /// same five native templates the BOOX renders, so the caption is also a promise.
+    private var canvasArea: some View {
+        ZStack(alignment: .bottomTrailing) {
             if let loadError {
                 ContentUnavailableView(
                     "Could not open page", systemImage: "exclamationmark.triangle",
@@ -61,101 +214,18 @@ struct EditorView: View {
                     template: pageTemplate,
                     drawing: $drawing,
                     config: handwriting.config,
+                    toolSelection: toolSelection,
                     undoController: undoController,
                     scrollState: scrollState,
                     onChanged: scheduleSave)
-                    .ignoresSafeArea(edges: .bottom)
+
+                if canChangeTemplate {
+                    Kicker("\(pageTemplate.displayName) · native", color: Modernist.neutral600)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .allowsHitTesting(false)
+                }
             }
-        }
-        .navigationTitle(manifest?.title ?? "Notebook")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    undoController.undo()
-                } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                }
-                .disabled(!undoController.canUndo)
-                .accessibilityIdentifier("editor.undo")
-
-                Button {
-                    undoController.redo()
-                } label: {
-                    Image(systemName: "arrow.uturn.forward")
-                }
-                .disabled(!undoController.canRedo)
-                .accessibilityIdentifier("editor.redo")
-
-                if let manifest {
-                    Button {
-                        openPage(at: pageIndex - 1)
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                    .disabled(pageIndex == 0)
-
-                    Text("\(pageIndex + 1)/\(manifest.pageIds.count)")
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-
-                    Button {
-                        openPage(at: pageIndex + 1)
-                    } label: {
-                        Image(systemName: "chevron.right")
-                    }
-                    .disabled(pageIndex >= manifest.pageIds.count - 1)
-
-                    Button {
-                        addPage()
-                    } label: {
-                        Image(systemName: "plus.square")
-                    }
-                }
-
-                Menu {
-                    Menu {
-                        Picker("Paper", selection: paperBinding) {
-                            ForEach(NativeTemplate.builtIn, id: \.name) { template in
-                                Label(template.displayName, systemImage: template.symbolName)
-                                    .tag(template)
-                            }
-                        }
-                    } label: {
-                        Label("Paper", systemImage: "doc.plaintext")
-                    }
-                    .disabled(!canChangeTemplate)
-
-                    Toggle(isOn: $handwriting.config.fingerDrawing) {
-                        Label("Finger draws", systemImage: "hand.point.up.left")
-                    }
-                    Toggle(isOn: $handwriting.config.scrollLocked) {
-                        Label("Lock scrolling", systemImage: "lock")
-                    }
-                    Toggle(isOn: $handwriting.config.showsToolPicker) {
-                        Label("Tool palette", systemImage: "paintpalette")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityIdentifier("editor.options")
-            }
-        }
-        .onAppear { if pageId == nil { openInitialPage() } }
-        .onDisappear { saveNow() }
-        // Leaving the app does not pop the editor, so the debounced save has to be flushed
-        // here too — otherwise switching apps or locking the iPad within two seconds of the
-        // last stroke loses it.
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active { saveNow() }
-        }
-        .alert(
-            "Couldn’t save this page", isPresented: .constant(saveError != nil),
-            presenting: saveError
-        ) { _ in
-            Button("OK") { saveError = nil }
-        } message: { error in
-            Text("Your strokes are still here and bopa will try again. \(error)")
         }
     }
 
@@ -317,6 +387,9 @@ struct EditorCanvasView: UIViewRepresentable {
     var template: NativeTemplate = .blank
     @Binding var drawing: PKDrawing
     var config = HandwritingConfig()
+    /// The docked rail's choice of tool and ink. Authoritative: a tool picked anywhere
+    /// else is mirrored back onto it rather than competing with it.
+    var toolSelection: ToolSelection = ToolSelection()
     var undoController: CanvasUndoController = CanvasUndoController()
     var scrollState: CanvasScrollState = CanvasScrollState()
     var onChanged: () -> Void
@@ -331,7 +404,6 @@ struct EditorCanvasView: UIViewRepresentable {
         context.coordinator.container = container
         let canvas = container.canvas
         canvas.delegate = context.coordinator
-        canvas.tool = PKInkingTool(.pen, color: .black, width: 5)
         canvas.isAccessibilityElement = true
         canvas.accessibilityIdentifier = "editor.canvas"
         canvas.accessibilityValue = "strokes:0"
@@ -342,17 +414,25 @@ struct EditorCanvasView: UIViewRepresentable {
         undoController.attach(container.pageUndoManager)
 
         let picker = context.coordinator.toolPicker
+        // Seed canvas and picker from the rail before the observers are attached, so this
+        // does not read back as a user-driven tool change. PKToolPicker otherwise persists
+        // whatever was last selected app-wide, which the rail would then be lying about.
+        var initialTool = toolSelection.pkTool
         if CommandLine.arguments.contains("--uitest-select-eraser") {
             // The tool picker is system UI a UI test cannot reliably drive; erasing is
             // reached by relaunching with this argument instead.
-            let eraser = PKEraserTool(.bitmap)
-            picker.selectedTool = eraser
-            canvas.tool = eraser
+            initialTool = PKEraserTool(.bitmap)
         } else if CommandLine.arguments.contains("--uitest-reset-tool") {
-            // PKToolPicker persists the last-selected tool per app; a leftover eraser
-            // makes drawing tests silently no-op. Tests opt into a known pen.
-            picker.selectedTool = PKInkingTool(.pen, color: .black, width: 5)
+            // A leftover eraser makes drawing tests silently no-op; tests opt into a
+            // known pen rather than inheriting one.
+            initialTool = PKInkingTool(.pen, color: .black, width: 5)
         }
+        canvas.tool = initialTool
+        picker.selectedTool = initialTool
+        context.coordinator.toolSelection = toolSelection
+        // Freezes the rail's current revision as already-applied, so the first update does
+        // not stomp the tool we just set (which matters for the eraser test hook).
+        context.coordinator.markToolApplied()
         picker.addObserver(canvas)
         picker.addObserver(context.coordinator)
         context.coordinator.apply(config, to: container)
@@ -363,6 +443,8 @@ struct EditorCanvasView: UIViewRepresentable {
     func updateUIView(_ container: CanvasContainerView, context: Context) {
         let canvas = container.canvas
         context.coordinator.apply(config, to: container)
+        context.coordinator.toolSelection = toolSelection
+        context.coordinator.applyToolIfNeeded()
         container.setTemplate(template)
         // Background and images may arrive/change without a page switch; both setters are
         // idempotent and never touch canvas.drawing.
@@ -407,6 +489,9 @@ struct EditorCanvasView: UIViewRepresentable {
         var programmaticUpdate = false
         var loadedPageId: String?
         weak var container: CanvasContainerView?
+        var toolSelection: ToolSelection?
+        /// Last rail revision pushed onto the canvas. `-1` means "nothing applied yet".
+        private var appliedToolRevision = -1
 
         private var config = HandwritingConfig()
         private var didApplyConfig = false
@@ -447,6 +532,31 @@ struct EditorCanvasView: UIViewRepresentable {
                 container.removeInteraction(pencilInteraction)
                 pencilInteraction.delegate = nil
             }
+        }
+
+        // MARK: - Tool rail
+
+        /// Pushes the rail's tool onto the canvas, once per rail tap. Keyed on the rail's
+        /// revision rather than on the tool: `PKTool` is not equatable, and re-assigning an
+        /// equal tool on every SwiftUI render would cancel in-flight strokes.
+        func applyToolIfNeeded() {
+            guard let toolSelection, toolSelection.revision != appliedToolRevision else { return }
+            appliedToolRevision = toolSelection.revision
+            select(toolSelection.pkTool)
+        }
+
+        /// Marks the rail's current revision as applied without touching the canvas, for
+        /// when something else has already set the tool it asks for.
+        func markToolApplied() {
+            appliedToolRevision = toolSelection?.revision ?? 0
+        }
+
+        /// Applies a tool chosen outside the rail and mirrors it back, so the rail always
+        /// shows what the canvas is actually holding. `adopt` deliberately does not bump
+        /// the rail's revision, so this cannot bounce back through `applyToolIfNeeded`.
+        private func selectFromOutsideTheRail(_ tool: PKTool) {
+            toolSelection?.adopt(tool)
+            select(tool)
         }
 
         // MARK: - Apple Pencil gestures
@@ -496,12 +606,14 @@ struct EditorCanvasView: UIViewRepresentable {
                 break
             case .eraser:
                 if toolPicker.selectedTool is PKEraserTool {
-                    select(previousTool ?? PKInkingTool(.pen, color: .black, width: 5))
+                    selectFromOutsideTheRail(
+                        previousTool ?? toolSelection?.pkTool
+                            ?? PKInkingTool(.pen, color: .black, width: 5))
                 } else {
-                    select(PKEraserTool(.bitmap))
+                    selectFromOutsideTheRail(PKEraserTool(.bitmap))
                 }
             case .previousTool:
-                if let previousTool { select(previousTool) }
+                if let previousTool { selectFromOutsideTheRail(previousTool) }
             case .undo:
                 container?.pageUndoManager.undo()
             case .toggleToolPicker:
@@ -532,6 +644,9 @@ struct EditorCanvasView: UIViewRepresentable {
             // running it twice would make "previous tool" the current one.
             guard !isProgrammaticToolChange else { return }
             noteSelection(toolPicker.selectedTool)
+            // The system palette is still available behind a setting; when it is used, the
+            // rail follows it rather than the two disagreeing about what is selected.
+            toolSelection?.adopt(toolPicker.selectedTool)
         }
 
         private var currentTool: PKTool?

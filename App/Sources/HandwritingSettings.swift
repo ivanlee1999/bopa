@@ -61,7 +61,11 @@ struct HandwritingConfig: Equatable, Sendable {
     /// When false the canvas is pencil-only: a finger pans and zooms instead of inking,
     /// which is also what makes a resting palm harmless.
     var fingerDrawing = true
-    var showsToolPicker = true
+    /// PencilKit's floating palette, off by default now that the editor has a docked tool
+    /// rail: two tool pickers on one screen disagree about what is selected, and the
+    /// floating one covers the bottom of the page. Still available for its full ink and
+    /// width controls, which the rail's four inks deliberately don't offer.
+    var showsToolPicker = false
     /// Freezes panning/zooming so a stray drag cannot shift the page mid-sentence.
     var scrollLocked = false
     var zoomOnOpen: ZoomOnOpen = .fitWidth
