@@ -164,8 +164,13 @@ final class SyncCoordinatorTests: XCTestCase {
                 XCTFail("the resolution body must not run")
             }
             XCTFail("expected the resolution to be refused")
-        } catch is SyncCoordinator.BackendNotSelected {
-            // expected
+        } catch let error as SyncCoordinator.BackendNotSelected {
+            // The message has to survive the trip to the alert. ConflictResolutionView reads it
+            // through `LocalizedError`, so an error that only conformed nominally would show the
+            // user "BackendNotSelected()".
+            XCTAssertEqual(
+                (error as? LocalizedError)?.errorDescription,
+                "WebDAV sync is turned off. Turn it back on in Settings to resolve this conflict.")
         } catch {
             XCTFail("expected BackendNotSelected, got \(error)")
         }

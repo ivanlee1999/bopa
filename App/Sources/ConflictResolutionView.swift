@@ -158,7 +158,12 @@ struct ConflictResolutionView: View {
                 dismiss()
             } catch {
                 applying = false
-                applyError = String(describing: error)
+                // An error that wrote a message for the user gets to show it; anything else falls
+                // back to its structure. `localizedDescription` is not the fallback: on a plain
+                // Swift error it yields "The operation couldn't be completed", which says less
+                // than `WebDAVError.badURL("…")` does.
+                applyError = (error as? LocalizedError)?.errorDescription
+                    ?? String(describing: error)
             }
         }
     }
