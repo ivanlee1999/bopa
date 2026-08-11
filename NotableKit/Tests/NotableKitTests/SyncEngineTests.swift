@@ -227,6 +227,85 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertTrue(report.conflicts.first?.pageIds.isEmpty ?? true)
     }
 
+    /// The BOOX re-publishing a page whose content it did not change — Notable rewrites page files
+    /// when a notebook is merely opened, and a byte-identical PUT still rotates the ETag — must not
+    /// turn the next local edit into a conflict for the user to settle. An ETag is evidence that
+    /// the file was written, not that its content moved.
+    func testRemotePageRepublishedUnchangedIsNotAConflict() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+
+        // Same bytes back on the server for both files; only the ETags move.
+        let page = try XCTUnwrap(server.fileData("/notable/notebooks/nb1/pages/p1.json"))
+        server.setFile("/notable/notebooks/nb1/pages/p1.json", page)
+        let manifest = try XCTUnwrap(server.fileData("/notable/notebooks/nb1/manifest.json"))
+        server.setFile("/notable/notebooks/nb1/manifest.json", manifest)
+
+        // Then the user erases a stroke on p1 here.
+        try writeLocalPage(notebook: "nb1", pageId: "p1", updatedAt: "2026-08-02T10:20:00Z")
+        try bumpLocalManifestClock("nb1", to: "2026-08-02T10:20:00Z")
+
+        let report = await engine().sync()
+
+        XCTAssertTrue(
+            report.conflicts.isEmpty,
+            "a byte-identical remote rewrite is not a change to reconcile")
+        let uploaded = try JSONDecoder().decode(
+            PageFile.self,
+            from: XCTUnwrap(server.fileData("/notable/notebooks/nb1/pages/p1.json")))
+        XCTAssertEqual(uploaded.updatedAt, "2026-08-02T10:20:00Z", "the local edit did not go up")
+    }
+
+    /// The same page really changed on both sides — still a conflict. The content check must only
+    /// discount rewrites that carry identical bytes.
+    func testRemotePageWithDifferentContentStillConflicts() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+
+        try seedRemotePage(notebook: "nb1", pageId: "p1", updatedAt: "2026-08-02T10:10:00Z")
+        try bumpRemoteManifestClock("nb1", to: "2026-08-02T10:10:00Z")
+        try writeLocalPage(notebook: "nb1", pageId: "p1", updatedAt: "2026-08-02T10:20:00Z")
+        try bumpLocalManifestClock("nb1", to: "2026-08-02T10:20:00Z")
+
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.conflicts.map(\.pageIds), [["p1"]])
+    }
+
+    /// Once a rewrite has been shown to carry the same content, its ETag is adopted — otherwise
+    /// every later sync re-fetches that page to reach the same conclusion.
+    func testUnchangedRewriteAdoptsTheNewEtag() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+        let page = try XCTUnwrap(server.fileData("/notable/notebooks/nb1/pages/p1.json"))
+        server.setFile("/notable/notebooks/nb1/pages/p1.json", page)
+        server.setFile(
+            "/notable/notebooks/nb1/manifest.json",
+            try XCTUnwrap(server.fileData("/notable/notebooks/nb1/manifest.json")))
+        try bumpLocalManifestClock("nb1", to: "2026-08-02T10:20:00Z")
+        _ = await engine().sync()
+
+        server.clearRequestLog()
+        let report = await engine().sync()
+
+        XCTAssertEqual(report.skipped, ["nb1"])
+        XCTAssertFalse(
+            server.requestLog().contains {
+                $0.method == "GET" && $0.path.hasSuffix("/pages/p1.json")
+            },
+            "re-fetched a page already proven unchanged")
+    }
+
+    /// A weak validator and its strong spelling are the same revision. Servers and proxies do not
+    /// always agree on which to send, and a raw string compare reads that as a remote edit.
+    func testWeakAndStrongEtagSpellingsAreTheSameRevision() {
+        XCTAssertTrue(SyncEngine.sameEtag("W/\"v3\"", "\"v3\""))
+        XCTAssertTrue(SyncEngine.sameEtag("\"v3\"", "v3"))
+        XCTAssertFalse(SyncEngine.sameEtag("\"v3\"", "\"v4\""))
+        XCTAssertFalse(SyncEngine.sameEtag(nil, nil), "two unknowns are not a match")
+        XCTAssertFalse(SyncEngine.sameEtag("\"v3\"", nil))
+    }
+
     // MARK: Resolution
 
     func testKeepMineUploadsOnTheNextRun() async throws {

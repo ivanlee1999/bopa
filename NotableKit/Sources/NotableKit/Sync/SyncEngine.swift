@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Per-page facts committed at the last successful transfer of that page.
@@ -9,10 +10,20 @@ public struct PageSyncState: Codable, Equatable, Sendable {
     /// The page's local `updatedAt` when we last committed a transfer of it, epoch ms.
     public var syncedLocalUpdatedAt: Int64
     public var etag: String?
+    /// Digest of the exact bytes that transfer moved — what both sides held at that moment.
+    ///
+    /// An ETag says a file was *written*, not that its content changed, so it cannot settle
+    /// "did the other device edit this page?" on its own: Notable rewrites page files when a
+    /// notebook is merely opened, and some servers rotate ETags on touch. Without this,
+    /// a rewrite carrying identical bytes made the next local edit of that page a conflict for
+    /// the user to settle by hand. nil in state written before this existed, which falls back to
+    /// the old ETag-only comparison.
+    public var contentHash: String?
 
-    public init(syncedLocalUpdatedAt: Int64, etag: String?) {
+    public init(syncedLocalUpdatedAt: Int64, etag: String?, contentHash: String? = nil) {
         self.syncedLocalUpdatedAt = syncedLocalUpdatedAt
         self.etag = etag
+        self.contentHash = contentHash
     }
 }
 
@@ -346,8 +357,12 @@ public actor SyncEngine {
             .map { Self.pageEtags(from: $0) } ?? [:]
 
         var conflicted: [String] = []
-        var toDownload: [String] = []
+        var toDownload: [(pageId: String, data: Data, etag: String?)] = []
         var toUpload: [String] = []
+        /// Pages the server rewrote without changing a byte: nothing to transfer, but the new ETag
+        /// is adopted so the next run stops re-fetching them.
+        var etagOnlyMoved: [(pageId: String, etag: String?)] = []
+
         for pageId in local.pageIds where remote.pageIds.contains(pageId) {
             // No row means we have never committed this page, so we have no basis to call it
             // changed — matching Notable, which never invents a conflict from missing state.
@@ -356,13 +371,27 @@ public actor SyncEngine {
                 $0 > row.syncedLocalUpdatedAt        // strict: both sides of this are our own clock
             } ?? false
             // A server that omits ETags can never produce a conflict, by design.
-            let remoteMoved = remoteEtags[pageId].map { $0 != row.etag } ?? false
+            guard let remoteEtag = remoteEtags[pageId], !Self.sameEtag(remoteEtag, row.etag) else {
+                if localDirty { toUpload.append(pageId) }
+                continue
+            }
 
-            switch (localDirty, remoteMoved) {
-            case (true, true): conflicted.append(pageId)
-            case (false, true): toDownload.append(pageId)
-            case (true, false): toUpload.append(pageId)
-            case (false, false): break
+            // The ETag moved, which is not yet proof the content did. Fetch it and compare against
+            // the bytes this device last transferred: Notable rewrites a page file when its
+            // notebook is opened, and a byte-identical rewrite used to cost the user a hand-settled
+            // conflict on their next edit of that page. The fetch is not extra work in the common
+            // case — a page that really did change has to come down anyway, and these bytes are it.
+            let fetched = try await dav.get(NotableSyncPaths.pageFile(id, pageId))
+            if let knownHash = row.contentHash, Self.contentHash(fetched.data) == knownHash {
+                etagOnlyMoved.append((pageId, fetched.etag ?? remoteEtag))
+                if localDirty { toUpload.append(pageId) }
+                continue
+            }
+
+            if localDirty {
+                conflicted.append(pageId)
+            } else {
+                toDownload.append((pageId, fetched.data, fetched.etag ?? remoteEtag))
             }
         }
 
@@ -372,6 +401,10 @@ public actor SyncEngine {
                     notebookId: id, pageIds: conflicted.sorted(), structural: structural))
             return
         }
+
+        // Adopting the ETag of a page whose content is unchanged is safe here and nowhere else:
+        // the run is committing, so it is not one of the paths that must leave state untouched.
+        for (pageId, etag) in etagOnlyMoved { state[id]?.pages[pageId]?.etag = etag }
 
         // Nothing actually differs — the manifest ETag moved without the content following it
         // (a rewrite with identical bytes, or a server that rotates ETags on touch). Adopt the new
@@ -387,17 +420,16 @@ public actor SyncEngine {
         }
 
         // Independent edits: take both sides. Pages first, manifest last, as everywhere else.
-        for pageId in toDownload {
-            let page = try await dav.get(NotableSyncPaths.pageFile(id, pageId))
-            try page.data.write(to: localPageURL(id, pageId), options: .atomic)
-            recordPageState(id, pageId, etag: page.etag)
+        for page in toDownload {
+            try page.data.write(to: localPageURL(id, page.pageId), options: .atomic)
+            recordPageState(id, page.pageId, data: page.data, etag: page.etag)
         }
         for pageId in toUpload {
             guard let data = try? Data(contentsOf: localPageURL(id, pageId)) else { continue }
             let etag = try await dav.put(
                 NotableSyncPaths.pageFile(id, pageId), data: data,
                 ifMatch: state[id]?.pages[pageId]?.etag)
-            recordPageState(id, pageId, etag: etag)
+            recordPageState(id, pageId, data: data, etag: etag)
         }
 
         // The manifests agree structurally, so either is correct; keep the newer clock so the
@@ -435,6 +467,24 @@ public actor SyncEngine {
             || local.createdAt != remote.createdAt
     }
 
+    /// Whether two ETag spellings name the same revision of a file.
+    ///
+    /// A weak validator (`W/"v3"`) and its strong spelling (`"v3"`) are the same revision, and a
+    /// server need not spell one the way it spelled the other — a PUT response, a PROPFIND body and
+    /// a proxy that re-compresses can each pick differently. Comparing the raw strings reads that
+    /// as "somebody else wrote this page", which is how a spelling difference used to become a
+    /// conflict the user had to settle. Two absent ETags are *not* equal: nothing is known.
+    static func sameEtag(_ a: String?, _ b: String?) -> Bool {
+        guard let a, let b else { return false }
+        return canonicalEtag(a) == canonicalEtag(b)
+    }
+
+    private static func canonicalEtag(_ value: String) -> String {
+        var trimmed = value.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("W/") { trimmed = String(trimmed.dropFirst(2)) }
+        return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+    }
+
     /// `pageId -> etag` from a listing of the pages directory. Notable stages uploads as
     /// `<pageId>.json.<uuid>.tmp`, so anything that is not exactly `<pageId>.json` is ignored
     /// rather than mistaken for a page.
@@ -455,10 +505,24 @@ public actor SyncEngine {
         return epochMs(page.updatedAt)
     }
 
-    private func recordPageState(_ id: String, _ pageId: String, etag: String?) {
-        guard let updatedAt = localPageUpdatedAt(id, pageId) else { return }
+    /// Commits what one page looked like at the moment it transferred.
+    ///
+    /// `data` is the bytes that actually moved, not a re-read of the file: the editor autosaves
+    /// from another thread, so re-reading could record a revision *newer* than the one the server
+    /// received as "what the server has" — and then never send it.
+    private func recordPageState(_ id: String, _ pageId: String, data: Data, etag: String?) {
+        guard let page = try? JSONDecoder().decode(PageFile.self, from: data),
+              let updatedAt = epochMs(page.updatedAt)
+        else { return }
         state[id, default: NotebookSyncState(localUpdatedAtAtSync: 0, etag: nil)]
-            .pages[pageId] = PageSyncState(syncedLocalUpdatedAt: updatedAt, etag: etag)
+            .pages[pageId] = PageSyncState(
+                syncedLocalUpdatedAt: updatedAt, etag: etag, contentHash: Self.contentHash(data))
+    }
+
+    /// Fingerprint of a transferred page, used to tell "the file was rewritten" from "the content
+    /// changed". Only ever compared against another fingerprint from this same function.
+    static func contentHash(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Upload
@@ -484,7 +548,7 @@ public actor SyncEngine {
             let etag = try await dav.put(
                 NotableSyncPaths.pageFile(id, pageId), data: data,
                 ifMatch: state[id]?.pages[pageId]?.etag)
-            recordPageState(id, pageId, etag: etag)
+            recordPageState(id, pageId, data: data, etag: etag)
         }
 
         // Orphan cleanup, mirroring Notable v0.2.6. The path is always rebuilt from the pages dir
@@ -540,7 +604,7 @@ public actor SyncEngine {
         for pageId in manifest.pageIds {
             let page = try await dav.get(NotableSyncPaths.pageFile(id, pageId))
             try page.data.write(to: localPageURL(id, pageId), options: .atomic)
-            recordPageState(id, pageId, etag: page.etag)
+            recordPageState(id, pageId, data: page.data, etag: page.etag)
         }
 
         // Remove local pages no longer in the manifest.

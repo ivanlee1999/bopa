@@ -275,6 +275,24 @@ Upload of a notebook = PUT manifest + all page files (+ referenced images/backgr
 v0.2.6 streams page uploads and cleans up orphaned page files. `MKCOL` parent directories as
 needed.
 
+### 8.1 Per-page reconciliation (bopa)
+
+Step 3's "both changed" case is where bopa is stricter than the baseline above: rather than
+last-writer-wins over the whole notebook, it keeps per-page state (`syncedLocalUpdatedAt`, ETag and
+a SHA-256 of the bytes that transfer moved) and looks at the pages. Edits to *different* pages
+merge with no prompt; only a page changed on both sides, or a manifest whose structure disagrees,
+is a conflict — and then **nothing** is transferred until the user chooses.
+
+A page counts as changed on the server only when its content differs, not merely when its ETag
+does. An ETag says a file was written; Notable rewrites page files when a notebook is opened, and
+servers and proxies vary the spelling of the same validator (`W/"v3"` vs `"v3"`). So a page whose
+ETag moved is fetched and compared against the stored digest: identical bytes mean the remote did
+not move, and the fresh ETag is simply adopted. Without that check, a rewrite carrying no change
+turned the user's next edit of that page — typically an erase, since erasing targets ink both
+devices have long since synced — into a conflict they had to settle by hand.
+
+Implementation: `SyncEngine.reconcileDiverged`, `PageSyncState`.
+
 ## 9. Interop cautions
 
 - **Clock skew matters** (LWW on `updatedAt` timestamps): keep both devices NTP-synced.
