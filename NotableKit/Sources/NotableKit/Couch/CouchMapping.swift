@@ -13,8 +13,12 @@ public enum CouchMapping {
     /// `notebookDir` is where this page's images live. It is needed because an image travels as a
     /// content-addressed `asset:` reference while it is stored as a path, and only the file itself
     /// can say which asset it is.
+    /// - Parameter sha256: how a placed image's bytes are hashed. Injectable so a caller that
+    ///   loads the same page repeatedly — every flush and every merge does — can answer from a
+    ///   cache instead of reading each image off disk again.
     public static func couchPage(
-        from file: PageFile, deviceID: String, notebookDir: URL
+        from file: PageFile, deviceID: String, notebookDir: URL,
+        sha256: (URL) -> String? = CouchAssetID.sha256Hex
     ) -> CouchPage {
         CouchPage(
             notebookId: file.notebookId,
@@ -23,7 +27,9 @@ public enum CouchMapping {
             backgroundType: file.backgroundType,
             strokes: file.strokes.map { couchStroke(from: $0, deviceID: deviceID) },
             deletedStrokes: file.deletedStrokes,
-            images: file.images.map { couchImage(from: $0, notebookDir: notebookDir) },
+            images: file.images.map {
+                couchImage(from: $0, notebookDir: notebookDir, sha256: sha256)
+            },
             deletedImages: [],
             createdAt: file.createdAt,
             updatedAt: file.updatedAt,
@@ -95,10 +101,14 @@ public enum CouchMapping {
         return dto
     }
 
-    static func couchImage(from dto: ImageDTO, notebookDir: URL) -> CouchImage {
+    static func couchImage(
+        from dto: ImageDTO, notebookDir: URL,
+        sha256: (URL) -> String? = CouchAssetID.sha256Hex
+    ) -> CouchImage {
         CouchImage(
             id: dto.id,
-            assetId: NotableImageFiles.assetID(forURI: dto.uri, notebookDir: notebookDir),
+            assetId: NotableImageFiles.assetID(
+                forURI: dto.uri, notebookDir: notebookDir, sha256: sha256),
             x: dto.x, y: dto.y,
             width: dto.width, height: dto.height,
             createdAt: dto.createdAt, updatedAt: dto.updatedAt)
