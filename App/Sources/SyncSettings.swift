@@ -221,16 +221,15 @@ struct SyncSettingsView: View {
                 }
                 .accessibilityIdentifier("sync.backend")
             } footer: {
-                Text(backend == .couchdb
-                    ? "Changes appear on your other device within a second or two, and merge "
-                        + "automatically when you have both been writing offline."
-                    : "Syncs whole notebooks through a shared folder. Slower to notice changes, "
-                        + "and edits made on both devices at once need sorting out by hand.")
+                Text(backendFooter)
             }
 
-            if backend == .couchdb {
+            switch backend {
+            case .off:
+                EmptyView()
+            case .couchdb:
                 CouchSettingsSection(settings: $couchSettings, host: backendHost)
-            } else {
+            case .webdav:
                 webdavSections
             }
         }
@@ -241,6 +240,22 @@ struct SyncSettingsView: View {
         .onDisappear {
             settings.save()
             couchSettings.save()
+        }
+    }
+
+    /// What the chosen backend means, including the promise Off makes: the settings for the other
+    /// two are kept, but nothing runs against them until one is chosen again.
+    private var backendFooter: String {
+        switch backend {
+        case .off:
+            return "bopa keeps your notes on this iPad only. Your server settings are kept, so "
+                + "turning sync back on picks up where you left off."
+        case .couchdb:
+            return "Changes appear on your other device within a second or two, and merge "
+                + "automatically when you have both been writing offline."
+        case .webdav:
+            return "Syncs whole notebooks through a shared folder. Slower to notice changes, "
+                + "and edits made on both devices at once need sorting out by hand."
         }
     }
 

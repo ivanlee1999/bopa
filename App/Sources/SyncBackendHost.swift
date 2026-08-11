@@ -13,6 +13,11 @@ final class SyncBackendHost: ObservableObject {
     @Published private(set) var backend: SyncBackend
     @Published private(set) var couch: CouchSyncController?
 
+    /// Whether a WebDAV server address is saved. Published because the library's sync button is
+    /// drawn from it, and `SyncSettings.load()` is too expensive to call from a SwiftUI body —
+    /// it touches the Keychain.
+    @Published private(set) var webdavConfigured = SyncSettings.isServerConfigured
+
     private var store: NotebookStore?
     private var coordinator: SyncCoordinator?
     private var engine: CouchSyncEngine?
@@ -31,14 +36,24 @@ final class SyncBackendHost: ObservableObject {
         configure()
     }
 
+    /// Re-reads the WebDAV settings the UI depends on. Cheaper than `configure()`, which would
+    /// tear down and rebuild the CouchDB stack for a change that has nothing to do with it.
+    func refreshWebDAVConfiguration() {
+        webdavConfigured = SyncSettings.isServerConfigured
+    }
+
     /// Rebuilds the CouchDB stack from current settings. Safe to call repeatedly.
     func configure() {
         backend = CouchSettings.backend
+        webdavConfigured = SyncSettings.isServerConfigured
         guard let store else { return }
         couch?.stop()
         couch = nil
         engine = nil
         couchStore = nil
+        // Whichever backend is now selected, the other one stops here rather than at its next
+        // trigger: a poll loop left running would keep syncing over a backend switch.
+        if backend != .webdav { coordinator?.stopAutoSync() }
 
         guard backend == .couchdb else {
             store.didChangeDocuments = nil
@@ -77,6 +92,8 @@ final class SyncBackendHost: ObservableObject {
     func becameActive() {
         guard let store, let coordinator else { return }
         switch backend {
+        case .off:
+            break
         case .webdav:
             Task { await coordinator.syncIfStale(store: store) }
             coordinator.startAutoSync(store: store)
@@ -96,6 +113,8 @@ final class SyncBackendHost: ObservableObject {
         coordinator?.stopAutoSync()
         couch?.stop()
         switch backend {
+        case .off:
+            break
         case .webdav:
             guard let store, let coordinator else { return }
             Task { await coordinator.syncIfAutomatic(store: store) }
@@ -113,11 +132,27 @@ final class SyncBackendHost: ObservableObject {
 
     func syncNow() async {
         switch backend {
+        case .off:
+            break
         case .webdav:
             guard let store, let coordinator else { return }
             await coordinator.syncNow(store: store)
         case .couchdb:
             await couch?.syncNow()
+        }
+    }
+
+    /// A sync bopa decides to do on its own — closing a notebook, say. Same routing as `syncNow`,
+    /// but each backend applies its own "only when asked" setting.
+    func syncIfAutomatic() async {
+        switch backend {
+        case .off:
+            break
+        case .webdav:
+            guard let store, let coordinator else { return }
+            await coordinator.syncIfAutomatic(store: store)
+        case .couchdb:
+            await couch?.pushNow()
         }
     }
 
@@ -135,6 +170,38 @@ final class SyncBackendHost: ObservableObject {
     }
 
     var statusDetail: String? {
-        backend == .couchdb ? couch?.statusDetail : coordinator?.statusDetail
+        switch backend {
+        case .off: return nil
+        case .webdav: return coordinator?.statusDetail
+        case .couchdb: return couch?.statusDetail
+        }
+    }
+
+    /// Whether a sync run is in flight on the selected backend. `false` when sync is off, so the
+    /// UI's spinner and its "Sync now" button read from one place rather than each guessing.
+    var isSyncing: Bool {
+        switch backend {
+        case .off: return false
+        case .webdav: return coordinator?.isSyncing ?? false
+        case .couchdb: return couch?.isSyncing ?? false
+        }
+    }
+
+    /// Whether "Sync now" can do anything: a backend is selected *and* configured. Cheap enough
+    /// for a SwiftUI body — neither branch touches the Keychain.
+    var canSyncNow: Bool {
+        switch backend {
+        case .off: return false
+        case .webdav: return webdavConfigured
+        case .couchdb: return couch != nil
+        }
+    }
+
+    /// Explains a dead "Sync now" button, or nil when there is nothing to explain.
+    var unavailableReason: String? {
+        guard !canSyncNow else { return nil }
+        return backend == .off
+            ? "Sync is turned off. Choose a backend in Settings."
+            : "Add a server in Settings to sync."
     }
 }

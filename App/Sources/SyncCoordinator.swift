@@ -48,6 +48,7 @@ final class SyncCoordinator: ObservableObject {
     private let now: @MainActor () -> Date
     private let loadSettings: @MainActor () -> SyncSettings
     private let isAutomaticEnabled: @MainActor () -> Bool
+    private let isSelectedBackend: @MainActor () -> Bool
     private let performSync: SyncOperation
     private let sleeper: Sleeper
 
@@ -61,6 +62,7 @@ final class SyncCoordinator: ObservableObject {
         now: @escaping @MainActor () -> Date = Date.init,
         loadSettings: @escaping @MainActor () -> SyncSettings = SyncSettings.load,
         isAutomaticEnabled: @escaping @MainActor () -> Bool = { SyncSettings.isAutomaticEnabled },
+        isSelectedBackend: @escaping @MainActor () -> Bool = { CouchSettings.backend == .webdav },
         sleeper: @escaping Sleeper = { try await Task.sleep(for: .seconds($0)) },
         performSync: SyncOperation? = nil
     ) {
@@ -70,6 +72,7 @@ final class SyncCoordinator: ObservableObject {
         self.now = now
         self.loadSettings = loadSettings
         self.isAutomaticEnabled = isAutomaticEnabled
+        self.isSelectedBackend = isSelectedBackend
         self.sleeper = sleeper
         self.performSync = performSync ?? { settings, rootURL, uploadOnly in
             guard let transport = settings.makeTransport() else {
@@ -87,11 +90,16 @@ final class SyncCoordinator: ObservableObject {
         return false
     }
 
-    /// Runs a sync unless one is already in flight or no server is configured.
-    /// `status` flips to `.syncing` before the first suspension point, so re-entrant
-    /// calls on the main actor bail out here — runs never overlap.
+    /// Whether WebDAV is the selected backend. Every run checks this, so switching to CouchDB (or
+    /// to Off) stops WebDAV dead even on the paths that call the coordinator directly — a stray
+    /// caller cannot reopen the case where two engines write the same notebooks at once.
+    var isSelected: Bool { isSelectedBackend() }
+
+    /// Runs a sync unless one is already in flight, WebDAV is not the selected backend, or no
+    /// server is configured. `status` flips to `.syncing` before the first suspension point, so
+    /// re-entrant calls on the main actor bail out here — runs never overlap.
     func syncNow(store: NotebookStore) async {
-        guard !isSyncing else { return }
+        guard !isSyncing, isSelectedBackend() else { return }
         let settings = loadSettings()
         guard settings.isConfigured else { return }
         // Claimed here, synchronously, before any await: that is the whole single-flight guard.
@@ -109,6 +117,7 @@ final class SyncCoordinator: ObservableObject {
     func applyResolution(
         store: NotebookStore, _ body: @escaping (SyncEngine) async throws -> Void
     ) async throws {
+        guard isSelectedBackend() else { throw BackendNotSelected() }
         let settings = loadSettings()
         guard let transport = settings.makeTransport() else {
             throw WebDAVError.badURL(settings.serverURL)
@@ -133,6 +142,15 @@ final class SyncCoordinator: ObservableObject {
     struct ResolutionBusy: LocalizedError {
         var errorDescription: String? {
             "A sync is in progress. Try again in a moment."
+        }
+    }
+
+    /// A WebDAV conflict was resolved while WebDAV is no longer the selected backend. The stale
+    /// conflict list can outlive a backend switch, and applying its decision would mean writing to
+    /// a server bopa has been told to leave alone.
+    struct BackendNotSelected: LocalizedError {
+        var errorDescription: String? {
+            "WebDAV sync is turned off. Turn it back on in Settings to resolve this conflict."
         }
     }
 
