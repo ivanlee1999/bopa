@@ -106,17 +106,19 @@ public enum CouchMerge {
         // Erasure beats drawing: a stroke one side still holds and the other tombstoned is gone on
         // both. Safe because a redrawn stroke always gets a fresh id, so "remove wins" can never
         // suppress later work.
-        let strokes = unionById(a.strokes, b.strokes, id: \.id) { x, y in
-            preferredStroke(x, y)
-        }
-        .filter { !removedStrokeIDs.contains($0.id) }
-        .sorted { orderKey($0.createdAt, $0.id) < orderKey($1.createdAt, $1.id) }
+        let strokes = sortedByOrderKey(
+            unionById(a.strokes, b.strokes, id: \.id) { x, y in
+                preferredStroke(x, y)
+            }
+            .filter { !removedStrokeIDs.contains($0.id) },
+            createdAt: \.createdAt, id: \.id)
 
-        let images = unionById(a.images, b.images, id: \.id) { x, y in
-            preferredImage(x, y)
-        }
-        .filter { !removedImageIDs.contains($0.id) }
-        .sorted { orderKey($0.createdAt, $0.id) < orderKey($1.createdAt, $1.id) }
+        let images = sortedByOrderKey(
+            unionById(a.images, b.images, id: \.id) { x, y in
+                preferredImage(x, y)
+            }
+            .filter { !removedImageIDs.contains($0.id) },
+            createdAt: \.createdAt, id: \.id)
 
         let winner = pageWins(a, over: b) ? a : b
         return CouchPage(
@@ -168,6 +170,22 @@ public enum CouchMerge {
             i.assetId ?? "", i.createdAt, i.updatedAt,
             String(i.x), String(i.y), String(i.width), String(i.height),
         ].joined(separator: "|")
+    }
+
+    /// Sorts page content by `orderKey` with the key built **once per element** instead of once per
+    /// comparison. A comparator that calls `orderKey` parses two timestamps on every one of the
+    /// O(n log n) comparisons, so a page carrying a couple of thousand strokes parsed tens of
+    /// thousands of times per merge. Decorating, sorting on the decoration and undecorating is a
+    /// pure performance change: the keys are the same strings the comparator built, and they are
+    /// distinct because `unionById` has already made the ids unique, so no tie can expose whether
+    /// the sort is stable.
+    private static func sortedByOrderKey<T>(
+        _ elements: [T], createdAt: (T) -> String, id: (T) -> String
+    ) -> [T] {
+        elements
+            .map { (key: orderKey(createdAt($0), id($0)), element: $0) }
+            .sorted { $0.key < $1.key }
+            .map(\.element)
     }
 
     /// Sort key for page content: creation instant, then id to break exact ties. Determines the

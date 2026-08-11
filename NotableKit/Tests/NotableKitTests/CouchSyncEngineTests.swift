@@ -1,3 +1,4 @@
+import os
 import XCTest
 @testable import NotableKit
 
@@ -112,6 +113,63 @@ final class CouchSyncEngineTests: XCTestCase {
         _ = try await ipad.pull()
         XCTAssertEqual(ipadStore.page(pageID)?.strokes.map(\.id).sorted(),
                        ["s-boox", "s-ipad", "s0"])
+    }
+
+    /// Computing a merge takes a network round trip, and the pen does not stop for it. A stroke
+    /// saved while a push was in flight used to read as "present locally but absent from the merge
+    /// result" and be dropped — no tombstone written, nothing left dirty, so the ink was gone from
+    /// the page *and* never pushed. The merge may only drop what the merge itself saw.
+    func testInkSavedWhileAPushIsInFlightSurvivesTheMerge() async throws {
+        let shared = page(strokes: [stroke("s0", at: 0, device: "ipad")], updatedAt: 1, by: "ipad")
+        ipadStore.set(pageID, .page(shared))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+        _ = try await boox.pull()
+
+        // The BOOX writes first, so the iPad's next push takes a 409 and has to merge.
+        var booxPage = booxStore.page(pageID)!
+        booxPage.strokes.append(stroke("s-boox", at: 11, device: "boox"))
+        booxPage.updatedAt = stamp(11)
+        booxPage.updatedBy = "boox"
+        booxStore.set(pageID, .page(booxPage))
+        await boox.markDirty([pageID])
+        _ = await boox.flush()
+
+        var drawing = ipadStore.page(pageID)!
+        drawing.strokes.append(stroke("s-ipad", at: 10, device: "ipad"))
+        drawing.updatedAt = stamp(10)
+        drawing.updatedBy = "ipad"
+        ipadStore.set(pageID, .page(drawing))
+        await ipad.markDirty([pageID])
+
+        // The user goes on drawing *during* the merge round trip: the store hands the engine its
+        // snapshot, and a further stroke lands before `apply` is called.
+        let store = ipadStore!
+        let id = pageID
+        let mid = stroke("s-midflight", at: 12, device: "ipad")
+        let midStamp = stamp(12)
+        // A flush reads the page more than once — once to work out the push order, then again in
+        // `push` itself. It is that second read the merge is built from, so that is the one the
+        // stroke has to land just after; interrupting the first would simply put it in the snapshot.
+        let loads = OSAllocatedUnfairLock(initialState: 0)
+        store.onLoad = { [weak store] in
+            let nth = loads.withLock { count -> Int in
+                count += 1
+                return count
+            }
+            guard nth == 2, let store, var page = store.page(id) else { return }
+            page.strokes.append(mid)
+            page.updatedAt = midStamp
+            store.set(id, .page(page))
+        }
+
+        _ = await ipad.flush()
+        store.onLoad = nil
+        XCTAssertGreaterThanOrEqual(loads.withLock { $0 }, 2, "the push should have re-read the page")
+
+        XCTAssertTrue(
+            ipadStore.page(pageID)!.strokes.map(\.id).contains("s-midflight"),
+            "the stroke saved during the merge must not be dropped")
     }
 
     /// Drawing on one device while erasing the same stroke on the other: the erase must win, and

@@ -238,12 +238,38 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
     private var documents: [String: CouchDocBody] = [:]
     private(set) var conflictCopies: [String] = []
 
+    /// Runs on the next `load`, to model the editor writing while a merge is in flight.
+    var onLoad: (@Sendable () -> Void)?
+
     func load(_ documentID: String) throws -> CouchDocBody? {
-        lock.withLock { documents[documentID] }
+        // The snapshot is taken first, *then* the hook runs: the engine is modelled as having read
+        // the document and gone off to the network, with the editor saving while it is away.
+        let snapshot = lock.withLock { documents[documentID] }
+        onLoad?()
+        return snapshot
     }
 
-    func apply(_ documentID: String, _ body: CouchDocBody) throws {
-        lock.withLock { documents[documentID] = body }
+    /// Honours `CouchLocalStore.apply`'s contract the way a real store must: content that arrived
+    /// after the merge took its snapshot is left alone, because the merge never saw it and so
+    /// cannot have decided against it. A double that simply overwrote with the merged body would
+    /// silently drop ink saved during the round trip — and would hide that bug from these tests.
+    func apply(_ documentID: String, _ body: CouchDocBody, basedOn: CouchDocBody?) throws {
+        lock.withLock {
+            if case .page(let merged) = body, case .page(let current) = documents[documentID],
+               case .page(let snapshot)? = basedOn {
+                let seen = Set(snapshot.strokes.map(\.id))
+                let kept = Set(merged.strokes.map(\.id))
+                let tombstoned = Set(merged.deletedStrokes.map(\.id))
+                let surviving = current.strokes.filter {
+                    !seen.contains($0.id) && !kept.contains($0.id) && !tombstoned.contains($0.id)
+                }
+                var reconciled = merged
+                reconciled.strokes += surviving
+                documents[documentID] = .page(reconciled)
+            } else {
+                documents[documentID] = body
+            }
+        }
     }
 
     func applyConflictCopy(_ documentID: String, json: Data) throws {

@@ -127,7 +127,13 @@ public protocol CouchLocalStore: Sendable {
     /// Current local content, or nil when this device has never held the document.
     func load(_ documentID: String) throws -> CouchDocBody?
     /// Replaces local content with the merged result.
-    func apply(_ documentID: String, _ body: CouchDocBody) throws
+    ///
+    /// `basedOn` is the local copy the merge actually consumed — nil when this device held none.
+    /// It is not the same thing as what is on disk now: computing a merge takes a network round
+    /// trip, and the editor goes on saving strokes throughout. Only content the merge *saw* and
+    /// chose to drop may be removed here; anything that arrived since is work this merge knows
+    /// nothing about, and dropping it would destroy ink that was never given the chance to sync.
+    func apply(_ documentID: String, _ body: CouchDocBody, basedOn: CouchDocBody?) throws
     /// A document that could not be understood (undecodable, or a newer `schema`). The
     /// implementation keeps the local copy untouched and materializes the remote one alongside it
     /// under a new identity — protocol §6.5. Never overwrite on this path.
@@ -145,6 +151,13 @@ public protocol CouchLocalStore: Sendable {
 public extension CouchLocalStore {
     /// A store that holds no images has none to fetch. Saves every test double from restating it.
     func missingAssetIDs() throws -> [String] { [] }
+
+    /// Writes content that is not the result of a merge — seeding a store, or landing bytes whose
+    /// document nothing local can contradict. There is no snapshot to preserve content against, so
+    /// the body is written as given.
+    func apply(_ documentID: String, _ body: CouchDocBody) throws {
+        try apply(documentID, body, basedOn: nil)
+    }
 }
 
 // MARK: - Engine
@@ -285,7 +298,7 @@ public actor CouchSyncEngine {
                     state.dirty.remove(documentID)
                     return .nothingToPush
                 }
-                if merged != local { try store.apply(documentID, merged) }
+                if merged != local { try store.apply(documentID, merged, basedOn: local) }
                 if merged == remote.body {
                     // The server already holds exactly this, so there is nothing left to send.
                     // Returning here is not just an optimization: when the merge resolves to the
@@ -415,7 +428,7 @@ public actor CouchSyncEngine {
                 merged = incoming
             }
 
-            try store.apply(row.id, merged)
+            try store.apply(row.id, merged, basedOn: local)
             report.applied.append(row.id)
             // Record the server's revision either way: it is the base the next push must use.
             state.revs[row.id] = row.rev
@@ -455,7 +468,7 @@ public actor CouchSyncEngine {
             let asset = CouchAsset(
                 contentType: blob.contentType, createdAt: now, updatedAt: now,
                 updatedBy: deviceID, data: blob.data)
-            guard (try? store.apply(assetID, .asset(asset))) != nil else { continue }
+            guard (try? store.apply(assetID, .asset(asset), basedOn: nil)) != nil else { continue }
             fetched.append(assetID)
         }
         return fetched
