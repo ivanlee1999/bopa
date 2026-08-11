@@ -20,9 +20,8 @@ final class HandwritingSettingsTests: XCTestCase {
         let config = HandwritingConfig.load(from: defaults)
 
         // The out-of-the-box canvas: finger inks, page scrolls, fit width, and the tools
-        // come from the docked rail rather than PencilKit's floating palette.
+        // come from the docked rail (the only tool UI there is).
         XCTAssertTrue(config.fingerDrawing)
-        XCTAssertFalse(config.showsToolPicker)
         XCTAssertFalse(config.scrollLocked)
         XCTAssertEqual(config.zoomOnOpen, .fitWidth)
         XCTAssertEqual(config.doubleTapAction, .system)
@@ -33,7 +32,6 @@ final class HandwritingSettingsTests: XCTestCase {
     func testRoundTripsThroughUserDefaults() {
         var config = HandwritingConfig()
         config.fingerDrawing = false
-        config.showsToolPicker = false
         config.scrollLocked = true
         config.zoomOnOpen = .actualSize
         config.doubleTapAction = .eraser

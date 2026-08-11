@@ -24,7 +24,6 @@ enum PencilAction: String, CaseIterable, Identifiable, Sendable {
     case eraser
     case previousTool
     case undo
-    case toggleToolPicker
 
     var id: String { rawValue }
 
@@ -35,7 +34,6 @@ enum PencilAction: String, CaseIterable, Identifiable, Sendable {
         case .eraser: "Switch between eraser and pen"
         case .previousTool: "Switch to previous tool"
         case .undo: "Undo"
-        case .toggleToolPicker: "Show/hide tool palette"
         }
     }
 }
@@ -61,11 +59,6 @@ struct HandwritingConfig: Equatable, Sendable {
     /// When false the canvas is pencil-only: a finger pans and zooms instead of inking,
     /// which is also what makes a resting palm harmless.
     var fingerDrawing = true
-    /// PencilKit's floating palette, off by default now that the editor has a docked tool
-    /// rail: two tool pickers on one screen disagree about what is selected, and the
-    /// floating one covers the bottom of the page. Still available for its full ink and
-    /// width controls, which the rail's four inks deliberately don't offer.
-    var showsToolPicker = false
     /// Freezes panning/zooming so a stray drag cannot shift the page mid-sentence.
     var scrollLocked = false
     var zoomOnOpen: ZoomOnOpen = .fitWidth
@@ -77,7 +70,6 @@ struct HandwritingConfig: Equatable, Sendable {
 
     enum Key {
         static let fingerDrawing = "handwriting.fingerDrawing"
-        static let showsToolPicker = "handwriting.showsToolPicker"
         static let scrollLocked = "handwriting.scrollLocked"
         static let zoomOnOpen = "handwriting.zoomOnOpen"
         static let doubleTapAction = "handwriting.pencilDoubleTap"
@@ -90,9 +82,6 @@ struct HandwritingConfig: Equatable, Sendable {
         // `object(forKey:)` first: a missing key must keep the default, not read back false.
         if let value = defaults.object(forKey: Key.fingerDrawing) as? Bool {
             config.fingerDrawing = value
-        }
-        if let value = defaults.object(forKey: Key.showsToolPicker) as? Bool {
-            config.showsToolPicker = value
         }
         if let value = defaults.object(forKey: Key.scrollLocked) as? Bool {
             config.scrollLocked = value
@@ -119,7 +108,6 @@ struct HandwritingConfig: Equatable, Sendable {
 
     func save(to defaults: UserDefaults) {
         defaults.set(fingerDrawing, forKey: Key.fingerDrawing)
-        defaults.set(showsToolPicker, forKey: Key.showsToolPicker)
         defaults.set(scrollLocked, forKey: Key.scrollLocked)
         defaults.set(zoomOnOpen.rawValue, forKey: Key.zoomOnOpen)
         defaults.set(doubleTapAction.rawValue, forKey: Key.doubleTapAction)
@@ -209,7 +197,6 @@ struct HandwritingSettingsSections: View {
         }
 
         Section {
-            Toggle("Show tool palette", isOn: config.showsToolPicker)
             Toggle("Lock page scrolling", isOn: config.scrollLocked)
             Picker("Open pages at", selection: config.zoomOnOpen) {
                 ForEach(ZoomOnOpen.allCases) { mode in
