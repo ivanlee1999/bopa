@@ -197,11 +197,15 @@ final class SyncBackendHost: ObservableObject {
         }
     }
 
-    /// Explains a dead "Sync now" button, or nil when there is nothing to explain.
+    /// Explains a dead "Sync now" button, or nil when there is nothing to explain. Names the
+    /// backend that needs attention: under CouchDB, being told to add a WebDAV server is advice
+    /// that leads nowhere.
     var unavailableReason: String? {
         guard !canSyncNow else { return nil }
-        return backend == .off
-            ? "Sync is turned off. Choose a backend in Settings."
-            : "Add a server in Settings to sync."
+        switch backend {
+        case .off: return "Sync is turned off. Choose a backend in Settings."
+        case .webdav: return "Add a WebDAV server in Settings to sync."
+        case .couchdb: return "Add a CouchDB server in Settings to sync."
+        }
     }
 }
