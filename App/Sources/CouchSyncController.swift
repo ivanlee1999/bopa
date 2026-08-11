@@ -26,6 +26,14 @@ final class CouchSyncController: ObservableObject {
     }
 
     @Published private(set) var status: Status = .idle
+
+    /// Mirrors `SyncCoordinator.isSyncing`, so the library's one sync button can ask the same
+    /// question of either backend.
+    var isSyncing: Bool {
+        if case .syncing = status { return true }
+        return false
+    }
+
     @Published private(set) var pendingCount = 0
     @Published private(set) var lastSyncedAt: Date?
     /// Documents this build could not understand, materialized alongside the local copy.

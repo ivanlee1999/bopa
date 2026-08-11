@@ -2,9 +2,14 @@ import Foundation
 import NotableKit
 import SwiftUI
 
-/// Which sync transport bopa uses. WebDAV stays available while CouchDB is proven out; the
-/// intent is for CouchDB to become the only option.
+/// Which sync transport bopa uses. Exactly one is live at a time, and `off` means none is —
+/// this is the single switch every sync path consults, so selecting one backend genuinely
+/// silences the other rather than merely hiding its settings.
+///
+/// WebDAV stays available while CouchDB is proven out; the intent is for CouchDB to become the
+/// only option.
 enum SyncBackend: String, CaseIterable, Identifiable {
+    case off
     case webdav
     case couchdb
 
@@ -12,6 +17,7 @@ enum SyncBackend: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .off: return "Off"
         case .webdav: return "WebDAV"
         case .couchdb: return "CouchDB"
         }

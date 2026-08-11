@@ -58,6 +58,13 @@ struct BopaApp: App {
                     backendHost.configure()
                     if scenePhase == .active { backendHost.becameActive() }
                 }
+                // A WebDAV address was added or cleared. Only the library's sync button cares, so
+                // this re-reads that rather than rebuilding the CouchDB stack underneath it.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: SyncSettings.didChangeNotification)
+                ) { _ in
+                    backendHost.refreshWebDAVConfiguration()
+                }
             }
         }
     }

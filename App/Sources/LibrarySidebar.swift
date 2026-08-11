@@ -50,12 +50,8 @@ struct FolderNode: Identifiable, Hashable {
 /// carries its item count and a provenance glyph (on server / local only).
 struct LibrarySidebar: View {
     @EnvironmentObject private var store: NotebookStore
-    @EnvironmentObject private var coordinator: SyncCoordinator
+    @EnvironmentObject private var backendHost: SyncBackendHost
     @Binding var selection: LibrarySelection?
-
-    /// Cached rather than read per render: `SyncSettings.load()` touches the Keychain. Refreshed on
-    /// the settings notification, since the form saves in its own `onDisappear`.
-    @State private var serverConfigured = SyncSettings.isServerConfigured
 
     var body: some View {
         VStack(spacing: 0) {
@@ -90,11 +86,6 @@ struct LibrarySidebar: View {
         }
         .background(Modernist.paper)
         .tint(Modernist.ink)
-        .onReceive(NotificationCenter.default.publisher(
-            for: SyncSettings.didChangeNotification)
-        ) { _ in
-            serverConfigured = SyncSettings.isServerConfigured
-        }
     }
 
     /// The wordmark, on the design's status strip: a label and a rule, nothing else.
@@ -160,14 +151,15 @@ struct LibrarySidebar: View {
 
     /// Manual sync, next to the tree it refreshes rather than buried in the settings sheet.
     /// `syncNow` is the same call that sheet makes: it bails on its own if a run is already in
-    /// flight, so a double tap costs nothing.
+    /// flight, so a double tap costs nothing. Routed through the host so the button drives
+    /// whichever backend is selected — and does nothing at all when sync is off.
     private var syncControl: some View {
         VStack(alignment: .leading, spacing: 2) {
             Button {
-                Task { await coordinator.syncNow(store: store) }
+                Task { await backendHost.syncNow() }
             } label: {
                 HStack(spacing: 6) {
-                    if coordinator.isSyncing {
+                    if backendHost.isSyncing {
                         ProgressView()
                             .controlSize(.small)
                         Text("Syncing…")
@@ -187,8 +179,8 @@ struct LibrarySidebar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(serverConfigured ? Modernist.ink : Modernist.neutral500)
-            .disabled(!serverConfigured || coordinator.isSyncing)
+            .foregroundStyle(backendHost.canSyncNow ? Modernist.ink : Modernist.neutral500)
+            .disabled(!backendHost.canSyncNow || backendHost.isSyncing)
             .accessibilityIdentifier("sidebar.syncNow")
 
             // The status capsule fades after ~3s, so the outcome of the last run would otherwise be
@@ -204,9 +196,9 @@ struct LibrarySidebar: View {
     }
 
     private var syncDetail: String? {
-        guard serverConfigured else { return "Add a server in Settings to sync." }
+        if let reason = backendHost.unavailableReason { return reason }
         // The button already says "Syncing…"; repeating it under itself says nothing.
-        return coordinator.isSyncing ? nil : coordinator.statusDetail
+        return backendHost.isSyncing ? nil : backendHost.statusDetail
     }
 
     /// What the badges on rows and covers mean. Only once a sync has happened — before that there

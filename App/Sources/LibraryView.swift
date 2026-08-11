@@ -10,6 +10,7 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var coordinator: SyncCoordinator
+    @EnvironmentObject private var backendHost: SyncBackendHost
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selection: LibrarySelection? = .root
     @State private var showsSidebar: Bool?
@@ -60,7 +61,9 @@ struct LibraryView: View {
             // BOOX changed sitting until the next poll. Waiting for the edit-driven push would
             // only cover the case where you actually drew something.
             if previous != nil, target == nil {
-                Task { await coordinator.syncIfAutomatic(store: store) }
+                // Through the host, not the coordinator: it is the one thing that knows which
+                // backend is selected, so this cannot run a WebDAV sync under CouchDB.
+                Task { await backendHost.syncIfAutomatic() }
             }
         }
         // No navigation stack around it: the editor draws its own docked top bar, and a

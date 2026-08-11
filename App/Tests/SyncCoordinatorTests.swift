@@ -78,6 +78,7 @@ final class SyncCoordinatorTests: XCTestCase {
         clock: Clock? = nil,
         settings: SyncSettings? = nil,
         automatic: Bool = true,
+        selected: Bool = true,
         sleeper: FakeSleeper? = nil
     ) -> SyncCoordinator {
         let settings = settings ?? configuredSettings()
@@ -85,6 +86,7 @@ final class SyncCoordinatorTests: XCTestCase {
             now: { clock?.now ?? Date() },
             loadSettings: { settings },
             isAutomaticEnabled: { automatic },
+            isSelectedBackend: { selected },
             sleeper: { seconds in
                 guard let sleeper else { throw FakeSleeper.Stop() }
                 try await sleeper.sleep(seconds)
@@ -123,6 +125,53 @@ final class SyncCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(got, report)
         XCTAssertEqual(coordinator.lastSyncedAt, at)
+    }
+
+    /// The whole point of the backend switch: WebDAV goes quiet the moment it stops being the
+    /// selected backend, no matter which path asks for a run. A configured server is not consent
+    /// — two engines writing the same notebooks is what this prevents.
+    func testNoWebDAVRunHappensWhenWebDAVIsNotTheSelectedBackend() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(
+            spy: spy, selected: false, sleeper: FakeSleeper(allowedTicks: 5))
+
+        await coordinator.syncNow(store: store)
+        await coordinator.syncIfStale(store: store)
+        await coordinator.syncIfAutomatic(store: store)
+
+        // The edit-driven push and the poll loop go through `syncNow` too, so their timers still
+        // fire — what must not happen is a run at the end of one.
+        coordinator.noteEdited(store: store)
+        coordinator.startAutoSync(store: store)
+        for _ in 0..<200 { await Task.yield() }
+        coordinator.stopAutoSync()
+
+        XCTAssertEqual(spy.callCount, 0)
+        XCTAssertEqual(coordinator.status, .idle)
+        XCTAssertNil(coordinator.lastSyncedAt)
+    }
+
+    /// A conflict decision outlives a backend switch — the list is not cleared by one. Applying it
+    /// would write to a server bopa has been told to leave alone, so it fails loudly instead.
+    func testApplyingAConflictResolutionFailsWhenWebDAVIsNotSelected() async {
+        let store = makeStore()
+        let spy = SyncSpy()
+        let coordinator = makeCoordinator(spy: spy, selected: false)
+
+        do {
+            try await coordinator.applyResolution(store: store) { _ in
+                XCTFail("the resolution body must not run")
+            }
+            XCTFail("expected the resolution to be refused")
+        } catch is SyncCoordinator.BackendNotSelected {
+            // expected
+        } catch {
+            XCTFail("expected BackendNotSelected, got \(error)")
+        }
+
+        XCTAssertEqual(spy.callCount, 0)
+        XCTAssertEqual(coordinator.status, .idle)
     }
 
     func testSyncNowIsNoOpWhenNotConfigured() async {
