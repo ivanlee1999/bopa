@@ -220,6 +220,10 @@ public actor CouchSyncEngine {
     private let store: CouchLocalStore
     private let deviceID: String
     private let maxPushAttempts: Int
+
+    /// Rows per catch-up request. Small enough that a library of any size arrives in pieces this
+    /// device can hold and apply, large enough that a routine catch-up is still one round trip.
+    static let catchUpBatchSize = 100
     private var state: CouchSyncState
     private let onStateChange: (@Sendable (CouchSyncState) -> Void)?
 
@@ -424,9 +428,32 @@ public actor CouchSyncEngine {
     @discardableResult
     public func pull(longpoll: Bool = false, timeoutMs: Int = 55_000) async throws -> PullReport {
         var report = PullReport()
-        let changes = try await client.changes(
-            since: state.lastSeq, longpoll: longpoll, timeoutMs: timeoutMs)
 
+        // Read the feed in batches rather than in one response. A catch-up from `0` — a fresh
+        // install, or any device whose checkpoint was lost — otherwise asks for the entire library
+        // at once, every page with its base64 ink inlined, and holds the lot in memory before
+        // applying any of it. Checkpointing each batch also means a crash halfway through resumes
+        // where it stopped instead of replaying the whole thing.
+        //
+        // A longpoll is never paged: it is one wait for one notification, and the batch that
+        // follows is whatever changed while it waited.
+        repeat {
+            let changes = try await client.changes(
+                since: state.lastSeq, longpoll: longpoll, timeoutMs: timeoutMs,
+                limit: longpoll ? nil : Self.catchUpBatchSize)
+            try await apply(changes, into: &report)
+            // The server is caught up when it returns a short batch; a full one may have more
+            // behind it. `lastSeq` moved, so the next request asks for what follows.
+            guard !longpoll, changes.rows.count >= Self.catchUpBatchSize else { break }
+        } while !Task.isCancelled
+
+        report.fetchedAssets = await fetchMissingAssets()
+        persist()
+        return report
+    }
+
+    /// Applies one batch of feed rows and advances the checkpoint past it.
+    private func apply(_ changes: CouchDBClient.Changes, into report: inout PullReport) async throws {
         for row in changes.rows {
             // Our own write coming back. Applying it would be harmless (merges are idempotent) but
             // it would also mark the document dirty and start a push ping-pong.
@@ -480,9 +507,8 @@ public actor CouchSyncEngine {
 
         state.lastSeq = changes.lastSeq
         report.lastSeq = changes.lastSeq
-        report.fetchedAssets = await fetchMissingAssets()
+        // Persisted per batch, not once at the end: an interrupted catch-up keeps what it applied.
         persist()
-        return report
     }
 
     /// Downloads the blobs local pages reference and this device does not hold yet.
