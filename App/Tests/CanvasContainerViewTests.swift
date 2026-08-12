@@ -278,6 +278,88 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertEqual(container.contentExtent.width, CGFloat(sheet.width), accuracy: 1)
     }
 
+    // MARK: - Images inside the scrollable area
+
+    private func swatch() -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+            UIColor.black.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+    }
+
+    /// An image dropped well below the sheet has to be scrollable to. Installing the view without
+    /// growing the extent did not park it off-page — it made it unreachable, since there was
+    /// nothing to scroll to and no zoom that brought it back.
+    func testImageBelowTheSheetIsReachable() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet)
+        let farDown = CGFloat(sheet.height) * 3
+
+        container.setImages([
+            PageImage(
+                image: swatch(),
+                frame: CGRect(x: 40, y: farDown, width: 300, height: 200))
+        ])
+
+        XCTAssertGreaterThanOrEqual(container.contentExtent.height, farDown + 200)
+    }
+
+    /// The same in the other direction: an image past the right edge of the sheet.
+    func testImageBeyondTheRightEdgeIsReachable() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet)
+        let farRight = CGFloat(sheet.width) + 800
+
+        container.setImages([
+            PageImage(
+                image: swatch(),
+                frame: CGRect(x: farRight, y: 20, width: 300, height: 200))
+        ])
+
+        XCTAssertGreaterThanOrEqual(container.contentExtent.width, farRight + 300)
+    }
+
+    /// Opening a page resets the extent from that page's sheet, so the images have to be part of
+    /// the rule rather than grown in beforehand — otherwise a page switch would drop them back out
+    /// of reach. `updateUIView` installs images before it sets the extent, which is this order.
+    func testSettingTheExtentAfterImagesStillCoversThem() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet)
+        let farDown = CGFloat(sheet.height) * 3
+        container.setImages([
+            PageImage(
+                image: swatch(),
+                frame: CGRect(x: 0, y: farDown, width: 300, height: 200))
+        ])
+
+        container.setContentExtent(
+            pageSize: sheet, ink: .null,
+            minimumHeight: EditorCanvasView.minimumHeight(for: sheet))
+
+        XCTAssertGreaterThanOrEqual(container.contentExtent.height, farDown + 200)
+    }
+
+    /// Removing the images lets the area come back down on the next page load; it must not stay
+    /// stretched to whatever the last page happened to hold.
+    func testExtentDropsBackWhenTheImagesGo() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet)
+        container.setImages([
+            PageImage(
+                image: swatch(),
+                frame: CGRect(x: 0, y: CGFloat(sheet.height) * 3, width: 300, height: 200))
+        ])
+
+        container.setImages([])
+        container.setContentExtent(
+            pageSize: sheet, ink: .null,
+            minimumHeight: EditorCanvasView.minimumHeight(for: sheet))
+
+        XCTAssertEqual(
+            container.contentExtent.height,
+            EditorCanvasView.minimumHeight(for: sheet), accuracy: 1)
+    }
+
     // MARK: - Declared page sizes
 
     /// Fit-to-width fits whatever sheet the page declares, so the same page fills the screen
