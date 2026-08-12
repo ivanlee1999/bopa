@@ -458,7 +458,7 @@ public actor CouchSyncEngine {
             let changes = try await client.changes(
                 since: asked, longpoll: longpoll, timeoutMs: timeoutMs,
                 limit: longpoll ? nil : Self.catchUpBatchSize)
-            try await apply(changes, into: &report)
+            try await apply(changes, fetchedFrom: asked, into: &report)
             // The server is caught up when it returns a short batch; a full one may have more
             // behind it. `lastSeq` moved, so the next request asks for what follows.
             guard !longpoll, changes.rows.count >= Self.catchUpBatchSize else { break }
@@ -474,7 +474,15 @@ public actor CouchSyncEngine {
     }
 
     /// Applies one batch of feed rows and advances the checkpoint past it.
-    private func apply(_ changes: CouchDBClient.Changes, into report: inout PullReport) async throws {
+    ///
+    /// `fetchedFrom` is the checkpoint this batch was asked for. This actor suspends at the feed
+    /// request, and actors are reentrant, so a second `pull` — a foreground catch-up while the
+    /// longpoll waits — can run to completion in that gap. Its checkpoint is then newer than the
+    /// one this batch describes, and assigning ours over it would send the feed backwards and
+    /// replay everything in between on every pull from then on.
+    private func apply(
+        _ changes: CouchDBClient.Changes, fetchedFrom: String, into report: inout PullReport
+    ) async throws {
         for row in changes.rows {
             // Our own write coming back. Applying it would be harmless (merges are idempotent) but
             // it would also mark the document dirty and start a push ping-pong.
@@ -526,7 +534,10 @@ public actor CouchSyncEngine {
             }
         }
 
-        state.lastSeq = changes.lastSeq
+        // The rows themselves are applied either way: applying is idempotent, so a batch another
+        // pull already covered merges to the identical document or is skipped as our own echo.
+        // Only the checkpoint has to refuse to move backwards.
+        if state.lastSeq == fetchedFrom { state.lastSeq = changes.lastSeq }
         report.lastSeq = changes.lastSeq
         // Persisted per batch, not once at the end: an interrupted catch-up keeps what it applied.
         persist()
