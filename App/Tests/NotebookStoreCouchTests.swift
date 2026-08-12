@@ -338,6 +338,18 @@ final class NotebookStoreCouchTests: XCTestCase {
         XCTAssertEqual(order, ["deleted", "changed"])
     }
 
+    /// The tombstone used to be written by the caller *before* the local delete, with the failure
+    /// then swallowed by `try?`. The notebook stayed on this iPad while `FileCouchStore` handed the
+    /// tombstone back in its place — so the next sync deleted the peer's copy of a notebook nobody
+    /// had managed to delete anywhere.
+    func testAFailedNotebookDeletionRecordsNoTombstone() throws {
+        deleted = []
+
+        XCTAssertThrowsError(try store.deleteNotebook(id: "no-such-notebook"))
+
+        XCTAssertTrue(deleted.isEmpty, "nothing was deleted, so nothing may be published")
+    }
+
     /// A deletion the store refused never happened, so there is nothing to publish. `FileCouchStore`
     /// hands a recorded tombstone back in place of the live document, so writing one here would
     /// delete the peer's copy of a folder that is still sitting in this library.
