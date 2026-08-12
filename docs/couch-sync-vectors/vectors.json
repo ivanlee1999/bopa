@@ -7,32 +7,109 @@
       "kind": "page",
       "why": "Both devices drew offline on the same page; union keeps everything, ordered by stroke createdAt.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
         ],
-        "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s2", "createdAt": "2026-08-10T06:02:00Z", "updatedAt": "2026-08-10T06:02:00Z", "deviceId": "boox", "pen": "FOUNTAIN", "color": -16777216, "size": 4, "maxPressure": 1, "top": 30, "bottom": 40, "left": 25, "right": 35, "pointsData": "BBB=" }
+          {
+            "id": "s2",
+            "createdAt": "2026-08-10T06:02:00Z",
+            "updatedAt": "2026-08-10T06:02:00Z",
+            "deviceId": "boox",
+            "pen": "FOUNTAIN",
+            "color": -16777216,
+            "size": 4,
+            "maxPressure": 1,
+            "top": 30,
+            "bottom": 40,
+            "left": 25,
+            "right": 35,
+            "pointsData": "BBB="
+          }
         ],
-        "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" },
-          { "id": "s2", "createdAt": "2026-08-10T06:02:00Z", "updatedAt": "2026-08-10T06:02:00Z", "deviceId": "boox", "pen": "FOUNTAIN", "color": -16777216, "size": 4, "maxPressure": 1, "top": 30, "bottom": 40, "left": 25, "right": 35, "pointsData": "BBB=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          },
+          {
+            "id": "s2",
+            "createdAt": "2026-08-10T06:02:00Z",
+            "updatedAt": "2026-08-10T06:02:00Z",
+            "deviceId": "boox",
+            "pen": "FOUNTAIN",
+            "color": -16777216,
+            "size": 4,
+            "maxPressure": 1,
+            "top": 30,
+            "bottom": 40,
+            "left": 25,
+            "right": 35,
+            "pointsData": "BBB="
+          }
         ],
-        "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -40,34 +117,119 @@
       "kind": "page",
       "why": "One device still holds a stroke the other erased. The tombstone wins on both devices.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" },
-          { "id": "s2", "createdAt": "2026-08-10T06:02:00Z", "updatedAt": "2026-08-10T06:02:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 30, "bottom": 40, "left": 25, "right": 35, "pointsData": "BBB=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          },
+          {
+            "id": "s2",
+            "createdAt": "2026-08-10T06:02:00Z",
+            "updatedAt": "2026-08-10T06:02:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 30,
+            "bottom": 40,
+            "left": 25,
+            "right": 35,
+            "pointsData": "BBB="
+          }
         ],
-        "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
         ],
-        "deletedStrokes": [ { "id": "s2", "deletedAt": "2026-08-10T06:07:00Z" } ],
-        "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "deletedStrokes": [
+          {
+            "id": "s2",
+            "deletedAt": "2026-08-10T06:07:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
         ],
-        "deletedStrokes": [ { "id": "s2", "deletedAt": "2026-08-10T06:07:00Z" } ],
-        "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "deletedStrokes": [
+          {
+            "id": "s2",
+            "deletedAt": "2026-08-10T06:07:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -75,35 +237,97 @@
       "kind": "page",
       "why": "Tombstone sets union; each device's erase applies to the other's surviving copy.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s2", "createdAt": "2026-08-10T06:02:00Z", "updatedAt": "2026-08-10T06:02:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 30, "bottom": 40, "left": 25, "right": 35, "pointsData": "BBB=" }
+          {
+            "id": "s2",
+            "createdAt": "2026-08-10T06:02:00Z",
+            "updatedAt": "2026-08-10T06:02:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 30,
+            "bottom": 40,
+            "left": 25,
+            "right": 35,
+            "pointsData": "BBB="
+          }
         ],
-        "deletedStrokes": [ { "id": "s1", "deletedAt": "2026-08-10T06:04:00Z" } ],
-        "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:04:00Z", "updatedBy": "ipad"
+        "deletedStrokes": [
+          {
+            "id": "s1",
+            "deletedAt": "2026-08-10T06:04:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:04:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "boox", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "boox",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
         ],
-        "deletedStrokes": [ { "id": "s2", "deletedAt": "2026-08-10T06:08:00Z" } ],
-        "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:08:00Z", "updatedBy": "boox"
+        "deletedStrokes": [
+          {
+            "id": "s2",
+            "deletedAt": "2026-08-10T06:08:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:08:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [],
         "deletedStrokes": [
-          { "id": "s1", "deletedAt": "2026-08-10T06:04:00Z" },
-          { "id": "s2", "deletedAt": "2026-08-10T06:08:00Z" }
+          {
+            "id": "s1",
+            "deletedAt": "2026-08-10T06:04:00Z"
+          },
+          {
+            "id": "s2",
+            "deletedAt": "2026-08-10T06:08:00Z"
+          }
         ],
-        "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:08:00Z", "updatedBy": "boox"
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:08:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -111,25 +335,61 @@
       "kind": "page",
       "why": "Both devices erased the same stroke; a deletion cannot un-happen, so the earliest observation stands.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [ { "id": "s1", "deletedAt": "2026-08-10T06:03:00Z" } ],
-        "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:03:00Z", "updatedBy": "ipad"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [
+          {
+            "id": "s1",
+            "deletedAt": "2026-08-10T06:03:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:03:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [ { "id": "s1", "deletedAt": "2026-08-10T06:09:00Z" } ],
-        "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:09:00Z", "updatedBy": "boox"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [
+          {
+            "id": "s1",
+            "deletedAt": "2026-08-10T06:09:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:09:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [ { "id": "s1", "deletedAt": "2026-08-10T06:03:00Z" } ],
-        "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:09:00Z", "updatedBy": "boox"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [
+          {
+            "id": "s1",
+            "deletedAt": "2026-08-10T06:03:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:09:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -137,22 +397,46 @@
       "kind": "page",
       "why": "REGRESSION: '…33.871Z' sorts BEFORE '…33Z' lexicographically but is later in time. A string compare would pick the wrong winner and silently drop the newer background.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "grid", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:12:33.871Z", "updatedBy": "ipad"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "grid",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:12:33.871Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:12:33Z", "updatedBy": "boox"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:12:33Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "grid", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:12:33.871Z", "updatedBy": "ipad"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "grid",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:12:33.871Z",
+        "updatedBy": "ipad"
       }
     },
     {
@@ -160,22 +444,46 @@
       "kind": "page",
       "why": "Identical updatedAt: the tiebreak is updatedBy by UTF-8 order, so 'ipad' beats 'boox' on both devices.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "grid", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "boox"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "grid",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "boox"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       }
     },
     {
@@ -183,22 +491,46 @@
       "kind": "page",
       "why": "The page was created before one device learned about it; the earliest creation time is the true one.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T05:55:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T05:55:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T05:55:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T05:55:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -206,36 +538,109 @@
       "kind": "page",
       "why": "Images follow the same add/remove rules as strokes.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [],
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
         "images": [
-          { "id": "i1", "assetId": "asset:aa", "x": 0, "y": 0, "width": 100, "height": 50, "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z" },
-          { "id": "i2", "assetId": "asset:bb", "x": 10, "y": 10, "width": 20, "height": 20, "createdAt": "2026-08-10T06:02:00Z", "updatedAt": "2026-08-10T06:02:00Z" }
+          {
+            "id": "i1",
+            "assetId": "asset:aa",
+            "x": 0,
+            "y": 0,
+            "width": 100,
+            "height": 50,
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z"
+          },
+          {
+            "id": "i2",
+            "assetId": "asset:bb",
+            "x": 10,
+            "y": 10,
+            "width": 20,
+            "height": 20,
+            "createdAt": "2026-08-10T06:02:00Z",
+            "updatedAt": "2026-08-10T06:02:00Z"
+          }
         ],
         "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [],
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
         "images": [
-          { "id": "i3", "assetId": "asset:cc", "x": 5, "y": 5, "width": 30, "height": 30, "createdAt": "2026-08-10T06:03:00Z", "updatedAt": "2026-08-10T06:03:00Z" }
+          {
+            "id": "i3",
+            "assetId": "asset:cc",
+            "x": 5,
+            "y": 5,
+            "width": 30,
+            "height": 30,
+            "createdAt": "2026-08-10T06:03:00Z",
+            "updatedAt": "2026-08-10T06:03:00Z"
+          }
         ],
-        "deletedImages": [ { "id": "i2", "deletedAt": "2026-08-10T06:06:00Z" } ],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "deletedImages": [
+          {
+            "id": "i2",
+            "deletedAt": "2026-08-10T06:06:00Z"
+          }
+        ],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [],
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
         "images": [
-          { "id": "i1", "assetId": "asset:aa", "x": 0, "y": 0, "width": 100, "height": 50, "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z" },
-          { "id": "i3", "assetId": "asset:cc", "x": 5, "y": 5, "width": 30, "height": 30, "createdAt": "2026-08-10T06:03:00Z", "updatedAt": "2026-08-10T06:03:00Z" }
+          {
+            "id": "i1",
+            "assetId": "asset:aa",
+            "x": 0,
+            "y": 0,
+            "width": 100,
+            "height": 50,
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z"
+          },
+          {
+            "id": "i3",
+            "assetId": "asset:cc",
+            "x": 5,
+            "y": 5,
+            "width": 30,
+            "height": 30,
+            "createdAt": "2026-08-10T06:03:00Z",
+            "updatedAt": "2026-08-10T06:03:00Z"
+          }
         ],
-        "deletedImages": [ { "id": "i2", "deletedAt": "2026-08-10T06:06:00Z" } ],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "deletedImages": [
+          {
+            "id": "i2",
+            "deletedAt": "2026-08-10T06:06:00Z"
+          }
+        ],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -243,25 +648,49 @@
       "kind": "page",
       "why": "A page named on one device keeps that name on the other: the later write wins. An unnamed page is null, not an empty string, so 'never named' stays distinct from 'named empty'.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
         "title": null,
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
         "title": "Shopping list",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
         "title": "Shopping list",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -269,25 +698,49 @@
       "kind": "page",
       "why": "Clearing a page's name is an edit like any other, so the later write wins even though its value is null — a name removed on one device does not come back from the other.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
         "title": "Shopping list",
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
         "title": null,
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:09:00Z", "updatedBy": "ipad"
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:09:00Z",
+        "updatedBy": "ipad"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
         "title": null,
-        "background": "blank", "backgroundType": "native",
-        "strokes": [], "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:09:00Z", "updatedBy": "ipad"
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:09:00Z",
+        "updatedBy": "ipad"
       }
     },
     {
@@ -295,31 +748,206 @@
       "kind": "page",
       "why": "The common case after a settled sync: merging a document with itself changes nothing.",
       "a": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
         ],
-        "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
         ],
-        "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "expected": {
-        "type": "page", "schema": 1, "notebookId": "nb-1",
-        "background": "blank", "backgroundType": "native",
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
         "strokes": [
-          { "id": "s1", "createdAt": "2026-08-10T06:01:00Z", "updatedAt": "2026-08-10T06:01:00Z", "deviceId": "ipad", "pen": "BALLPEN", "color": -16777216, "size": 3, "maxPressure": 1, "top": 10, "bottom": 20, "left": 5, "right": 15, "pointsData": "AAA=" }
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:01:00Z",
+            "updatedAt": "2026-08-10T06:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
         ],
-        "deletedStrokes": [], "images": [], "deletedImages": [],
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      }
+    },
+    {
+      "name": "page-sheet-survives-undeclaring-peer",
+      "kind": "page",
+      "why": "A page's sheet says how the ink already on it is laid out, so a writer that has not learned the field cannot un-declare it by writing last: the winner's value is used only when it has one. Otherwise one sync from an older build would reflow every page it touched.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": null,
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1980,
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": null,
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": null,
+        "pageHeight": null,
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": null,
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1980,
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-two-sheets-later-write-wins",
+      "kind": "page",
+      "why": "When both sides declare a sheet — which in practice means the size was changed, since it is fixed at creation — it resolves like any other scalar: the later write.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": null,
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1980,
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": null,
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1980,
+        "pageHeight": 2800,
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": null,
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1980,
+        "pageHeight": 2800,
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -327,22 +955,53 @@
       "kind": "notebook",
       "why": "Winner's page order is authoritative; pages only the loser knows are appended in the loser's relative order.",
       "a": {
-        "type": "notebook", "schema": 1, "title": "A",
-        "pageIds": ["p1", "p2"], "deletedPageIds": [],
-        "parentFolderId": null, "defaultBackground": "blank", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "notebook", "schema": 1, "title": "B",
-        "pageIds": ["p3", "p1"], "deletedPageIds": [],
-        "parentFolderId": null, "defaultBackground": "blank", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p3",
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "notebook", "schema": 1, "title": "B",
-        "pageIds": ["p3", "p1", "p2"], "deletedPageIds": [],
-        "parentFolderId": null, "defaultBackground": "blank", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p3",
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -350,22 +1009,60 @@
       "kind": "notebook",
       "why": "A page deleted on one device must not be resurrected by the other device still listing it.",
       "a": {
-        "type": "notebook", "schema": 1, "title": "notes",
-        "pageIds": ["p1", "p2"], "deletedPageIds": [],
-        "parentFolderId": null, "defaultBackground": "blank", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "type": "notebook",
+        "schema": 1,
+        "title": "notes",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "notebook", "schema": 1, "title": "notes",
-        "pageIds": ["p1"], "deletedPageIds": [ { "id": "p2", "deletedAt": "2026-08-10T06:06:00Z" } ],
-        "parentFolderId": null, "defaultBackground": "blank", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "type": "notebook",
+        "schema": 1,
+        "title": "notes",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [
+          {
+            "id": "p2",
+            "deletedAt": "2026-08-10T06:06:00Z"
+          }
+        ],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "notebook", "schema": 1, "title": "notes",
-        "pageIds": ["p1"], "deletedPageIds": [ { "id": "p2", "deletedAt": "2026-08-10T06:06:00Z" } ],
-        "parentFolderId": null, "defaultBackground": "blank", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:06:00Z", "updatedBy": "boox"
+        "type": "notebook",
+        "schema": 1,
+        "title": "notes",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [
+          {
+            "id": "p2",
+            "deletedAt": "2026-08-10T06:06:00Z"
+          }
+        ],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -373,22 +1070,105 @@
       "kind": "notebook",
       "why": "Scalar metadata is last-writer-wins as a whole record, so title and folder never split across devices.",
       "a": {
-        "type": "notebook", "schema": 1, "title": "old name",
-        "pageIds": ["p1"], "deletedPageIds": [],
-        "parentFolderId": null, "defaultBackground": "blank", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "type": "notebook",
+        "schema": 1,
+        "title": "old name",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "notebook", "schema": 1, "title": "new name",
-        "pageIds": ["p1"], "deletedPageIds": [],
-        "parentFolderId": "folder-9", "defaultBackground": "grid", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "type": "notebook",
+        "schema": 1,
+        "title": "new name",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": "folder-9",
+        "defaultBackground": "grid",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "notebook", "schema": 1, "title": "new name",
-        "pageIds": ["p1"], "deletedPageIds": [],
-        "parentFolderId": "folder-9", "defaultBackground": "grid", "defaultBackgroundType": "native",
-        "createdAt": "2026-08-10T06:00:00Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "type": "notebook",
+        "schema": 1,
+        "title": "new name",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": "folder-9",
+        "defaultBackground": "grid",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-default-sheet-survives-undeclaring-peer",
+      "kind": "notebook",
+      "why": "Same rule as a page's own sheet, for the size new pages in the notebook are created with.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "Book",
+        "pageIds": [
+          "p-1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "defaultPageWidth": 1400,
+        "defaultPageHeight": 1980,
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "Book",
+        "pageIds": [
+          "p-1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "defaultPageWidth": null,
+        "defaultPageHeight": null,
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "Book",
+        "pageIds": [
+          "p-1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "defaultPageWidth": 1400,
+        "defaultPageHeight": 1980,
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "boox"
       }
     },
     {
@@ -396,16 +1176,31 @@
       "kind": "folder",
       "why": "Folders carry nothing that can conflict internally.",
       "a": {
-        "type": "folder", "schema": 1, "title": "study", "parentFolderId": null,
-        "createdAt": "2026-06-06T22:30:07.555Z", "updatedAt": "2026-08-10T06:05:00Z", "updatedBy": "ipad"
+        "type": "folder",
+        "schema": 1,
+        "title": "study",
+        "parentFolderId": null,
+        "createdAt": "2026-06-06T22:30:07.555Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
       },
       "b": {
-        "type": "folder", "schema": 1, "title": "Study Notes", "parentFolderId": null,
-        "createdAt": "2026-06-06T22:30:07.555Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "type": "folder",
+        "schema": 1,
+        "title": "Study Notes",
+        "parentFolderId": null,
+        "createdAt": "2026-06-06T22:30:07.555Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
       },
       "expected": {
-        "type": "folder", "schema": 1, "title": "Study Notes", "parentFolderId": null,
-        "createdAt": "2026-06-06T22:30:07.555Z", "updatedAt": "2026-08-10T06:07:00Z", "updatedBy": "boox"
+        "type": "folder",
+        "schema": 1,
+        "title": "Study Notes",
+        "parentFolderId": null,
+        "createdAt": "2026-06-06T22:30:07.555Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
       }
     }
   ]
