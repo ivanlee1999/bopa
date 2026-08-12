@@ -124,6 +124,20 @@ private struct FolderContentsView: View {
     @State private var showingTrash = false
     @State private var actionError: LibraryActionError?
 
+    @State private var query = ""
+    /// Persisted, because an order is a preference about the library rather than about this
+    /// visit to it — coming back to a differently-arranged shelf is its own small confusion.
+    @AppStorage("library.sortOrder") private var sortOrderRaw = LibrarySortOrder.updated.rawValue
+    @AppStorage("library.sortDescending") private var sortDescending = true
+
+    private var sortOrder: LibrarySortOrder {
+        LibrarySortOrder(rawValue: sortOrderRaw) ?? .updated
+    }
+
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     /// What throwing away the folder under the open confirmation would take with it.
     private var deletingFolderScope: NotebookStore.DeletionScope? {
         deletingFolderId.map { store.deletionScope(ofFolder: $0) }
@@ -136,8 +150,18 @@ private struct FolderContentsView: View {
         renameTitle.trimmingCharacters(in: .whitespaces)
     }
 
-    private var subfolders: [FolderDTO] { store.folders(in: folderId) }
-    private var notebooks: [NotebookManifest] { store.notebooks(in: folderId) }
+    /// Searching leaves the current folder behind: the reason to search is not knowing where the
+    /// thing is, so a search that only looked in the folder you are standing in would answer the
+    /// question you did not ask.
+    private var subfolders: [FolderDTO] {
+        let found = isSearching ? store.search(query).folders : store.folders(in: folderId)
+        return LibrarySort.folders(found, by: sortOrder, descending: sortDescending)
+    }
+
+    private var notebooks: [NotebookManifest] {
+        let found = isSearching ? store.search(query).notebooks : store.notebooks(in: folderId)
+        return LibrarySort.notebooks(found, by: sortOrder, descending: sortDescending)
+    }
 
     private var title: String {
         folderId.flatMap { store.folder(id: $0)?.title } ?? "All Notes"
@@ -344,10 +368,76 @@ private struct FolderContentsView: View {
                 .accessibilityLabel("New notebook")
                 .accessibilityIdentifier("library.add")
             }
+            searchRow
             ModernistRule(heavy: true)
         }
         .padding(.horizontal, 22)
         .padding(.top, 8)
+    }
+
+    /// Search and sort, on one line under the title.
+    ///
+    /// Both are about *finding* something, and neither is worth a screen of its own: the library
+    /// used to offer no way to look for a notebook by name and no order but the one the store
+    /// happened to sort by, which in a library of eighty covers means reading all eighty.
+    private var searchRow: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Modernist.neutral600)
+                TextField("Search notebooks and folders", text: $query)
+                    .font(Modernist.font(13))
+                    .foregroundStyle(Modernist.ink)
+                    .textFieldStyle(.plain)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.search)
+                    .accessibilityIdentifier("library.search")
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Modernist.neutral600)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .overlay { Rectangle().stroke(Modernist.neutral600, lineWidth: Modernist.ruleHair) }
+
+            Menu {
+                Picker("Sort by", selection: $sortOrderRaw) {
+                    ForEach(LibrarySortOrder.allCases) { order in
+                        Label(order.label, systemImage: order.symbolName).tag(order.rawValue)
+                    }
+                }
+                Divider()
+                // Named for what the reader gets, not for the direction of the comparison:
+                // "descending" says nothing about whether that means newest or Z first.
+                Picker("Direction", selection: $sortDescending) {
+                    Text(sortOrder == .title ? "A to Z" : "Newest first").tag(true)
+                    Text(sortOrder == .title ? "Z to A" : "Oldest first").tag(false)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(sortOrder.label).font(Modernist.font(12, .semibold))
+                }
+                .foregroundStyle(Modernist.ink)
+                .padding(.horizontal, 10)
+                .frame(height: 34)
+                .overlay { Rectangle().stroke(Modernist.ink, lineWidth: Modernist.ruleHair) }
+            }
+            .accessibilityLabel("Sort")
+            .accessibilityIdentifier("library.sort")
+        }
+        .padding(.top, 2)
     }
 
     /// Kicker and display title. Inside a folder the whole block is the rename control — the
@@ -398,7 +488,9 @@ private struct FolderContentsView: View {
     @ViewBuilder
     private var emptyState: some View {
         Group {
-            if folderId == nil {
+            if isSearching {
+                ContentUnavailableView.search(text: query)
+            } else if folderId == nil {
                 ContentUnavailableView(
                     "No notebooks yet", systemImage: "pencil.and.scribble",
                     description: Text("Create a notebook, or sync from your BOOX."))
@@ -417,7 +509,7 @@ private struct FolderContentsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if !subfolders.isEmpty {
-                    SectionHeading("Folders")
+                    SectionHeading(isSearching ? "Folders found" : "Folders")
                         .padding(.bottom, 10)
                     // Rows stack flush so their hairlines read as one ruled column;
                     // the gap belongs under the block, not under each row.
@@ -429,7 +521,7 @@ private struct FolderContentsView: View {
                     .padding(.bottom, 22)
                 }
                 if !notebooks.isEmpty {
-                    SectionHeading("Notebooks")
+                    SectionHeading(isSearching ? "Notebooks found" : "Notebooks")
                         .padding(.bottom, isCompact ? 4 : 14)
                     if isCompact {
                         VStack(spacing: 0) {
@@ -624,9 +716,16 @@ private struct FolderContentsView: View {
     // MARK: Subtitles
 
     /// Just the edit time: the page count is set into the cover itself.
+    ///
+    /// While searching it leads with where the notebook was found instead. A result list spanning
+    /// the whole library is not much use if every row looks the same as it would in its own
+    /// folder — "which of these three is the one from Term 2" is the question a path answers.
     private func notebookSubtitle(_ notebook: NotebookManifest) -> String {
-        NotableDate.parse(notebook.updatedAt)
+        let edited = NotableDate.parse(notebook.updatedAt)
             .map { $0.formatted(.relative(presentation: .named)) } ?? notebook.updatedAt
+        guard isSearching else { return edited }
+        let path = store.breadcrumb(of: notebook.parentFolderId).map(\.title)
+        return path.isEmpty ? "All Notes · \(edited)" : "\(path.joined(separator: " / ")) · \(edited)"
     }
 }
 

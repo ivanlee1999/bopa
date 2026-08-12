@@ -32,6 +32,7 @@
 		612A95F1BE606CBF723DF683 /* RotationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7CA46ABC2CDD559A3FFAECE /* RotationUITests.swift */; };
 		6282E4AF4D9D4C81DBA588C4 /* EraserUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 007E2190A23B0021DB3B5752 /* EraserUITests.swift */; };
 		669C9BEFB7448981118F2DB1 /* ServerBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7079102757F82D89F8EECEAE /* ServerBrowserView.swift */; };
+		6FDBE320E06856B13AC03D2A /* LibrarySort.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82D99ACFA8F3954E67039180 /* LibrarySort.swift */; };
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
 		7D6787E436578AEE47D227E6 /* NotebookStoreCouchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */; };
 		836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */; };
@@ -60,6 +61,7 @@
 		F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */; };
 		FA0CD3225E87C852D0FA1FD3 /* CouchAppLayerEndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85494F72E1F1F68C7031176B /* CouchAppLayerEndToEndTests.swift */; };
 		FA21BDF779D2388F37EBC05D /* SyncBackendHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F8898B646F5E5EF3397B53 /* SyncBackendHost.swift */; };
+		FF7C044CA7FDF7E6EB768057 /* LibrarySearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B340F9F70E3CA45974E8C544 /* LibrarySearchTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -111,6 +113,7 @@
 		7346F25A719C7EB849AE025F /* Thumbnails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Thumbnails.swift; sourceTree = "<group>"; };
 		74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasContainerViewTests.swift; sourceTree = "<group>"; };
 		760C1A94995C19FE535F60AB /* LibrarySidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySidebar.swift; sourceTree = "<group>"; };
+		82D99ACFA8F3954E67039180 /* LibrarySort.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySort.swift; sourceTree = "<group>"; };
 		85494F72E1F1F68C7031176B /* CouchAppLayerEndToEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchAppLayerEndToEndTests.swift; sourceTree = "<group>"; };
 		895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreCouchTests.swift; sourceTree = "<group>"; };
 		8B8095DDA1485688CAA4A759 /* PageOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageOverviewView.swift; sourceTree = "<group>"; };
@@ -118,6 +121,7 @@
 		97F9329828F4B8B59849650D /* testEachPenRendersItsOwnInk.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = testEachPenRendersItsOwnInk.1.png; sourceTree = "<group>"; };
 		99F8898B646F5E5EF3397B53 /* SyncBackendHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBackendHost.swift; sourceTree = "<group>"; };
 		9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageImageTests.swift; sourceTree = "<group>"; };
+		B340F9F70E3CA45974E8C544 /* LibrarySearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySearchTests.swift; sourceTree = "<group>"; };
 		B37AA22765996393FB323A60 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
 		B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandwritingSettingsTests.swift; sourceTree = "<group>"; };
 		B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
@@ -230,6 +234,7 @@
 				E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */,
 				3CB3BE8AC3CF7FB2EFDDF2DB /* LibraryActions.swift */,
 				760C1A94995C19FE535F60AB /* LibrarySidebar.swift */,
+				82D99ACFA8F3954E67039180 /* LibrarySort.swift */,
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
 				37599E4D83A385BCE5B8170D /* Modernist.swift */,
 				BE0FF747D670DE264447CF5D /* NotebookCover.swift */,
@@ -260,6 +265,7 @@
 				65F089A838509BF507244D0C /* CouchEndToEndTests.swift */,
 				C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */,
 				B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */,
+				B340F9F70E3CA45974E8C544 /* LibrarySearchTests.swift */,
 				895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */,
 				B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */,
 				9E41D9DC7E759FFF832BDC6B /* PageImageTests.swift */,
@@ -422,6 +428,7 @@
 				D8C4C444C3B3A5512C710E4D /* CouchEndToEndTests.swift in Sources */,
 				02EAE8E446983D5557B4FD8B /* CouchSyncControllerTests.swift in Sources */,
 				3BF381E0797979BCF00AEE38 /* HandwritingSettingsTests.swift in Sources */,
+				FF7C044CA7FDF7E6EB768057 /* LibrarySearchTests.swift in Sources */,
 				7D6787E436578AEE47D227E6 /* NotebookStoreCouchTests.swift in Sources */,
 				836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */,
 				C980C9CF1CD6F2E3D8B74DE7 /* PageImageTests.swift in Sources */,
@@ -450,6 +457,7 @@
 				B188FC9BE3CDA7096D52D546 /* HandwritingSettings.swift in Sources */,
 				319B5129F174D50B1545C040 /* LibraryActions.swift in Sources */,
 				4283276297678BE54BBF534F /* LibrarySidebar.swift in Sources */,
+				6FDBE320E06856B13AC03D2A /* LibrarySort.swift in Sources */,
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
 				502F56C0FD5818927AD81DC5 /* Modernist.swift in Sources */,
 				020B2B60C10166F6B44D6904 /* NotebookCover.swift in Sources */,
