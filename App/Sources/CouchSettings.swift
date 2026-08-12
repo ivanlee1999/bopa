@@ -108,9 +108,14 @@ struct CouchSettings: Equatable {
 enum CouchSyncStack {
     static let stateFileName = ".bopa-couch-state.json"
 
+    /// - Parameter onState: every sync state the engine persists, plus the one it starts from.
+    ///   The state carries the rev map, which is this backend's record of what the server holds —
+    ///   the fact the library's provenance badges are drawn from. Reporting the loaded state too
+    ///   is what makes those badges right on launch, before anything has synced this session.
     @MainActor
     static func make(
-        settings: CouchSettings = .load(), rootURL: URL, onChange: @escaping @Sendable () -> Void
+        settings: CouchSettings = .load(), rootURL: URL, onChange: @escaping @Sendable () -> Void,
+        onState: (@Sendable (CouchSyncState) -> Void)? = nil
     ) -> (store: FileCouchStore, engine: CouchSyncEngine, controller: CouchSyncController)? {
         guard let client = settings.makeClient() else { return nil }
 
@@ -118,10 +123,15 @@ enum CouchSyncStack {
         store.didApplyChanges = onChange
 
         let stateURL = rootURL.appendingPathComponent(stateFileName)
+        let initialState = loadState(stateURL)
+        onState?(initialState)
         let engine = CouchSyncEngine(
             client: client, store: store, deviceID: settings.deviceID,
-            state: loadState(stateURL),
-            onStateChange: { state in save(state, to: stateURL) })
+            state: initialState,
+            onStateChange: { state in
+                save(state, to: stateURL)
+                onState?(state)
+            })
         return (store, engine, CouchSyncController(engine: engine))
     }
 

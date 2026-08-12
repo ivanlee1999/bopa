@@ -57,6 +57,9 @@ final class SyncBackendHost: ObservableObject {
 
         guard backend == .couchdb else {
             store.didChangeDocuments = nil
+            // Hand the library's badges back to the WebDAV index; under any other backend the
+            // CouchDB rev map is either stale or about nothing.
+            store.noteRemoteDocuments(nil)
             return
         }
 
@@ -73,9 +76,24 @@ final class SyncBackendHost: ObservableObject {
                     NotificationCenter.default.post(
                         name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
                 }
+            },
+            onState: { [weak store] state in
+                // Only the two kinds a badge asks about. Keeping pages and assets out holds this
+                // to one entry per library item instead of one per drawn page.
+                //
+                // Matched on the prefix rather than by splitting each id: this runs over every
+                // revision the device knows, on every state the engine persists, and splitting
+                // would allocate two strings per page and per image to answer a question about
+                // the first word.
+                let notebooks = "\(CouchDocType.notebook):"
+                let folders = "\(CouchDocType.folder):"
+                let onServer = Set(
+                    state.revs.keys.filter { $0.hasPrefix(notebooks) || $0.hasPrefix(folders) })
+                Task { @MainActor in store?.noteRemoteDocuments(onServer) }
             })
         else {
             store.didChangeDocuments = nil
+            store.noteRemoteDocuments(nil)
             return
         }
 
