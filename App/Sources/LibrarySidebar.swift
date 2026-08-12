@@ -117,6 +117,10 @@ struct LibrarySidebar: View {
     @State private var showingRename = false
     @State private var renameTitle = ""
 
+    /// A local deletion that failed. Reported rather than swallowed: the row is still in the tree
+    /// afterwards, and without this the user is left to conclude that Delete does nothing.
+    @State private var deletionError: String?
+
     /// What a rename alert is pointed at. One alert serves both kinds, because at any moment
     /// only one row is being renamed.
     private enum RenameTarget: Hashable {
@@ -159,6 +163,15 @@ struct LibrarySidebar: View {
                 .disabled(trimmedRenameTitle.isEmpty)
             Button("Cancel", role: .cancel) {}
         }
+        .alert("Couldn’t delete that", isPresented: deletionErrorBinding) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deletionError ?? "")
+        }
+    }
+
+    private var deletionErrorBinding: Binding<Bool> {
+        Binding(get: { deletionError != nil }, set: { if !$0 { deletionError = nil } })
     }
 
     /// The wordmark, on the design's status strip: a label and a rule, nothing else.
@@ -233,7 +246,15 @@ struct LibrarySidebar: View {
             if store.isFolderEmpty(node.itemId) {
                 Button(role: .destructive) {
                     if selection == .folder(node.itemId) { selection = .root }
-                    try? store.deleteFolder(id: node.itemId)
+                    // Reported rather than swallowed: the store records the CouchDB tombstone as
+                    // part of a *successful* delete, so a failure here means the folder is still
+                    // in the library and nothing has been promised to the server. Saying so is the
+                    // difference between that and a Delete that silently does nothing.
+                    do {
+                        try store.deleteFolder(id: node.itemId)
+                    } catch {
+                        deletionError = error.localizedDescription
+                    }
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }

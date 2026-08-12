@@ -120,8 +120,28 @@ private struct FolderContentsView: View {
     @State private var showingDeleteNotebook = false
     @State private var showingSyncSettings = false
 
+    /// A local deletion that failed. Reported rather than swallowed: the notebook is still on the
+    /// screen afterwards, and without this the user is left to conclude that Delete does nothing.
+    @State private var deletionError: String?
+
     private var trimmedRenameTitle: String {
         renameTitle.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var deletionErrorBinding: Binding<Bool> {
+        Binding(get: { deletionError != nil }, set: { if !$0 { deletionError = nil } })
+    }
+
+    /// Deletes, and says so when it could not. `try?` was the wrong shape for this one operation:
+    /// the store records the CouchDB tombstone as part of a *successful* delete, so a swallowed
+    /// failure left the library looking unchanged while the user believed it was gone — and the
+    /// next sync would have been the first hint, had it had anything to push.
+    private func delete(_ operation: () throws -> Void) {
+        do {
+            try operation()
+        } catch {
+            deletionError = error.localizedDescription
+        }
     }
 
     private var subfolders: [FolderDTO] { store.folders(in: folderId) }
@@ -203,12 +223,17 @@ private struct FolderContentsView: View {
         ) {
             Button("Delete", role: .destructive) {
                 if let id = deletingNotebookId {
-                    try? store.deleteNotebook(id: id)
+                    delete { try store.deleteNotebook(id: id) }
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The notebook is removed from this iPad and deleted from the server on the next sync.")
+        }
+        .alert("Couldn’t delete that", isPresented: deletionErrorBinding) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deletionError ?? "")
         }
         .onAppear { store.refresh() }
     }
@@ -419,7 +444,7 @@ private struct FolderContentsView: View {
             }
             if store.isFolderEmpty(folder.id) {
                 Button(role: .destructive) {
-                    try? store.deleteFolder(id: folder.id)
+                    delete { try store.deleteFolder(id: folder.id) }
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
