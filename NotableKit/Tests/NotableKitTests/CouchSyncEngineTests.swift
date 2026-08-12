@@ -634,6 +634,25 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertTrue(again.applied.isEmpty)
     }
 
+    /// Stopping at the first dead connection is right; describing the run as though only that one
+    /// document were left is not. The rest of the queue was never attempted and is still in the
+    /// outbox, so a report that omits it drives the pending badge — and the peer's "is there more
+    /// to send" question — from a number that is simply too small.
+    func testAnEarlyStopReportsTheWholeRemainingQueueAsStillDirty() async throws {
+        let ids = ["p1", "p2", "p3"].map(CouchDocID.page)
+        for id in ids { ipadStore.set(id, .page(page(updatedAt: 5, by: "ipad"))) }
+        await ipad.markDirty(ids)
+        // The first document the flush reaches fails with something that applies to the rest too.
+        server.failingDocumentIDs[ids[0]] = 503
+
+        let report = await ipad.flush()
+
+        XCTAssertEqual(report.stillDirty.sorted(), ids.sorted())
+        XCTAssertEqual(report.failures.count, 1, "only the attempted document actually failed")
+        let pending = await ipad.pendingCount
+        XCTAssertEqual(report.stillDirty.count, pending, "the report must match the outbox")
+    }
+
     func testUnauthorizedStopsImmediatelyAndKeepsWork() async throws {
         server.failingDocumentIDs[pageID] = 401
         ipadStore.set(pageID, .page(page(updatedAt: 5, by: "ipad")))
