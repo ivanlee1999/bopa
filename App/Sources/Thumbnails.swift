@@ -20,7 +20,7 @@ enum ThumbnailRenderer {
               let page = try? store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
         else { return nil }
 
-        let pageWidth = EditorCanvasView.pageWidth
+        let pageWidth = CGFloat(page.pageSize.width)
         let scale = size.width / pageWidth
         let pageRect = CGRect(x: 0, y: 0, width: pageWidth, height: size.height / scale)
         let notebookDir = store.notebookDirURL(manifest.notebookId)

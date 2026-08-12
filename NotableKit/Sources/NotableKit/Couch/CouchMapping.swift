@@ -25,6 +25,8 @@ public enum CouchMapping {
             title: file.title,
             background: file.background,
             backgroundType: file.backgroundType,
+            pageWidth: file.pageWidth,
+            pageHeight: file.pageHeight,
             strokes: file.strokes.map { couchStroke(from: $0, deviceID: deviceID) },
             deletedStrokes: file.deletedStrokes,
             images: file.images.map {
@@ -67,6 +69,11 @@ public enum CouchMapping {
             backgroundType: page.backgroundType,
             parentFolderId: existing?.parentFolderId,
             scroll: existing?.scroll ?? 0,
+            // A page that already declares a sheet keeps it when the peer names none: geometry is
+            // how the ink on disk is laid out, so a build that has not learned the field must not
+            // be able to un-declare it and reflow the page.
+            pageWidth: page.pageWidth ?? existing?.pageWidth,
+            pageHeight: page.pageHeight ?? existing?.pageHeight,
             createdAt: page.createdAt,
             updatedAt: page.updatedAt,
             strokes: page.strokes.map(strokeDTO(from:)) + surviving,
@@ -151,6 +158,8 @@ public enum CouchMapping {
             parentFolderId: manifest.parentFolderId,
             defaultBackground: manifest.defaultBackground,
             defaultBackgroundType: manifest.defaultBackgroundType,
+            defaultPageWidth: manifest.defaultPageWidth,
+            defaultPageHeight: manifest.defaultPageHeight,
             createdAt: manifest.createdAt,
             updatedAt: manifest.updatedAt,
             updatedBy: manifest.updatedBy.isEmpty ? deviceID : manifest.updatedBy)
@@ -170,6 +179,10 @@ public enum CouchMapping {
             defaultBackground: notebook.defaultBackground,
             defaultBackgroundType: notebook.defaultBackgroundType,
             linkedExternalUri: existing?.linkedExternalUri,
+            // Same rule as a page's own size: a declaration is not dropped because the peer's
+            // build does not know it.
+            defaultPageWidth: notebook.defaultPageWidth ?? existing?.defaultPageWidth,
+            defaultPageHeight: notebook.defaultPageHeight ?? existing?.defaultPageHeight,
             createdAt: notebook.createdAt,
             updatedAt: notebook.updatedAt,
             serverTimestamp: notebook.updatedAt,

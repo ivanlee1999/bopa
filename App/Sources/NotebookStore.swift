@@ -88,8 +88,13 @@ final class NotebookStore: ObservableObject {
         remoteIndex = RemoteIndex.load(root: rootURL)
     }
 
+    /// - Parameter pageSize: the sheet every page here is laid out on, recorded on the notebook
+    ///   and stamped onto each page it creates. Both apps read it from the page, so this is the
+    ///   one moment the choice is made — an existing notebook keeps the geometry it was written
+    ///   with, including the notebooks that predate the field and declare nothing at all.
     func createNotebook(
-        title: String, parentFolderId: String? = nil, template: NativeTemplate = .blank
+        title: String, parentFolderId: String? = nil, template: NativeTemplate = .blank,
+        pageSize: PageSize = PageSizePreset.default.size
     ) throws -> NotebookManifest {
         let now = NotableDate.format(Date())
         let notebookId = UUID().uuidString.lowercased()
@@ -100,12 +105,14 @@ final class NotebookStore: ObservableObject {
         let page = PageFile(
             id: pageId, notebookId: notebookId,
             background: pageFields.background, backgroundType: pageFields.backgroundType,
+            pageWidth: pageSize.width, pageHeight: pageSize.height,
             createdAt: now, updatedAt: now)
         let manifest = NotebookManifest(
             notebookId: notebookId, title: title, pageIds: [pageId], openPageId: pageId,
             parentFolderId: parentFolderId,
             defaultBackground: plan.notebookDefaults.background,
             defaultBackgroundType: plan.notebookDefaults.backgroundType,
+            defaultPageWidth: pageSize.width, defaultPageHeight: pageSize.height,
             createdAt: now, updatedAt: now, serverTimestamp: now)
 
         try FileManager.default.createDirectory(
@@ -165,6 +172,11 @@ final class NotebookStore: ObservableObject {
         // Taking the file's value stops an autosave from undoing it, the same way the stroke
         // fold-back below stops one from undoing the BOOX's ink.
         page.title = onDisk?.title ?? page.title
+        // A page's sheet is set when it is created and never edited here, so the file's
+        // declaration is at least as fresh as the caller's — and an autosave must not be able to
+        // un-declare a size the merge just wrote, which would reflow the page under the ink.
+        page.pageWidth = onDisk?.pageWidth ?? page.pageWidth
+        page.pageHeight = onDisk?.pageHeight ?? page.pageHeight
 
         // Whatever the caller *had* and no longer has was erased. Recording it is what stops the
         // other device's copy of an erased stroke from coming back on the next merge — absence
@@ -230,9 +242,14 @@ final class NotebookStore: ObservableObject {
             template = fallbackTemplate
         }
         let fields = TemplateApplication.pageFields(for: .native(template))
+        // The sheet follows the notebook the same way the paper does. A notebook that declares
+        // none keeps declaring none: page sizes are not retrofitted onto old notebooks, so a
+        // notebook does not end up half-A4 and half-legacy.
+        let pageSize = manifest.declaredDefaultPageSize
         let page = PageFile(
             id: UUID().uuidString.lowercased(), notebookId: notebookId,
             background: fields.background, backgroundType: fields.backgroundType,
+            pageWidth: pageSize?.width, pageHeight: pageSize?.height,
             createdAt: now, updatedAt: now)
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)

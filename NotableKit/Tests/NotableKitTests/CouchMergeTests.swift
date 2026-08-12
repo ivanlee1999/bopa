@@ -147,9 +147,16 @@ final class CouchMergePropertyTests: XCTestCase {
         // Sometimes nil: an unnamed page is the common case, and it has to survive a merge
         // against a named one without either side depending on argument order.
         let titles: [String?] = [nil, "page 0", "page 1", "page 2"]
+        // Likewise sometimes undeclared: a page written before page sizes existed has to merge
+        // against one that declares a sheet without the outcome depending on argument order.
+        let sheets: [PageSize?] = [
+            nil, PageSizePreset.a4.size, PageSizePreset.a5.size, PageSizePreset.legal.size,
+        ]
+        let sheet = sheets[rng.next(sheets.count)]
         return CouchPage(
             notebookId: "nb", title: titles[rng.next(titles.count)],
             background: rng.next(2) == 0 ? "blank" : "grid",
+            pageWidth: sheet?.width, pageHeight: sheet?.height,
             strokes: strokes, deletedStrokes: tombs,
             createdAt: stamp(0), updatedAt: stamp(rng.next(60)), updatedBy: deviceId)
     }
@@ -276,5 +283,86 @@ final class CouchMergePropertyTests: XCTestCase {
             CouchMerge.resolveDeletion(
                 liveUpdatedAt: "2026-08-10T06:05:00Z", tombstoneDeletedAt: "2026-08-10T06:05:00Z"),
             .applyDeletion)
+    }
+
+    // MARK: - Page geometry
+
+    /// The rule that keeps a notebook readable: a page's sheet describes how the ink already on it
+    /// is laid out, so a peer that has not learned the field cannot un-declare it by writing last.
+    /// Without this, one sync from an older BOOX build would reflow every page it touched.
+    func testADeclaredSheetSurvivesAPeerThatDeclaresNone() {
+        let declared = CouchPage(
+            notebookId: "nb", pageWidth: 1400, pageHeight: 1980,
+            createdAt: "2026-08-10T06:00:00Z", updatedAt: "2026-08-10T06:00:00Z",
+            updatedBy: "ipad")
+        var silent = declared
+        silent.pageWidth = nil
+        silent.pageHeight = nil
+        // The silent writer is the *later* one, so it wins every other scalar.
+        silent.updatedAt = "2026-08-10T06:05:00Z"
+        silent.updatedBy = "boox"
+
+        XCTAssertEqual(CouchMerge.merge(declared, silent).declaredPageSize, PageSizePreset.a4.size)
+        XCTAssertEqual(CouchMerge.merge(silent, declared).declaredPageSize, PageSizePreset.a4.size)
+    }
+
+    /// When both sides name a sheet they are the same sheet in practice — it is fixed at creation
+    /// — but if they ever differ the later write decides, like any other scalar.
+    func testTwoDeclaredSheetsResolveToTheLaterWrite() {
+        let a4 = CouchPage(
+            notebookId: "nb", pageWidth: 1400, pageHeight: 1980,
+            createdAt: "2026-08-10T06:00:00Z", updatedAt: "2026-08-10T06:00:00Z",
+            updatedBy: "ipad")
+        var a3 = a4
+        a3.pageWidth = 1980
+        a3.pageHeight = 2800
+        a3.updatedAt = "2026-08-10T06:05:00Z"
+        a3.updatedBy = "boox"
+
+        XCTAssertEqual(CouchMerge.merge(a4, a3).declaredPageSize, PageSizePreset.a3.size)
+        XCTAssertEqual(CouchMerge.merge(a3, a4).declaredPageSize, PageSizePreset.a3.size)
+    }
+
+    /// Same trap as the title case: a scalar the merge picks but the tiebreak key omits makes both
+    /// argument orders win, and the merge stops being commutative.
+    func testPagesDifferingOnlyBySheetStillMergeCommutatively() {
+        let one = CouchPage(
+            notebookId: "nb", pageWidth: 1400, pageHeight: 1980,
+            createdAt: "2026-08-10T06:00:00Z", updatedAt: "2026-08-10T06:00:00Z",
+            updatedBy: "boox")
+        var other = one
+        other.pageWidth = 1439
+        other.pageHeight = 1863
+
+        XCTAssertEqual(CouchMerge.merge(one, other), CouchMerge.merge(other, one))
+    }
+
+    func testNotebooksDifferingOnlyByDefaultSheetStillMergeCommutatively() {
+        let one = CouchNotebook(
+            title: "Book", defaultPageWidth: 1400, defaultPageHeight: 1980,
+            createdAt: "2026-08-10T06:00:00Z", updatedAt: "2026-08-10T06:00:00Z",
+            updatedBy: "boox")
+        var other = one
+        other.defaultPageWidth = 1980
+        other.defaultPageHeight = 2800
+
+        XCTAssertEqual(CouchMerge.merge(one, other), CouchMerge.merge(other, one))
+    }
+
+    func testANotebookDefaultSurvivesAPeerThatDeclaresNone() {
+        let declared = CouchNotebook(
+            title: "Book", defaultPageWidth: 1400, defaultPageHeight: 1980,
+            createdAt: "2026-08-10T06:00:00Z", updatedAt: "2026-08-10T06:00:00Z",
+            updatedBy: "ipad")
+        var silent = declared
+        silent.defaultPageWidth = nil
+        silent.defaultPageHeight = nil
+        silent.updatedAt = "2026-08-10T06:05:00Z"
+        silent.updatedBy = "boox"
+
+        XCTAssertEqual(
+            CouchMerge.merge(declared, silent).declaredDefaultPageSize, PageSizePreset.a4.size)
+        XCTAssertEqual(
+            CouchMerge.merge(silent, declared).declaredDefaultPageSize, PageSizePreset.a4.size)
     }
 }

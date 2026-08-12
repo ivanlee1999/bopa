@@ -14,6 +14,7 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case version, notebookId, title, pageIds, openPageId, parentFolderId
         case defaultBackground, defaultBackgroundType, linkedExternalUri
+        case defaultPageWidth, defaultPageHeight
         case createdAt, updatedAt, serverTimestamp, deletedPageIds, updatedBy
     }
 
@@ -26,6 +27,12 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
     public var defaultBackground: String
     public var defaultBackgroundType: String
     public var linkedExternalUri: String?
+    /// The sheet size new pages in this notebook are created with, in page units, or nil for a
+    /// notebook created before page sizes existed. Chosen once when the notebook is created —
+    /// `PageFile.pageWidth`/`pageHeight` is what actually lays a page out, the same division of
+    /// labour as `defaultBackground` and `background`.
+    public var defaultPageWidth: Int?
+    public var defaultPageHeight: Int?
     public var createdAt: String
     public var updatedAt: String
     public var serverTimestamp: String
@@ -44,6 +51,8 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         defaultBackground: String = "blank",
         defaultBackgroundType: String = "native",
         linkedExternalUri: String? = nil,
+        defaultPageWidth: Int? = nil,
+        defaultPageHeight: Int? = nil,
         createdAt: String,
         updatedAt: String,
         serverTimestamp: String,
@@ -61,6 +70,8 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         self.defaultBackground = defaultBackground
         self.defaultBackgroundType = defaultBackgroundType
         self.linkedExternalUri = linkedExternalUri
+        self.defaultPageWidth = defaultPageWidth
+        self.defaultPageHeight = defaultPageHeight
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.serverTimestamp = serverTimestamp
@@ -78,6 +89,11 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         defaultBackgroundType =
             try c.decodeIfPresent(String.self, forKey: .defaultBackgroundType) ?? "native"
         linkedExternalUri = try c.decodeIfPresent(String.self, forKey: .linkedExternalUri)
+        // Same rule as `PageFile`: a non-positive dimension is treated as no declaration.
+        defaultPageWidth = try c.decodeIfPresent(Int.self, forKey: .defaultPageWidth)
+            .flatMap { $0 > 0 ? $0 : nil }
+        defaultPageHeight = try c.decodeIfPresent(Int.self, forKey: .defaultPageHeight)
+            .flatMap { $0 > 0 ? $0 : nil }
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
         serverTimestamp = try c.decodeIfPresent(String.self, forKey: .serverTimestamp) ?? updatedAt
@@ -96,6 +112,8 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         try c.encode(defaultBackground, forKey: .defaultBackground)
         try c.encode(defaultBackgroundType, forKey: .defaultBackgroundType)
         try c.encode(linkedExternalUri, forKey: .linkedExternalUri)
+        try c.encode(defaultPageWidth, forKey: .defaultPageWidth)
+        try c.encode(defaultPageHeight, forKey: .defaultPageHeight)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(serverTimestamp, forKey: .serverTimestamp)
@@ -107,6 +125,7 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
 public struct PageFile: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case version, id, notebookId, title, background, backgroundType, parentFolderId, scroll
+        case pageWidth, pageHeight
         case createdAt, updatedAt, strokes, images, deletedStrokes, updatedBy
     }
 
@@ -120,6 +139,15 @@ public struct PageFile: Codable, Equatable, Sendable {
     public var backgroundType: String
     public var parentFolderId: String?
     public var scroll: Int
+    /// The sheet this page's coordinates are laid out on, in page units, or nil for a page that
+    /// declares none — written before page sizes existed, so each app falls back to what it
+    /// always used (`PageSize.legacyUndeclared` here, the screen width on the BOOX).
+    ///
+    /// Per page rather than per notebook only, the way `background` is: it is what a renderer
+    /// needs in hand, it lets a page that lives outside a notebook carry one, and it is where
+    /// every other format that solved this (`.xopp`, OneNote, GoodNotes templates) puts it.
+    public var pageWidth: Int?
+    public var pageHeight: Int?
     public var createdAt: String
     public var updatedAt: String
     public var strokes: [StrokeDTO]
@@ -140,6 +168,8 @@ public struct PageFile: Codable, Equatable, Sendable {
         backgroundType: String = "native",
         parentFolderId: String? = nil,
         scroll: Int = 0,
+        pageWidth: Int? = nil,
+        pageHeight: Int? = nil,
         createdAt: String,
         updatedAt: String,
         strokes: [StrokeDTO] = [],
@@ -155,6 +185,8 @@ public struct PageFile: Codable, Equatable, Sendable {
         self.backgroundType = backgroundType
         self.parentFolderId = parentFolderId
         self.scroll = scroll
+        self.pageWidth = pageWidth
+        self.pageHeight = pageHeight
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.strokes = strokes
@@ -173,6 +205,11 @@ public struct PageFile: Codable, Equatable, Sendable {
         backgroundType = try c.decodeIfPresent(String.self, forKey: .backgroundType) ?? "native"
         parentFolderId = try c.decodeIfPresent(String.self, forKey: .parentFolderId)
         scroll = try c.decodeIfPresent(Int.self, forKey: .scroll) ?? 0
+        // A zero or negative dimension is as good as absent: it cannot be laid out, and a peer
+        // that writes 0 for "unset" must not make this page unrenderable.
+        pageWidth = try c.decodeIfPresent(Int.self, forKey: .pageWidth).flatMap { $0 > 0 ? $0 : nil }
+        pageHeight = try c.decodeIfPresent(Int.self, forKey: .pageHeight)
+            .flatMap { $0 > 0 ? $0 : nil }
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
         strokes = try c.decodeIfPresent([StrokeDTO].self, forKey: .strokes) ?? []
@@ -191,6 +228,8 @@ public struct PageFile: Codable, Equatable, Sendable {
         try c.encode(backgroundType, forKey: .backgroundType)
         try c.encode(parentFolderId, forKey: .parentFolderId)
         try c.encode(scroll, forKey: .scroll)
+        try c.encode(pageWidth, forKey: .pageWidth)
+        try c.encode(pageHeight, forKey: .pageHeight)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(strokes, forKey: .strokes)

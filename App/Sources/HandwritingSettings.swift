@@ -85,6 +85,9 @@ struct HandwritingConfig: Equatable, Sendable {
     /// Paper for newly created notebooks and pages. Existing pages keep the template
     /// stored in their page file (which is what the BOOX also reads).
     var defaultTemplate: NativeTemplate = .blank
+    /// The sheet the New-notebook sheet starts on. Only ever consulted when a notebook is
+    /// created: from then on the page file's own size decides, on both apps.
+    var defaultPageSize: PageSize = PageSizePreset.default.size
 
     enum Key {
         static let fingerDrawing = "handwriting.fingerDrawing"
@@ -95,6 +98,10 @@ struct HandwritingConfig: Equatable, Sendable {
         static let doubleTapAction = "handwriting.pencilDoubleTap"
         static let squeezeAction = "handwriting.pencilSqueeze"
         static let defaultTemplate = "handwriting.defaultTemplate"
+        /// Stored as the two dimensions rather than a preset name, so a change to the preset
+        /// table can never silently move an existing choice to different paper.
+        static let defaultPageWidth = "handwriting.defaultPageWidth"
+        static let defaultPageHeight = "handwriting.defaultPageHeight"
     }
 
     static func load(from defaults: UserDefaults) -> HandwritingConfig {
@@ -123,6 +130,11 @@ struct HandwritingConfig: Equatable, Sendable {
             // drawable here; fall back rather than surface an unpickable option.
             config.defaultTemplate = template.isDrawable ? template : .blank
         }
+        let width = defaults.integer(forKey: Key.defaultPageWidth)
+        let height = defaults.integer(forKey: Key.defaultPageHeight)
+        if width > 0, height > 0 {
+            config.defaultPageSize = PageSize(width: width, height: height)
+        }
         return config
     }
 
@@ -133,6 +145,8 @@ struct HandwritingConfig: Equatable, Sendable {
         defaults.set(doubleTapAction.rawValue, forKey: Key.doubleTapAction)
         defaults.set(squeezeAction.rawValue, forKey: Key.squeezeAction)
         defaults.set(defaultTemplate.name, forKey: Key.defaultTemplate)
+        defaults.set(defaultPageSize.width, forKey: Key.defaultPageWidth)
+        defaults.set(defaultPageSize.height, forKey: Key.defaultPageHeight)
     }
 }
 
@@ -232,7 +246,8 @@ struct HandwritingSettingsSections: View {
                     ? "The page is scaled so its width fills the screen, and stays that way "
                         + "as you scroll or rotate. Pinching leaves the fit; the editor's ••• "
                         + "menu puts you back on it."
-                    : "The page is drawn at its true size — 1404pt wide, the same as on the BOOX.")
+                    : "The page is drawn at its true size — one page unit per point, so an A4 "
+                        + "page is 1400pt wide.")
                 if config.scrollLocked.wrappedValue && !config.fingerDrawing.wrappedValue {
                     Text("With scrolling locked and finger drawing off, the page cannot be moved.")
                 }
@@ -246,11 +261,49 @@ struct HandwritingSettingsSections: View {
                 }
             }
             .accessibilityIdentifier("settings.defaultTemplate")
+            PageSizePicker(selection: config.defaultPageSize)
+                .accessibilityIdentifier("settings.defaultPageSize")
         } header: {
             Text("Paper")
         } footer: {
             Text("Applies to new notebooks and pages. Change an open page's paper from the "
                 + "editor's ••• menu. Templates match Notable's, so they render the same on the BOOX.")
         }
+    }
+}
+
+/// The paper-size choice, in the one place both the settings form and the New-notebook sheet
+/// read it from.
+///
+/// Only offered where a notebook is being created. A page's size is what its ink is laid out
+/// against, so changing it later would move every stroke on the page relative to the paper —
+/// which is why the sizes an existing notebook was written with are left alone.
+struct PageSizePicker: View {
+    @Binding var selection: PageSize
+    var label = "Page size"
+
+    init(selection: Binding<PageSize>, label: String = "Page size") {
+        self._selection = selection
+        self.label = label
+    }
+
+    var body: some View {
+        Picker(label, selection: $selection) {
+            ForEach(PageSizePreset.all) { preset in
+                Text("\(preset.name) · \(Self.dimensions(preset))").tag(preset.size)
+            }
+            // A size no preset names — a notebook from a build with a bigger table, or a
+            // default carried over from one — stays selectable rather than snapping the
+            // picker to something the user did not choose.
+            if PageSizePreset.matching(selection) == nil {
+                Text(PageSizePreset.label(for: selection)).tag(selection)
+            }
+        }
+    }
+
+    private static func dimensions(_ preset: PageSizePreset) -> String {
+        let width = Int(preset.millimetres.width.rounded())
+        let height = Int(preset.millimetres.height.rounded())
+        return "\(width)×\(height) mm"
     }
 }
