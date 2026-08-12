@@ -282,7 +282,7 @@ public actor CouchSyncEngine {
             queue.removeAll { held.contains($0) }
         }
 
-        for documentID in queue {
+        for (index, documentID) in queue.enumerated() {
             do {
                 switch try await push(documentID) {
                 case .pushed: report.pushed.append(documentID)
@@ -296,7 +296,17 @@ public actor CouchSyncEngine {
                 // rejected credentials — which no amount of retrying will fix. Stopping keeps one
                 // dead connection, or one wrong password, from turning into a burst of doomed
                 // requests, one per queued document, on every flush.
-                if error.isRetriable || error == .unauthorized { break }
+                if error.isRetriable || error == .unauthorized {
+                    // Everything after this point was never tried, and is still in the outbox.
+                    // Reporting only the one document that failed lost no work — the queue is
+                    // durable either way — but `stillDirty` is what the controller counts for the
+                    // pending badge and what the peer's reconnect logic reads as "there is more to
+                    // send", so leaving the remainder out understated both. Assets are filtered
+                    // back out because nothing queues one: they are derived from the pages being
+                    // sent, so counting them would report work the outbox does not hold.
+                    report.stillDirty += queue[(index + 1)...].filter { state.dirty.contains($0) }
+                    break
+                }
             } catch {
                 report.failures[documentID] = String(describing: error)
                 report.stillDirty.append(documentID)
