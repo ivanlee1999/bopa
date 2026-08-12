@@ -287,6 +287,46 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertTrue(server.isDeleted(notebookID), "the deletion must still stand on the server")
     }
 
+    /// Two people tidying up at once. Both delete the same notebook while apart, so the merge is
+    /// tombstone against tombstone — and it settles on the earliest `deletedAt` with the *later*
+    /// `updatedAt`/`updatedBy`, which is a different document from the one the server stored even
+    /// though it records the identical deletion. Plain equality therefore said "still to send", and
+    /// re-deleting an already deleted document is a 409 no matter which revision it carries: the id
+    /// burned its retries and stayed in the outbox for good.
+    func testBothDevicesDeletingTheSameNotebookSettlesRatherThanRetryingForever() async throws {
+        ipadStore.set(notebookID, .notebook(CouchNotebook(
+            title: "notes", pageIds: [], createdAt: stamp(0), updatedAt: stamp(1),
+            updatedBy: "ipad")))
+        await ipad.markDirty([notebookID])
+        _ = await ipad.flush()
+        _ = try await boox.pull()
+
+        // The BOOX deletes first and reaches the server; the iPad deletes the same notebook a
+        // moment later, knowing nothing about it.
+        booxStore.set(notebookID, .deleted(CouchDeletedDoc(
+            type: CouchDocType.notebook, deletedAt: stamp(10), updatedBy: "boox")))
+        await boox.markDirty([notebookID])
+        _ = await boox.flush()
+
+        ipadStore.set(notebookID, .deleted(CouchDeletedDoc(
+            type: CouchDocType.notebook, deletedAt: stamp(12), updatedBy: "ipad")))
+        await ipad.markDirty([notebookID])
+
+        let flush = await ipad.flush()
+
+        XCTAssertTrue(flush.failures.isEmpty, "agreeing with the peer is not a failure")
+        XCTAssertTrue(flush.stillDirty.isEmpty, "the document must leave the outbox")
+        let pending = await ipad.pendingCount
+        XCTAssertEqual(pending, 0)
+        XCTAssertTrue(server.isDeleted(notebookID), "the deletion must still stand on the server")
+
+        // And it stays settled: a later flush has nothing to offer rather than starting again.
+        server.forgetRequests()
+        let again = await ipad.flush()
+        XCTAssertTrue(again.stillDirty.isEmpty)
+        XCTAssertFalse(server.requestLog.contains { $0.method == "PUT" })
+    }
+
     /// A `200` from `open_revs=all` that cannot be read must be reported, not read as "the document
     /// is absent" — absent is what sends the pusher back round as a create, and a create over a
     /// tombstone resurrects it. Failing keeps the work dirty, which is the safe direction.

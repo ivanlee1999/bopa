@@ -351,12 +351,17 @@ public actor CouchSyncEngine {
                     return .nothingToPush
                 }
                 if merged != local { try store.apply(documentID, merged, basedOn: local) }
-                if merged == remote.body {
-                    // The server already holds exactly this, so there is nothing left to send.
-                    // Returning here is not just an optimization: when the merge resolves to the
-                    // peer's tombstone, CouchDB answers 409 to a PUT that re-deletes an already
-                    // deleted document *even with its current revision* — so writing it back would
-                    // spin until the retries ran out and leave the id stuck in the outbox forever.
+                // The server already holds this, so there is nothing left to send. Returning here
+                // is not just an optimization: when the merge resolves to the peer's tombstone,
+                // CouchDB answers 409 to a PUT that re-deletes an already deleted document *even
+                // with its current revision* — so writing it back would spin until the retries ran
+                // out and leave the id stuck in the outbox forever.
+                //
+                // The deleted case needs its own test rather than plain equality: two devices that
+                // deleted the same document independently merge to a tombstone whose `updatedAt`
+                // and `updatedBy` differ from the stored one — equal deletions, unequal documents.
+                // There is nothing to send either way; the deletion is already recorded.
+                if merged == remote.body || (merged.isDeleted && remote.body.isDeleted) {
                     state.dirty.remove(documentID)
                     return .nothingToPush
                 }
