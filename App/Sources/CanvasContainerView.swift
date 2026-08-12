@@ -39,6 +39,12 @@ final class CanvasContainerView: UIView {
     var pageWidth: CGFloat = CGFloat(PageSize.legacyUndeclared.width) {
         didSet { paperView.pageWidth = pageWidth }
     }
+    /// The declared sheet height, or 0 for a page that declares none — what an export splits on,
+    /// and so what the page-break hairlines are drawn at. Zero draws none: a page with no agreed
+    /// sheet has no break to promise.
+    var sheetHeight: CGFloat = 0 {
+        didSet { paperView.sheetHeight = sheetHeight }
+    }
     /// Slack kept to the right of ink that overflows the sheet, so the last stroke is not flush
     /// against the edge of the scrollable area. Small on purpose: unlike the downward slack,
     /// which is room to keep writing, this only has to make the overflow legible.
