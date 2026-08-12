@@ -152,4 +152,54 @@ final class PageSizeTests: XCTestCase {
         let decoded = try JSONDecoder().decode(NotebookManifest.self, from: data)
         XCTAssertEqual(decoded.declaredDefaultPageSize, PageSizePreset.letter.size)
     }
+
+    // MARK: - Interop with the BOOX
+
+    /// Verbatim output of the BOOX's own `NotebookSerializer.serializePage` for an A4 page,
+    /// captured from a run of the Kotlin serializer rather than hand-written. Pinning the real
+    /// bytes is the point: the two apps agree about a page only if this decodes to A4 here.
+    private let booxPageJSON = """
+    {"version":1,"id":"p-1","notebookId":"nb-1","background":"blank","backgroundType":"native",\
+    "parentFolderId":null,"scroll":120,"pageWidth":1400,"pageHeight":1980,\
+    "createdAt":"2023-11-14T22:13:20Z","updatedAt":"2023-11-14T22:13:20Z",\
+    "strokes":[],"images":[]}
+    """
+
+    /// The manifest the BOOX writes alongside it.
+    private let booxManifestJSON = """
+    {"version":1,"notebookId":"nb-1","title":"Interop","pageIds":["p-1"],"openPageId":"p-1",\
+    "parentFolderId":null,"defaultBackground":"blank","defaultBackgroundType":"native",\
+    "linkedExternalUri":null,"defaultPageWidth":1400,"defaultPageHeight":1980,\
+    "createdAt":"2023-11-14T22:13:20Z","updatedAt":"2023-11-14T22:13:20Z",\
+    "serverTimestamp":"2026-08-12T06:16:08.774513Z"}
+    """
+
+    func testAPageWrittenByTheBooxLandsOnTheSameSheet() throws {
+        let page = try JSONDecoder().decode(PageFile.self, from: Data(booxPageJSON.utf8))
+        XCTAssertEqual(page.declaredPageSize, PageSizePreset.a4.size)
+        XCTAssertEqual(page.pageSize, PageSize(width: 1400, height: 1980))
+        XCTAssertEqual(page.scroll, 120)
+    }
+
+    func testANotebookWrittenByTheBooxCarriesItsDefaultSheet() throws {
+        let manifest = try JSONDecoder()
+            .decode(NotebookManifest.self, from: Data(booxManifestJSON.utf8))
+        XCTAssertEqual(manifest.declaredDefaultPageSize, PageSizePreset.a4.size)
+    }
+
+    /// The other direction: the keys this app writes are the ones the BOOX reads. It parses with
+    /// `ignoreUnknownKeys`, so a renamed key would be silently dropped rather than reported.
+    func testWhatWeWriteUsesTheKeysTheBooxReads() throws {
+        var page = page()
+        page.setPageSize(PageSizePreset.a3.size)
+        let json = String(decoding: try JSONEncoder().encode(page), as: UTF8.self)
+        XCTAssertTrue(json.contains("\"pageWidth\":1980"), json)
+        XCTAssertTrue(json.contains("\"pageHeight\":2800"), json)
+
+        var manifest = manifest()
+        manifest.setDefaultPageSize(PageSizePreset.a3.size)
+        let manifestJSON = String(decoding: try JSONEncoder().encode(manifest), as: UTF8.self)
+        XCTAssertTrue(manifestJSON.contains("\"defaultPageWidth\":1980"), manifestJSON)
+        XCTAssertTrue(manifestJSON.contains("\"defaultPageHeight\":2800"), manifestJSON)
+    }
 }
