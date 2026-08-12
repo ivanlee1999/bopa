@@ -319,11 +319,34 @@ public actor CouchSyncEngine {
     /// a report through a UI and an actor hop, and "forget the local deletion of X" applied to a
     /// live document would silently drop a real edit out of the outbox.
     public func discardHeldDeletions(_ documentIDs: [String]) {
+        var discarded: [String] = []
         for documentID in documentIDs {
             guard (try? store.load(documentID))?.isDeleted ?? false else { continue }
             state.dirty.remove(documentID)
             approvedDeletions.remove(documentID)
             try? store.forgetDeletion(documentID)
+            discarded.append(documentID)
+        }
+
+        // Dropping the tombstones is only half of "keep them on the server": it stops the deletion
+        // being published, but on its own it does not bring anything back, and the UI promises the
+        // notebooks return on the next sync. `_changes` only ever announces documents that have
+        // *changed*, and declining to publish a deletion changes nothing on the server — so a
+        // notebook nobody happens to be editing would never be mentioned on the feed again. The
+        // user would be left with it gone here, present there, and no path between.
+        //
+        // So the checkpoint is rewound and the discarded ids' recorded revisions forgotten, which
+        // together make the next pull replay the feed and land the documents as if they were new.
+        // Both are needed: without the rewind the rows are never re-sent, and without forgetting
+        // the revisions the replayed rows match what this device last recorded and are dropped as
+        // its own echoes (§6.3).
+        //
+        // A full replay is exactly what losing the checkpoint costs, which this design already
+        // treats as safe and idempotent. Discarding a mass deletion is rare, deliberate, and
+        // already alarming enough to be worth one slow sync. Notable does the same (§6.7).
+        if !discarded.isEmpty {
+            state.lastSeq = "0"
+            for documentID in discarded { state.revs.removeValue(forKey: documentID) }
         }
         persist()
     }

@@ -651,6 +651,47 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertTrue(server.documentIDs().isEmpty, "the server should still hold the notebooks")
     }
 
+    /// The other half of "keep them on the server": they have to actually come back. Dropping the
+    /// tombstones alone would leave the notebooks gone here, present there, and unreachable —
+    /// `_changes` never re-announces a document that has not changed, and declining to publish a
+    /// deletion changes nothing. The discard rewinds the checkpoint and forgets the ids' revisions
+    /// so the feed replays them, which is what makes the promise in the UI true.
+    func testDiscardingHeldDeletionsBringsTheNotebooksBackOnTheNextPull() async throws {
+        // The device had a library and so does the server: the state a wiped database starts from.
+        let ids = (0..<12).map { CouchDocID.notebook("nb\($0)") }
+        for (index, id) in ids.enumerated() {
+            ipadStore.set(id, .notebook(CouchNotebook(
+                title: "notebook \(index)", pageIds: [], createdAt: stamp(0),
+                updatedAt: stamp(1), updatedBy: "ipad")))
+        }
+        await ipad.markDirty(ids)
+        _ = await ipad.flush()
+        // Caught up, the way a device that has been syncing normally would be.
+        _ = try await ipad.pull()
+
+        // Now the local library vanishes and every notebook turns into a tombstone.
+        for id in ids {
+            ipadStore.set(id, .deleted(CouchDeletedDoc(
+                type: CouchDocType.notebook, deletedAt: stamp(10), updatedBy: "ipad")))
+        }
+        await ipad.markDirty(ids)
+        let held = await ipad.flush()
+        XCTAssertEqual(held.heldDeletions.sorted(), ids.sorted())
+
+        await ipad.discardHeldDeletions(held.heldDeletions)
+        let pull = try await ipad.pull()
+
+        XCTAssertEqual(pull.applied.sorted(), ids.sorted(), "the whole library should have replayed")
+        XCTAssertTrue(pull.skippedEchoes.isEmpty,
+                      "the recorded revisions must not make the replay look like this device's echo")
+        for (index, id) in ids.enumerated() {
+            XCTAssertEqual(ipadStore.notebook(id)?.title, "notebook \(index)",
+                           "the notebook should be live again, with its title")
+        }
+        XCTAssertTrue(ids.allSatisfy { !server.isDeleted($0) },
+                      "and nothing should have been deleted on the server")
+    }
+
     /// One tap must not disarm the guard. An approval is consumed by the flush that acts on it and
     /// names only the ids it was given, so the *next* suspicious batch is asked about afresh —
     /// which is the difference between answering a question and turning a safety off.
