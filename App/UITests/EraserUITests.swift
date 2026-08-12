@@ -66,10 +66,13 @@ final class EraserUITests: XCTestCase {
 
         let drawingApp = launch(["--uitest-reset-tool"])
         drawingApp.buttons["library.add"].tap()
-        let textField = drawingApp.textFields.firstMatch
+        let textField = drawingApp.textFields["newNotebook.title"]
         XCTAssertTrue(textField.waitForExistence(timeout: 5))
+        // The New-notebook form is a sheet, not an alert: nothing takes focus on its own, so the
+        // field has to be tapped before it will accept typing.
+        textField.tap()
         textField.typeText(title)
-        drawingApp.buttons["Create"].tap()
+        drawingApp.buttons["newNotebook.create"].tap()
 
         var canvas = openNotebook(drawingApp, titled: title)
         drag(on: canvas, from: CGVector(dx: 0.20, dy: 0.40), to: CGVector(dx: 0.80, dy: 0.40))

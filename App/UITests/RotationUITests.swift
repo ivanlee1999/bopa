@@ -15,10 +15,13 @@ final class RotationUITests: XCTestCase {
     private func openFreshNotebook(_ app: XCUIApplication) -> XCUIElement {
         let title = "UITest \(Int.random(in: 1000...9999))"
         app.buttons["library.add"].tap()
-        let textField = app.textFields.firstMatch
+        let textField = app.textFields["newNotebook.title"]
         XCTAssertTrue(textField.waitForExistence(timeout: 5))
+        // The New-notebook form is a sheet, not an alert: nothing takes focus on its own, so the
+        // field has to be tapped before it will accept typing.
+        textField.tap()
         textField.typeText(title)
-        app.buttons["Create"].tap()
+        app.buttons["newNotebook.create"].tap()
 
         // Scoped to the grid: the sidebar tree lists the same notebook, so the bare title
         // matches twice.

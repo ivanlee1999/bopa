@@ -556,6 +556,9 @@ struct EditorCanvasView: UIViewRepresentable {
         context.coordinator.toolSelection = toolSelection
         context.coordinator.applyToolIfNeeded()
         container.setTemplate(template)
+        // Before the reload guard below: the sheet arrives with the page, which is later than the
+        // canvas was created, and on a page switch it can differ from the page just closed.
+        container.setPageWidth(CGFloat(pageSize.width))
         // Background and images may arrive/change without a page switch; both setters are
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)
