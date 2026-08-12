@@ -227,6 +227,10 @@ public actor CouchSyncEngine {
         /// batch but not act on exactly it, which is how an approval meant for one batch ends up
         /// applied to whatever the outbox holds by the time the tap arrives.
         public var heldDeletions: [String] = []
+        /// A significant disagreement between this device's clock and the server's, or nil (§7).
+        /// Advisory: it never fails or holds back a push, it only explains why a merge might
+        /// resolve the wrong way.
+        public var clockSkew: ClockSkew?
 
         public init() {}
     }
@@ -240,6 +244,8 @@ public actor CouchSyncEngine {
         /// Image blobs downloaded for pages that reference them (protocol §3.4).
         public var fetchedAssets: [String] = []
         public var lastSeq: String = "0"
+        /// A significant disagreement between this device's clock and the server's, or nil (§7).
+        public var clockSkew: ClockSkew?
 
         public init() {}
     }
@@ -382,6 +388,9 @@ public actor CouchSyncEngine {
             }
         }
         persist()
+        // Read after the requests, so a flush that just spoke to the server reports what those
+        // responses said rather than what the last sync happened to see.
+        report.clockSkew = await client.clockSkew?.significantSkew
         return report
     }
 
@@ -554,6 +563,7 @@ public actor CouchSyncEngine {
 
         report.fetchedAssets = await fetchMissingAssets()
         persist()
+        report.clockSkew = await client.clockSkew?.significantSkew
         return report
     }
 

@@ -24,10 +24,20 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
     var isOffline = false
     /// Forces a status for documents whose id is listed, for failure injection.
     var failingDocumentIDs: [String: Int] = [:]
+    /// The `Date` header every response carries, RFC 9110 IMF-fixdate. Nil by default so most
+    /// tests keep saying nothing about clocks; set to model a server whose clock disagrees with
+    /// this device's (protocol §7).
+    var dateHeader: String?
     private(set) var requestLog: [(method: String, path: String)] = []
     private var changeBatchSizes: [Int] = []
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        var response = try respond(request)
+        if let dateHeader { response.headers["Date"] = dateHeader }
+        return response
+    }
+
+    private func respond(_ request: HTTPRequest) throws -> HTTPResponse {
         try lock.withLock {
             if isOffline { throw URLError(.notConnectedToInternet) }
             requestLog.append((request.method, request.path))

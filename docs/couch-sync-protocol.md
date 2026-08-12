@@ -459,6 +459,41 @@ Failure classes clients must distinguish: `401/403` (credentials — surface, st
 `409` (merge, retry), `412/404` (absent — treat as create), `5xx`/timeout/offline
 (backoff, keep dirty).
 
+### 7.1 Clock skew (advisory)
+
+Every ordering decision in this protocol is made from **client wall-clock timestamps**: §4's
+`pick` resolves every scalar field by `millis(updatedAt)`, and §6.4 resolves delete-versus-edit by
+comparing a deletion's instant against an edit's. Nothing anywhere validates those instants. A
+device whose clock is ahead therefore does not merely mis-report a time — it *wins* comparisons it
+should lose, on both devices, silently: an edit made this morning beats one made this afternoon,
+and a deletion made an hour ago destroys work done since.
+
+The fix for that is hybrid logical clocks, which is a protocol change both apps and the shared
+vectors must make together. It is **not** part of this version. Detection is the floor, and it is
+normative:
+
+- Every response from an origin server with a clock carries a `Date` header (RFC 9110 §6.6.1).
+  Clients read it from **every response the transport returns**, whatever the status — a `404` or
+  a `409` is still the server saying what time it thinks it is. A request that failed at the
+  transport (offline, DNS, timeout) has no response and says nothing.
+- The header is parsed as **IMF-fixdate** (`Sun, 06 Nov 1994 08:49:37 GMT`), with a fixed
+  POSIX locale and GMT, so a device set to another language still reads it. The two obsolete
+  HTTP date formats are not parsed.
+- `skew = localNowAtResponseReceipt − serverDate`, **signed**, in seconds. Positive means the
+  client is ahead of the server.
+- **Threshold: 120 seconds.** `|skew| >= 120` is significant and is recorded as the client's
+  current skew; anything smaller clears it. The threshold is loose on purpose: the header has
+  one-second granularity, it is stamped before the response travels, and round-trip latency is
+  real — a tighter bound would fire on healthy setups, and a warning that appears when nothing is
+  wrong is one nobody reads when something is.
+- A missing or unparseable `Date` header is **not** an error and **not** a warning. It is no
+  information: the previous observation stands, and nothing is inferred.
+- Significant skew is a **non-fatal warning**. It is surfaced in the sync status and the log, and
+  the sync continues normally. It MUST NOT fail a request, hold back a push, or block a sync.
+- The warning names the **direction** (ahead of / behind the server) and a rough **magnitude**,
+  because "your clock is wrong" is not actionable and "about 40 minutes ahead" points straight at
+  the device's date and time settings.
+
 ## 8. Test vectors
 
 `couch-sync-vectors/vectors.json`:
