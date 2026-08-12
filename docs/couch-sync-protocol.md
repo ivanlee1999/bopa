@@ -439,7 +439,7 @@ explicit, one-shot, set-scoped resolutions is applied:
 | Resolution | Effect |
 |---|---|
 | **approve** *(ids)* | The next flush sends exactly those ids past the guard. Every id not named stays held, including ones that reach the outbox afterwards. |
-| **discard** *(ids)* | The tombstones are dropped entirely — out of the outbox and out of the store's record of local deletions — and never published. |
+| **discard** *(ids)* | The tombstones are dropped entirely — out of the outbox and out of the store's record of local deletions — and never published. The implementation **MUST** additionally rewind `lastSeq` to `"0"` and forget the discarded ids' recorded revisions, so the next pull replays the documents back onto this device (see below). |
 
 Both are **consumed by the flush that acts on them** and neither is persisted. An approval is an
 answer to a question about one batch, not a setting: an implementation MUST NOT let it disarm the
@@ -454,6 +454,20 @@ the wipe. It also means "discard" is not "cancel" — an implementation that pre
 dismissing the prompt is presenting the wrong outcome. The two choices are surfaced with distinct
 labels naming their consequence (bopa: "Delete them on the server too" / "Keep them on the
 server"), and the status message that announces the hold names both actions and where to find them.
+
+**Dropping the tombstones does not by itself bring anything back**, which is why the rewind above
+is normative rather than an optimisation. `_changes` announces only documents that have *changed*,
+and declining to publish a deletion changes nothing on the server — so a notebook nobody happens to
+be editing would never appear on the feed again, and the user would be left with it gone locally,
+present remotely, and no path between. Rewinding `lastSeq` replays the feed; forgetting the ids'
+recorded revisions is equally required, or the replayed rows match what this device last recorded
+and are discarded as its own echoes (§6.3). Both apps do this.
+
+The cost is one full replay, which is exactly what a lost checkpoint costs — already treated here as
+safe, because every merge is idempotent. Discarding a mass deletion is a rare, deliberate, already
+alarming action, so paying for it with one slow sync is the right trade. An implementation MAY
+rewind only far enough to re-announce the discarded ids if it can do so soundly, but MUST NOT leave
+them unreachable.
 
 A discard is applied only to ids that are in fact tombstones locally. The list travels through a
 report and a user interface before it comes back, and "forget the local deletion of X" applied to a
