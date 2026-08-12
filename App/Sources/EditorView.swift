@@ -34,6 +34,7 @@ struct EditorView: View {
     @State private var loadError: String?
     @State private var saveError: String?
     @State private var actionError: LibraryActionError?
+    @State private var showingPageOverview = false
     @StateObject private var undoController = CanvasUndoController()
     @State private var liveState = CanvasLiveState()
     @State private var viewport = CanvasViewportController()
@@ -95,6 +96,15 @@ struct EditorView: View {
                 Text("Your strokes are still here and bopa will try again. \(error)")
             }
             .libraryActionAlert($actionError)
+            .sheet(isPresented: $showingPageOverview) {
+                NavigationStack {
+                    PageOverviewView(
+                        notebookId: notebookId,
+                        currentPageId: pageId,
+                        openPage: { open(pageId: $0) })
+                        .environmentObject(store)
+                }
+            }
     }
 
     // MARK: Chrome
@@ -161,9 +171,22 @@ struct EditorView: View {
             .disabled(pageIndex == 0)
             .accessibilityLabel("Previous page")
 
-            Text("\(pageIndex + 1) / \(manifest.pageIds.count)")
-                .font(Modernist.font(11, .medium).monospacedDigit())
-                .foregroundStyle(Modernist.neutral700)
+            // The count is the way into the overview, not a label beside it: it is already the
+            // thing you look at to ask "where am I in this notebook", and a notebook of forty
+            // pages cannot be crossed with the two chevrons either side of it.
+            Button {
+                showingPageOverview = true
+            } label: {
+                Text("\(pageIndex + 1) / \(manifest.pageIds.count)")
+                    .font(Modernist.font(11, .medium).monospacedDigit())
+                    .foregroundStyle(Modernist.neutral700)
+                    .padding(.horizontal, 6)
+                    .frame(height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("All pages")
+            .accessibilityIdentifier("editor.pages")
 
             Button {
                 openPage(at: pageIndex + 1)

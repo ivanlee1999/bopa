@@ -13,17 +13,30 @@ enum ThumbnailRenderer {
     static let size = CGSize(width: 300, height: 400)
 
     static func thumbnail(for manifest: NotebookManifest, store: NotebookStore) -> UIImage? {
-        let key = "\(manifest.notebookId)#\(manifest.updatedAt)" as NSString
+        guard let pageId = manifest.openPageId ?? manifest.pageIds.first else { return nil }
+        return thumbnail(
+            notebookId: manifest.notebookId, pageId: pageId,
+            revision: manifest.updatedAt, store: store)
+    }
+
+    /// One page's thumbnail — what the page overview draws, one per page.
+    ///
+    /// [revision] is what makes the cache correct rather than merely fast: keyed on the page's own
+    /// `updatedAt`, an edited page gets a fresh entry and an untouched one is not re-rendered while
+    /// the overview scrolls.
+    static func thumbnail(
+        notebookId: String, pageId: String, revision: String, store: NotebookStore
+    ) -> UIImage? {
+        let key = "\(notebookId)#\(pageId)#\(revision)" as NSString
         if let hit = cache.object(forKey: key) { return hit }
 
-        guard let pageId = manifest.openPageId ?? manifest.pageIds.first,
-              let page = try? store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+        guard let page = try? store.loadPage(notebookId: notebookId, pageId: pageId)
         else { return nil }
 
         let pageWidth = CGFloat(page.pageSize.width)
         let scale = size.width / pageWidth
         let pageRect = CGRect(x: 0, y: 0, width: pageWidth, height: size.height / scale)
-        let notebookDir = store.notebookDirURL(manifest.notebookId)
+        let notebookDir = store.notebookDirURL(notebookId)
         let background = BackgroundRenderer.image(
             for: page, notebookDir: notebookDir, storeRoot: store.rootURL)
         let drawing = PencilKitBridge.drawing(from: page.strokes)
