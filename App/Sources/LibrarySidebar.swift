@@ -116,10 +116,7 @@ struct LibrarySidebar: View {
     @State private var renaming: RenameTarget?
     @State private var showingRename = false
     @State private var renameTitle = ""
-
-    /// A local deletion that failed. Reported rather than swallowed: the row is still in the tree
-    /// afterwards, and without this the user is left to conclude that Delete does nothing.
-    @State private var deletionError: String?
+    @State private var actionError: LibraryActionError?
 
     /// What a rename alert is pointed at. One alert serves both kinds, because at any moment
     /// only one row is being renamed.
@@ -163,15 +160,7 @@ struct LibrarySidebar: View {
                 .disabled(trimmedRenameTitle.isEmpty)
             Button("Cancel", role: .cancel) {}
         }
-        .alert("Couldn’t delete that", isPresented: deletionErrorBinding) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(deletionError ?? "")
-        }
-    }
-
-    private var deletionErrorBinding: Binding<Bool> {
-        Binding(get: { deletionError != nil }, set: { if !$0 { deletionError = nil } })
+        .libraryActionAlert($actionError)
     }
 
     /// The wordmark, on the design's status strip: a label and a rule, nothing else.
@@ -243,21 +232,16 @@ struct LibrarySidebar: View {
             } label: {
                 Label("Rename", systemImage: "pencil")
             }
-            if store.isFolderEmpty(node.itemId) {
-                Button(role: .destructive) {
-                    if selection == .folder(node.itemId) { selection = .root }
-                    // Reported rather than swallowed: the store records the CouchDB tombstone as
-                    // part of a *successful* delete, so a failure here means the folder is still
-                    // in the library and nothing has been promised to the server. Saying so is the
-                    // difference between that and a Delete that silently does nothing.
-                    do {
-                        try store.deleteFolder(id: node.itemId)
-                    } catch {
-                        deletionError = error.localizedDescription
-                    }
-                } label: {
-                    Label("Delete", systemImage: "trash")
+            // Any folder, not only an empty one: refusing to delete a populated folder was the
+            // only guard against losing a subtree, and the Trash is a better one — the folder and
+            // everything under it can be thrown away and brought back.
+            Button(role: .destructive) {
+                if selection == .folder(node.itemId) { selection = .root }
+                perform("Moving the folder to the Trash", error: $actionError) {
+                    try store.trashFolder(id: node.itemId)
                 }
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
@@ -374,9 +358,11 @@ struct LibrarySidebar: View {
     private func commitRename() {
         let title = trimmedRenameTitle
         guard !title.isEmpty, let renaming else { return }
-        switch renaming {
-        case .folder(let id): try? store.renameFolder(id: id, title: title)
-        case .notebook(let id): try? store.renameNotebook(id: id, title: title)
+        perform("Renaming", error: $actionError) {
+            switch renaming {
+            case .folder(let id): try store.renameFolder(id: id, title: title)
+            case .notebook(let id): try store.renameNotebook(id: id, title: title)
+            }
         }
     }
 

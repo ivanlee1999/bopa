@@ -272,7 +272,7 @@ final class NotebookStoreCouchTests: XCTestCase {
         let extraPage = try store.addPage(to: manifest.notebookId)
         changed = []
 
-        try store.deleteNotebook(id: manifest.notebookId)
+        try store.purgeNotebook(id: manifest.notebookId)
 
         let reported = Set(changed.last ?? [])
         XCTAssertTrue(reported.contains(CouchDocID.notebook(manifest.notebookId)))
@@ -293,7 +293,7 @@ final class NotebookStoreCouchTests: XCTestCase {
         changed = []
         deleted = []
 
-        try store.deleteFolder(id: folder.id)
+        try store.purgeFolder(id: folder.id)
 
         XCTAssertEqual(deleted, [[CouchDocID.folder(folder.id)]])
         XCTAssertTrue(
@@ -308,7 +308,7 @@ final class NotebookStoreCouchTests: XCTestCase {
         store.didDeleteDocuments = { ids in for id in ids { couch.recordDeletion(id) } }
         let folder = try store.createFolder(title: "school")
 
-        try store.deleteFolder(id: folder.id)
+        try store.purgeFolder(id: folder.id)
 
         XCTAssertEqual(couch.pendingDeletionIDs(), [CouchDocID.folder(folder.id)])
         XCTAssertTrue(try couch.load(CouchDocID.folder(folder.id))?.isDeleted ?? false)
@@ -318,7 +318,7 @@ final class NotebookStoreCouchTests: XCTestCase {
         let manifest = try store.createNotebook(title: "notes")
         deleted = []
 
-        try store.deleteNotebook(id: manifest.notebookId)
+        try store.purgeNotebook(id: manifest.notebookId)
 
         XCTAssertEqual(deleted, [[CouchDocID.notebook(manifest.notebookId)]])
     }
@@ -333,7 +333,7 @@ final class NotebookStoreCouchTests: XCTestCase {
         store.didDeleteDocuments = { _ in order.append("deleted") }
         store.didChangeDocuments = { _ in order.append("changed") }
 
-        try store.deleteFolder(id: folder.id)
+        try store.purgeFolder(id: folder.id)
 
         XCTAssertEqual(order, ["deleted", "changed"])
     }
@@ -345,22 +345,36 @@ final class NotebookStoreCouchTests: XCTestCase {
     func testAFailedNotebookDeletionRecordsNoTombstone() throws {
         deleted = []
 
-        XCTAssertThrowsError(try store.deleteNotebook(id: "no-such-notebook"))
+        XCTAssertThrowsError(try store.purgeNotebook(id: "no-such-notebook"))
 
         XCTAssertTrue(deleted.isEmpty, "nothing was deleted, so nothing may be published")
     }
 
-    /// A deletion the store refused never happened, so there is nothing to publish. `FileCouchStore`
-    /// hands a recorded tombstone back in place of the live document, so writing one here would
-    /// delete the peer's copy of a folder that is still sitting in this library.
-    func testARefusedFolderDeletionRecordsNoTombstone() throws {
+    /// A folder is no longer refused for being populated — it goes to the Trash and can come back
+    /// — but the invariant that refusal protected still holds: a folder that is still in this
+    /// library must not be tombstoned. `FileCouchStore` hands a recorded tombstone back in place
+    /// of the live document, so writing one would delete the peer's copy of a folder that is
+    /// sitting right here.
+    ///
+    /// A purge fails part-way when one of its notebooks cannot be removed, which is what this
+    /// arranges: the folder's own rows are only rewritten after every notebook in it is gone.
+    func testAFolderPurgeThatCannotFinishRecordsNoFolderTombstone() throws {
         let folder = try store.createFolder(title: "school")
         _ = try store.createNotebook(title: "notes", parentFolderId: folder.id)
+        let notebooksDir = rootURL.appendingPathComponent("notebooks")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500], ofItemAtPath: notebooksDir.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: notebooksDir.path)
+        }
         deleted = []
 
-        XCTAssertThrowsError(try store.deleteFolder(id: folder.id))
+        XCTAssertThrowsError(try store.purgeFolder(id: folder.id))
 
-        XCTAssertTrue(deleted.isEmpty, "a folder that is still here must not be tombstoned")
+        XCTAssertFalse(
+            deleted.flatMap { $0 }.contains(CouchDocID.folder(folder.id)),
+            "a folder that is still here must not be tombstoned")
         XCTAssertEqual(store.folders.map(\.id), [folder.id])
     }
 

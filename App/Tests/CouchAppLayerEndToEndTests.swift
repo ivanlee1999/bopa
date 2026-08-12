@@ -169,7 +169,7 @@ final class CouchAppLayerEndToEndTests: XCTestCase {
         try await settle()
         try await waitForServerState(documentID, .live, on: ipad)
 
-        try ipad.store.deleteFolder(id: folder.id)
+        try ipad.store.purgeFolder(id: folder.id)
         try await settle()
         try await waitForServerState(documentID, .deleted, on: ipad)
 
@@ -191,7 +191,7 @@ final class CouchAppLayerEndToEndTests: XCTestCase {
         try await settle()
         try await waitForServerState(documentID, .live, on: ipad)
 
-        try ipad.store.deleteNotebook(id: manifest.notebookId)
+        try ipad.store.purgeNotebook(id: manifest.notebookId)
         try await settle()
         try await waitForServerState(documentID, .deleted, on: ipad)
 
@@ -221,8 +221,8 @@ final class CouchAppLayerEndToEndTests: XCTestCase {
             "the second device never received the notebook")
 
         // Neither device syncs while both delete it.
-        try ipad.store.deleteNotebook(id: manifest.notebookId)
-        try boox.store.deleteNotebook(id: manifest.notebookId)
+        try ipad.store.purgeNotebook(id: manifest.notebookId)
+        try boox.store.purgeNotebook(id: manifest.notebookId)
         try await settle()
 
         // Pushed without pulling first, which is the case that used to stick. A pull would hand the
@@ -328,7 +328,7 @@ final class CouchAppLayerEndToEndTests: XCTestCase {
         }
 
         // The library disappears — a wiped database, as far as sync can tell.
-        for id in ids { try ipad.store.deleteNotebook(id: id) }
+        for id in ids { try ipad.store.purgeNotebook(id: id) }
         try await settle()
         await ipad.couch.pushNow()
 

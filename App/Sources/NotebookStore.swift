@@ -102,6 +102,11 @@ final class NotebookStore: ObservableObject {
             .flatMap { try? decoder.decode(FoldersFile.self, from: $0) }?.folders ?? [])
             .sorted { ($0.title.localizedLowercase, $0.id) < ($1.title.localizedLowercase, $1.id) }
 
+        // Read alongside the library rather than derived from it: `notebooks` and `folders` are
+        // still the complete set — sync reads them and a trashed item has to keep syncing — so
+        // what is hidden is a separate fact and the listing queries apply it.
+        trash = LocalTrash.load(root: rootURL)
+
         remoteIndex = RemoteIndex.load(root: rootURL)
     }
 
@@ -246,6 +251,18 @@ final class NotebookStore: ObservableObject {
     /// `fallbackTemplate` applies only when that default is not a native template —
     /// a PDF-backed notebook's per-page PDF binding is not something we can invent here.
     func addPage(to notebookId: String, fallbackTemplate: NativeTemplate = .blank) throws -> PageFile {
+        try insertPage(into: notebookId, at: nil, fallbackTemplate: fallbackTemplate)
+    }
+
+    /// Adds a page at [index], or at the end when it is nil.
+    ///
+    /// Inserting rather than only appending is what the page overview needs: "add a page here" is
+    /// the ordinary way to make room in the middle of a notebook, and the BOOX has had it since
+    /// its overview existed.
+    @discardableResult
+    func insertPage(
+        into notebookId: String, at index: Int?, fallbackTemplate: NativeTemplate = .blank
+    ) throws -> PageFile {
         guard var manifest = readManifestFromDisk(notebookId) else {
             throw CocoaError(.fileNoSuchFile)
         }
@@ -270,13 +287,126 @@ final class NotebookStore: ObservableObject {
             createdAt: now, updatedAt: now)
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
-        manifest.pageIds.append(page.id)
+        manifest.pageIds.insert(
+            page.id, at: (index ?? manifest.pageIds.count).clamped(to: manifest.pageIds))
         manifest.updatedAt = now
         manifest.updatedBy = deviceID
         try writeManifest(manifest)
         refreshAfterLocalChange(
             documents: [CouchDocID.notebook(notebookId), CouchDocID.page(page.id)])
         return page
+    }
+
+    // MARK: - Page management
+
+    /// Copies a page, contents and all, and files the copy right after the original.
+    ///
+    /// A fresh id for the page and for every stroke and image on it: the copy is a new document,
+    /// and reusing an id would have the merge treat the two as the same page on the other device.
+    @discardableResult
+    func duplicatePage(in notebookId: String, pageId: String) throws -> PageFile {
+        guard var manifest = readManifestFromDisk(notebookId),
+              let index = manifest.pageIds.firstIndex(of: pageId)
+        else { throw CocoaError(.fileNoSuchFile) }
+        let source = try loadPage(notebookId: notebookId, pageId: pageId)
+
+        let now = NotableDate.format(Date())
+        var copy = source
+        copy.id = UUID().uuidString.lowercased()
+        copy.createdAt = now
+        copy.updatedAt = now
+        copy.updatedBy = deviceID
+        copy.scroll = 0
+        // Nothing was erased from a page that did not exist a moment ago; carrying the original's
+        // tombstones over would tell peers to delete strokes from the copy by id.
+        copy.deletedStrokes = []
+        copy.strokes = source.strokes.map { stroke in
+            var fresh = stroke
+            fresh.id = UUID().uuidString.lowercased()
+            return fresh
+        }
+        copy.images = source.images.map { image in
+            var fresh = image
+            fresh.id = UUID().uuidString.lowercased()
+            return fresh
+        }
+
+        try encoder.encode(copy)
+            .write(to: pageURL(notebookId: notebookId, pageId: copy.id), options: .atomic)
+        manifest.pageIds.insert(copy.id, at: index + 1)
+        manifest.updatedAt = now
+        manifest.updatedBy = deviceID
+        try writeManifest(manifest)
+        refreshAfterLocalChange(
+            documents: [CouchDocID.notebook(notebookId), CouchDocID.page(copy.id)])
+        return copy
+    }
+
+    /// Removes a page from its notebook.
+    ///
+    /// The tombstone in `deletedPageIds` is the point: a page has no lifecycle of its own — it
+    /// lives and dies with its notebook's page list (protocol §6.4) — so a peer that still lists
+    /// the page would simply add it back on the next merge without one.
+    ///
+    /// The last page of a notebook cannot be deleted. A notebook with no pages is the empty
+    /// leftover the library already has to warn about, and reaching that state deliberately, from
+    /// the page overview, would be a worse way to arrive at it.
+    func deletePage(from notebookId: String, pageId: String) throws {
+        guard var manifest = readManifestFromDisk(notebookId),
+              manifest.pageIds.contains(pageId)
+        else { throw CocoaError(.fileNoSuchFile) }
+        guard manifest.pageIds.count > 1 else { throw LastPageError() }
+
+        let now = NotableDate.format(Date())
+        manifest.pageIds.removeAll { $0 == pageId }
+        manifest.deletedPageIds.append(CouchTombstone(id: pageId, deletedAt: now))
+        if manifest.openPageId == pageId { manifest.openPageId = manifest.pageIds.first }
+        manifest.updatedAt = now
+        manifest.updatedBy = deviceID
+        try writeManifest(manifest)
+
+        // The file goes after the manifest, not before: the manifest is what says the page is
+        // gone, and a crash between the two leaves a page file nothing lists rather than a page
+        // listed with no file — which is the one of the two that makes `loadPage` throw.
+        try? FileManager.default.removeItem(
+            at: pageURL(notebookId: notebookId, pageId: pageId))
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+    }
+
+    /// Reorders a page within its notebook.
+    func movePage(in notebookId: String, from source: Int, to destination: Int) throws {
+        guard var manifest = readManifestFromDisk(notebookId),
+              manifest.pageIds.indices.contains(source)
+        else { throw CocoaError(.fileNoSuchFile) }
+
+        let page = manifest.pageIds.remove(at: source)
+        manifest.pageIds.insert(page, at: destination.clamped(to: manifest.pageIds))
+        manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedBy = deviceID
+        try writeManifest(manifest)
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+    }
+
+    /// Names a page, or clears its name with nil.
+    ///
+    /// The field has been carried through bopa untouched since it existed, so that a round trip
+    /// through this device did not erase a name given on the BOOX. This is the first thing here
+    /// that can set one.
+    func renamePage(in notebookId: String, pageId: String, title: String?) throws {
+        var page = try loadPage(notebookId: notebookId, pageId: pageId)
+        page.title = title
+        page.updatedAt = NotableDate.format(Date())
+        page.updatedBy = deviceID
+        try encoder.encode(page)
+            .write(to: pageURL(notebookId: notebookId, pageId: pageId), options: .atomic)
+        refreshAfterLocalChange(documents: [CouchDocID.page(pageId)])
+    }
+
+    /// Thrown rather than silently ignored, so the overview can say why the button did nothing.
+    struct LastPageError: LocalizedError {
+        var errorDescription: String? {
+            "A notebook needs at least one page."
+        }
     }
 
     /// Atomic, because the sync engine reads these files from another thread: a torn read makes
@@ -307,21 +437,203 @@ final class NotebookStore: ObservableObject {
         refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
     }
 
-    /// Removes the local directory and records the id as a pending deletion; the sync
-    /// engine uploads the tombstone at the start of the next sync (works offline).
-    func deleteNotebook(id: String) throws {
-        let pageIds = readManifestFromDisk(id)?.pageIds ?? []
-        try FileManager.default.removeItem(at: notebookDir(id))
+    // MARK: - Trash
+
+    /// What is staged for deletion on this device. Local-only; see `LocalTrash`.
+    @Published private(set) var trash = LocalTrash.Contents()
+
+    var trashedNotebooks: [NotebookManifest] {
+        let ids = trash.notebookIDs
+        return notebooks.filter { ids.contains($0.notebookId) }
+    }
+
+    var trashedFolders: [FolderDTO] {
+        let ids = trash.folderIDs
+        return folders.filter { ids.contains($0.id) }
+    }
+
+    /// When an item was thrown away, for the Trash screen's subtitle.
+    func trashedAt(notebookId: String) -> Date? {
+        trash.notebooks.first { $0.id == notebookId }.flatMap { NotableDate.parse($0.deletedAt) }
+    }
+
+    func trashedAt(folderId: String) -> Date? {
+        trash.folders.first { $0.id == folderId }.flatMap { NotableDate.parse($0.deletedAt) }
+    }
+
+    /// Stage a notebook for deletion. Nothing is removed and nothing is published: peers keep
+    /// their copy, which is what makes restoring mean anything.
+    func trashNotebook(id: String) throws {
+        try LocalTrash.addNotebook(id, at: Date(), root: rootURL)
+        refreshAfterLocalChange()
+    }
+
+    /// Stage a folder. Only the folder itself is marked — its contents become unreachable because
+    /// their container is no longer listed, so restoring the subtree is one line leaving the file
+    /// rather than a second cascade to get wrong.
+    func trashFolder(id: String) throws {
+        try LocalTrash.addFolder(id, at: Date(), root: rootURL)
+        refreshAfterLocalChange()
+    }
+
+    /// Bring a notebook back. If the folder it was filed under has since been purged — or is
+    /// itself still in the Trash — it returns to the root, because restoring it into an invisible
+    /// folder would look exactly like the restore having quietly failed.
+    func restoreNotebook(id: String) throws {
+        try LocalTrash.removeNotebook(id, root: rootURL)
+        if let manifest = manifest(id: id), !isReachable(manifest.parentFolderId) {
+            try moveNotebook(id: id, toFolder: nil)
+        } else {
+            refreshAfterLocalChange()
+        }
+    }
+
+    func restoreFolder(id: String) throws {
+        try LocalTrash.removeFolder(id, root: rootURL)
+        if let folder = folder(id: id), !isReachable(folder.parentFolderId) {
+            var all = folders
+            guard let index = all.firstIndex(where: { $0.id == id }) else { return }
+            all[index].parentFolderId = nil
+            all[index].updatedAt = NotableDate.format(Date())
+            try writeFolders(all)
+        } else {
+            refreshAfterLocalChange()
+        }
+    }
+
+    /// The root is always there; a folder is only a place to put something if it is neither gone
+    /// nor itself in the Trash.
+    private func isReachable(_ parentFolderId: String?) -> Bool {
+        guard let parentFolderId else { return true }
+        guard folders.contains(where: { $0.id == parentFolderId }) else { return false }
+        return !trash.folderIDs.contains(parentFolderId)
+    }
+
+    // MARK: - Deleting for good
+
+    /// Everything a folder deletion would take, gathered before anything is removed.
+    struct DeletionScope {
+        var folderIDs: [String] = []
+        var notebookIDs: [String] = []
+        var pageCount: Int = 0
+
+        /// Descendants, i.e. not counting the folder being deleted.
+        var childFolderCount: Int { max(folderIDs.count - 1, 0) }
+        var isEmpty: Bool { childFolderCount == 0 && notebookIDs.isEmpty && pageCount == 0 }
+    }
+
+    /// Walk a folder and everything under it.
+    ///
+    /// Iterative with a visited set, because the folder tree is merged data: `folders.json` can
+    /// come back from a peer with a chain that loops, and the library already has to cope with
+    /// that (see `rootAdoptedFolderIDs`) rather than assume it away.
+    func deletionScope(ofFolder folderId: String) -> DeletionScope {
+        var scope = DeletionScope(folderIDs: [folderId])
+        var seen: Set<String> = [folderId]
+        var queue = [folderId]
+
+        while let current = queue.popLast() {
+            for child in folders where child.parentFolderId == current {
+                guard seen.insert(child.id).inserted else { continue }
+                scope.folderIDs.append(child.id)
+                queue.append(child.id)
+            }
+            for notebook in notebooks where notebook.parentFolderId == current {
+                scope.notebookIDs.append(notebook.notebookId)
+                scope.pageCount += notebook.pageIds.count
+            }
+        }
+        return scope
+    }
+
+    func deletionScope(ofNotebook notebookId: String) -> DeletionScope {
+        DeletionScope(
+            notebookIDs: [notebookId],
+            pageCount: manifest(id: notebookId)?.pageIds.count ?? 0)
+    }
+
+    /// Delete a notebook for good: its files go, and a tombstone says so.
+    ///
+    /// The order is deliberate and is the fix for the defect this replaces. The deletion intent is
+    /// recorded *first*, because it is a small local write that either succeeds or throws before
+    /// anything is destroyed; the directory removal follows. If the removal fails, the intent is
+    /// rolled back and the error is thrown, so a notebook that is still on this iPad can never
+    /// have its deletion published. The old path did the reverse and dropped the removal's error
+    /// with `try?`, which could leave the notebook here while its tombstone was already queued for
+    /// the server and the BOOX.
+    func purgeNotebook(id: String) throws {
+        // Throws when there is no such notebook, rather than quietly succeeding: purging
+        // something that is not there is a caller's mistake, and treating it as done would record
+        // a tombstone for a document this device never had — which on the peer deletes a notebook
+        // nobody deleted.
+        guard let manifest = readManifestFromDisk(id) else { throw CocoaError(.fileNoSuchFile) }
+        let pageIds = manifest.pageIds
+
         PendingDeletions.add(id, root: rootURL)
+        do {
+            try FileManager.default.removeItem(at: notebookDir(id))
+        } catch {
+            PendingDeletions.remove(id, root: rootURL)
+            throw error
+        }
         // Only once the files are actually gone, and before the change signal: a tombstone is
         // authoritative the moment it is written, so recording one for a removal that threw would
         // publish a deletion this device never made — while a push that ran before it existed
         // would load nothing, take that for "never created", and drop the id from the outbox.
         didDeleteDocuments?([CouchDocID.notebook(id)])
+
+        try? LocalTrash.removeNotebook(id, root: rootURL)
         // The pages go with it, so name them too: the engine has to stop tracking them, and a
         // page left queued would be pushed back under a notebook that no longer exists.
         refreshAfterLocalChange(
             documents: [CouchDocID.notebook(id)] + pageIds.map(CouchDocID.page))
+    }
+
+    /// Delete a folder and its whole subtree for good.
+    ///
+    /// Notebooks first, then the folder rows in one rewrite of `folders.json`. A notebook that
+    /// fails to be removed stops the whole purge with its error, and every folder row is left
+    /// alone — so the subtree stays whole and visible in the Trash rather than half gone, which is
+    /// the state that has no name in the UI and no way back.
+    @discardableResult
+    func purgeFolder(id: String) throws -> DeletionScope {
+        let scope = deletionScope(ofFolder: id)
+
+        for notebookId in scope.notebookIDs {
+            try purgeNotebook(id: notebookId)
+        }
+
+        let removedFolders = Set(scope.folderIDs)
+        try writeFolders(
+            folders.filter { !removedFolders.contains($0.id) },
+            deleting: scope.folderIDs.map(CouchDocID.folder))
+        try? LocalTrash.remove(
+            notebookIDs: Set(scope.notebookIDs), folderIDs: removedFolders, root: rootURL)
+        refreshAfterLocalChange()
+        return scope
+    }
+
+    /// Purge everything staged.
+    ///
+    /// Folders go first: one of them may contain a notebook that is *also* in the Trash in its own
+    /// right, and purging the folder already takes it, so the notebook pass reads what is left
+    /// rather than a list captured up front.
+    @discardableResult
+    func emptyTrash() throws -> DeletionScope {
+        var total = DeletionScope()
+
+        for folder in trashedFolders {
+            let removed = try purgeFolder(id: folder.id)
+            total.folderIDs += removed.folderIDs
+            total.notebookIDs += removed.notebookIDs
+            total.pageCount += removed.pageCount
+        }
+        for notebook in trashedNotebooks {
+            total.notebookIDs.append(notebook.notebookId)
+            total.pageCount += notebook.pageIds.count
+            try purgeNotebook(id: notebook.notebookId)
+        }
+        return total
     }
 
     // MARK: - Folders
@@ -344,12 +656,6 @@ final class NotebookStore: ObservableObject {
         all[index].title = title
         all[index].updatedAt = NotableDate.format(Date())
         try writeFolders(all)
-    }
-
-    /// Only empty folders (no subfolders, no notebooks) may be deleted.
-    func deleteFolder(id: String) throws {
-        guard isFolderEmpty(id) else { throw CocoaError(.fileWriteInvalidFileName) }
-        try writeFolders(folders.filter { $0.id != id }, deleting: [CouchDocID.folder(id)])
     }
 
     /// - Parameter deleting: ids this write *removes* from the file. They have to be named
@@ -422,11 +728,14 @@ final class NotebookStore: ObservableObject {
     /// Subfolders of `parentFolderId`. The root additionally adopts the folders that nothing else
     /// would draw, so an orphaned subtree stays reachable instead of vanishing from the sidebar.
     func folders(in parentFolderId: String?) -> [FolderDTO] {
+        let trashed = trash.folderIDs
         guard parentFolderId == nil else {
-            return folders.filter { $0.parentFolderId == parentFolderId }
+            return folders.filter {
+                $0.parentFolderId == parentFolderId && !trashed.contains($0.id)
+            }
         }
         let adopted = rootAdoptedFolderIDs
-        return folders.filter { adopted.contains($0.id) }
+        return folders.filter { adopted.contains($0.id) && !trashed.contains($0.id) }
     }
 
     /// Notebooks directly inside `parentFolderId`. The root additionally adopts every notebook
@@ -434,11 +743,18 @@ final class NotebookStore: ObservableObject {
     /// leaves behind. A notebook filed under a folder that still exists stays there even if that
     /// folder is itself orphaned, because `folders(in: nil)` has already surfaced the folder.
     func notebooks(in parentFolderId: String?) -> [NotebookManifest] {
+        let trashed = trash.notebookIDs
         guard parentFolderId == nil else {
-            return notebooks.filter { $0.parentFolderId == parentFolderId }
+            return notebooks.filter {
+                $0.parentFolderId == parentFolderId && !trashed.contains($0.notebookId)
+            }
         }
+        // `known` counts trashed folders too, which is what keeps a folder's notebooks inside it
+        // when it goes to the Trash. Treating a trashed folder as gone would adopt every notebook
+        // under it straight to the root — the opposite of what throwing the folder away meant.
         let known = Set(folders.map(\.id))
         return notebooks.filter { notebook in
+            guard !trashed.contains(notebook.notebookId) else { return false }
             guard let parent = notebook.parentFolderId else { return true }
             return !known.contains(parent)
         }
@@ -446,6 +762,57 @@ final class NotebookStore: ObservableObject {
 
     func folder(id: String) -> FolderDTO? {
         folders.first { $0.id == id }
+    }
+
+    /// Everything in the library whose name answers [query], wherever it is filed.
+    ///
+    /// Deliberately not scoped to the folder you are standing in: the reason to search is that you
+    /// do not know where the thing is. Trashed items stay out — they are not in the library — and
+    /// so does anything inside a trashed folder, which is why this filters on the same reachability
+    /// rule the listings do rather than on the query alone.
+    func search(_ query: String) -> (folders: [FolderDTO], notebooks: [NotebookManifest]) {
+        let trashedFolderIDs = trash.folderIDs
+        let trashedNotebookIDs = trash.notebookIDs
+
+        func isReachable(_ parentFolderId: String?) -> Bool {
+            var seen: Set<String> = []
+            var cursor = parentFolderId
+            while let id = cursor {
+                guard seen.insert(id).inserted else { return false }  // a cycle reaches no root
+                guard let folder = folders.first(where: { $0.id == id }) else { return true }
+                if trashedFolderIDs.contains(id) { return false }
+                cursor = folder.parentFolderId
+            }
+            return true
+        }
+
+        return (
+            folders: folders.filter {
+                !trashedFolderIDs.contains($0.id)
+                    && isReachable($0.parentFolderId)
+                    && LibrarySort.matches(title: $0.title, query: query)
+            },
+            notebooks: notebooks.filter {
+                !trashedNotebookIDs.contains($0.notebookId)
+                    && isReachable($0.parentFolderId)
+                    && LibrarySort.matches(title: $0.title, query: query)
+            }
+        )
+    }
+
+    /// The folder path of an item, outermost first — what a search result needs to say where it
+    /// found something. Bounded against a cycle in `folders.json`, which the merge is allowed to
+    /// produce and the library absorbs rather than repairs.
+    func breadcrumb(of parentFolderId: String?) -> [FolderDTO] {
+        var path: [FolderDTO] = []
+        var seen: Set<String> = []
+        var cursor = parentFolderId
+        while let id = cursor, seen.insert(id).inserted,
+              let folder = folders.first(where: { $0.id == id }) {
+            path.append(folder)
+            cursor = folder.parentFolderId
+        }
+        return path.reversed()
     }
 
     /// Direct children (subfolders + notebooks) of a folder.
@@ -494,4 +861,15 @@ final class NotebookStore: ObservableObject {
 
     /// True once a backend can say where things live — the cue for showing badges at all.
     var hasSyncedAtLeastOnce: Bool { remoteDocumentIDs != nil || remoteIndex != nil }
+}
+
+extension Int {
+    /// This index, pulled inside `0...array.count` — the valid range for an insertion.
+    ///
+    /// Page order arrives from drag gestures and from a peer's merge, neither of which is obliged
+    /// to be in range; an out-of-range insert traps rather than misbehaving, which is the one
+    /// failure mode a reorder must not have.
+    func clamped<T>(to array: [T]) -> Int {
+        Swift.max(0, Swift.min(self, array.count))
+    }
 }

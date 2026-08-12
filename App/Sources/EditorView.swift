@@ -33,6 +33,7 @@ struct EditorView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var loadError: String?
     @State private var saveError: String?
+    @State private var actionError: LibraryActionError?
     @StateObject private var undoController = CanvasUndoController()
     @State private var liveState = CanvasLiveState()
     @State private var viewport = CanvasViewportController()
@@ -93,6 +94,7 @@ struct EditorView: View {
             } message: { error in
                 Text("Your strokes are still here and bopa will try again. \(error)")
             }
+            .libraryActionAlert($actionError)
     }
 
     // MARK: Chrome
@@ -336,12 +338,19 @@ struct EditorView: View {
         if open(pageId: pageId) { remoteInkPending = false }
     }
 
+    /// Adding a page is the one editor action that used to be able to fail in silence: a disk that
+    /// is full, or a notebook whose manifest cannot be rewritten, produced nothing at all — no
+    /// page, no message — and the only reading available to the user was that the button had
+    /// missed. It reports through the same alert a failed save does, because it is the same kind
+    /// of news.
     private func addPage() {
         saveNow()
-        if let newPage = try? store.addPage(
-            to: notebookId, fallbackTemplate: handwriting.config.defaultTemplate)
-        {
+        do {
+            let newPage = try store.addPage(
+                to: notebookId, fallbackTemplate: handwriting.config.defaultTemplate)
             open(pageId: newPage.id)
+        } catch {
+            actionError = LibraryActionError(action: "Adding a page", underlying: error)
         }
     }
 

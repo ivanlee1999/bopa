@@ -118,30 +118,22 @@ private struct FolderContentsView: View {
 
     @State private var deletingNotebookId: String?
     @State private var showingDeleteNotebook = false
+    @State private var deletingFolderId: String?
+    @State private var showingDeleteFolder = false
     @State private var showingSyncSettings = false
+    @State private var showingTrash = false
+    @State private var actionError: LibraryActionError?
+
+    /// What throwing away the folder under the open confirmation would take with it.
+    private var deletingFolderScope: NotebookStore.DeletionScope? {
+        deletingFolderId.map { store.deletionScope(ofFolder: $0) }
+    }
 
     /// A local deletion that failed. Reported rather than swallowed: the notebook is still on the
     /// screen afterwards, and without this the user is left to conclude that Delete does nothing.
-    @State private var deletionError: String?
 
     private var trimmedRenameTitle: String {
         renameTitle.trimmingCharacters(in: .whitespaces)
-    }
-
-    private var deletionErrorBinding: Binding<Bool> {
-        Binding(get: { deletionError != nil }, set: { if !$0 { deletionError = nil } })
-    }
-
-    /// Deletes, and says so when it could not. `try?` was the wrong shape for this one operation:
-    /// the store records the CouchDB tombstone as part of a *successful* delete, so a swallowed
-    /// failure left the library looking unchanged while the user believed it was gone — and the
-    /// next sync would have been the first hint, had it had anything to push.
-    private func delete(_ operation: () throws -> Void) {
-        do {
-            try operation()
-        } catch {
-            deletionError = error.localizedDescription
-        }
     }
 
     private var subfolders: [FolderDTO] { store.folders(in: folderId) }
@@ -179,10 +171,12 @@ private struct FolderContentsView: View {
                 title: $newNotebookTitle,
                 pageSize: $newNotebookPageSize,
                 create: { title, pageSize in
-                    _ = try? store.createNotebook(
-                        title: title, parentFolderId: folderId,
-                        template: handwriting.config.defaultTemplate,
-                        pageSize: pageSize)
+                    perform("Creating the notebook", error: $actionError) {
+                        _ = try store.createNotebook(
+                            title: title, parentFolderId: folderId,
+                            template: handwriting.config.defaultTemplate,
+                            pageSize: pageSize)
+                    }
                     // The choice sticks, so a second notebook does not need making again.
                     handwriting.config.defaultPageSize = pageSize
                 })
@@ -191,8 +185,10 @@ private struct FolderContentsView: View {
             TextField("Name", text: $newFolderTitle)
             Button("Create") {
                 let title = newFolderTitle.trimmingCharacters(in: .whitespaces)
-                _ = try? store.createFolder(
-                    title: title.isEmpty ? "Untitled" : title, parentFolderId: folderId)
+                perform("Creating the folder", error: $actionError) {
+                    _ = try store.createFolder(
+                        title: title.isEmpty ? "Untitled" : title, parentFolderId: folderId)
+                }
             }
             Button("Cancel", role: .cancel) {}
         }
@@ -202,7 +198,9 @@ private struct FolderContentsView: View {
             // blank title would otherwise dismiss and silently keep the old one.
             Button("Rename") {
                 if let id = renamingNotebookId {
-                    try? store.renameNotebook(id: id, title: trimmedRenameTitle)
+                    perform("Renaming the notebook", error: $actionError) {
+                        try store.renameNotebook(id: id, title: trimmedRenameTitle)
+                    }
                 }
             }
             .disabled(trimmedRenameTitle.isEmpty)
@@ -212,30 +210,75 @@ private struct FolderContentsView: View {
             TextField("Name", text: $renameTitle)
             Button("Rename") {
                 if let id = renamingFolderId {
-                    try? store.renameFolder(id: id, title: trimmedRenameTitle)
+                    perform("Renaming the folder", error: $actionError) {
+                        try store.renameFolder(id: id, title: trimmedRenameTitle)
+                    }
                 }
             }
             .disabled(trimmedRenameTitle.isEmpty)
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog(
-            "Delete this notebook?", isPresented: $showingDeleteNotebook, titleVisibility: .visible
+            "Move to Trash?", isPresented: $showingDeleteNotebook, titleVisibility: .visible
         ) {
-            Button("Delete", role: .destructive) {
+            Button("Move to Trash", role: .destructive) {
                 if let id = deletingNotebookId {
-                    delete { try store.deleteNotebook(id: id) }
+                    perform("Moving the notebook to the Trash", error: $actionError) {
+                        try store.trashNotebook(id: id)
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The notebook is removed from this iPad and deleted from the server on the next sync.")
+            // Nothing is published here, so this is honest about the other device: peers keep
+            // their copy until the Trash is emptied, which is what makes restoring mean anything.
+            Text("The notebook stays in the Trash until you empty it. Nothing is deleted from "
+                + "the server or your BOOX until then.")
         }
-        .alert("Couldn’t delete that", isPresented: deletionErrorBinding) {
-            Button("OK", role: .cancel) {}
+        .confirmationDialog(
+            "Move to Trash?", isPresented: $showingDeleteFolder, titleVisibility: .visible
+        ) {
+            Button("Move to Trash", role: .destructive) {
+                if let id = deletingFolderId {
+                    perform("Moving the folder to the Trash", error: $actionError) {
+                        try store.trashFolder(id: id)
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text(deletionError ?? "")
+            Text(folderDeletionMessage)
         }
+        .sheet(isPresented: $showingTrash) {
+            NavigationStack { TrashView() }
+        }
+        .libraryActionAlert($actionError)
         .onAppear { store.refresh() }
+    }
+
+    /// Says what is inside, because the number is the decision: a folder holding forty notebooks
+    /// is a different act from an empty one made by accident, and one confirmation cannot tell
+    /// them apart without saying so.
+    private var folderDeletionMessage: String {
+        guard let scope = deletingFolderScope else { return "" }
+        let contents: String
+        if scope.isEmpty {
+            contents = "It is empty."
+        } else {
+            let parts = [
+                scope.childFolderCount > 0
+                    ? "\(scope.childFolderCount) folder\(scope.childFolderCount == 1 ? "" : "s")"
+                    : nil,
+                !scope.notebookIDs.isEmpty
+                    ? "\(scope.notebookIDs.count) notebook\(scope.notebookIDs.count == 1 ? "" : "s")"
+                    : nil,
+                scope.pageCount > 0
+                    ? "\(scope.pageCount) page\(scope.pageCount == 1 ? "" : "s")" : nil,
+            ].compactMap { $0 }
+            contents = "It holds \(parts.formatted(.list(type: .and)))."
+        }
+        return "\(contents) Everything inside goes with it, and stays in the Trash until you "
+            + "empty it."
     }
 
     // MARK: Header
@@ -256,6 +299,20 @@ private struct FolderContentsView: View {
                 .buttonStyle(.squareOutline)
                 .accessibilityLabel("Toggle folders")
                 .accessibilityIdentifier("library.toggleSidebar")
+
+                // Only once something is in it: a permanently visible Trash is a permanent
+                // reminder of a screen almost nobody needs, while one that appears the moment
+                // something is deleted is how you find out deletion was recoverable at all.
+                if !store.trash.isEmpty {
+                    Button {
+                        showingTrash = true
+                    } label: {
+                        Image(systemName: "trash").font(.system(size: 18, weight: .medium))
+                    }
+                    .buttonStyle(.squareOutline)
+                    .accessibilityLabel("Trash, \(store.trash.count) items")
+                    .accessibilityIdentifier("library.trash")
+                }
 
                 Button {
                     showingSyncSettings = true
@@ -442,12 +499,14 @@ private struct FolderContentsView: View {
             } label: {
                 Label("Rename", systemImage: "pencil")
             }
-            if store.isFolderEmpty(folder.id) {
-                Button(role: .destructive) {
-                    delete { try store.deleteFolder(id: folder.id) }
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
+            // No longer restricted to empty folders. Refusing to delete a populated one was the
+            // only protection there was against losing a subtree; now the Trash is, and it is a
+            // better one — a populated folder can be thrown away and brought back.
+            Button(role: .destructive) {
+                deletingFolderId = folder.id
+                showingDeleteFolder = true
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
@@ -522,11 +581,15 @@ private struct FolderContentsView: View {
         }
         Menu {
             Button("No folder") {
-                try? store.moveNotebook(id: notebook.notebookId, toFolder: nil)
+                perform("Moving the notebook", error: $actionError) {
+                    try store.moveNotebook(id: notebook.notebookId, toFolder: nil)
+                }
             }
             ForEach(store.folders, id: \.id) { folder in
                 Button(folder.title) {
-                    try? store.moveNotebook(id: notebook.notebookId, toFolder: folder.id)
+                    perform("Moving the notebook", error: $actionError) {
+                        try store.moveNotebook(id: notebook.notebookId, toFolder: folder.id)
+                    }
                 }
             }
         } label: {

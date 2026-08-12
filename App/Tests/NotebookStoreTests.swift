@@ -57,28 +57,38 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(renamed.createdAt, folder.createdAt)
     }
 
-    func testDeleteEmptyFolder() throws {
+    func testPurgeEmptyFolder() throws {
         let folder = try store.createFolder(title: "Scratch")
 
-        try store.deleteFolder(id: folder.id)
+        try store.purgeFolder(id: folder.id)
 
         XCTAssertTrue(store.folders.isEmpty)
         XCTAssertTrue(try foldersOnDisk().folders.isEmpty)
     }
 
-    func testDeleteNonEmptyFolderThrows() throws {
+    /// A populated folder is no longer refused — it is thrown away whole, which is the point of
+    /// the Trash. What must not happen is a notebook surviving its folder's purge.
+    func testPurgeFolderTakesItsSubtree() throws {
         let folder = try store.createFolder(title: "Busy")
-        _ = try store.createNotebook(title: "Inside", parentFolderId: folder.id)
+        let child = try store.createFolder(title: "Nested", parentFolderId: folder.id)
+        let inside = try store.createNotebook(title: "Inside", parentFolderId: child.id)
 
-        XCTAssertThrowsError(try store.deleteFolder(id: folder.id))
-        XCTAssertEqual(store.folders.count, 1)
+        let scope = try store.purgeFolder(id: folder.id)
+
+        XCTAssertEqual(Set(scope.folderIDs), [folder.id, child.id])
+        XCTAssertEqual(scope.notebookIDs, [inside.notebookId])
+        XCTAssertTrue(store.folders.isEmpty)
+        XCTAssertTrue(store.notebooks.isEmpty)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: rootURL.appendingPathComponent("notebooks/\(inside.notebookId)").path))
     }
 
     // MARK: Folders that stopped reaching the root
 
     /// Drops folders from `folders.json` behind the store's back, the way applying a peer's
-    /// folder tombstone does — the one route to an orphan, since `deleteFolder` refuses a
-    /// folder that still has children.
+    /// folder tombstone does — protocol §6.4 deletes the folder alone, so this is how a notebook
+    /// ends up filed under a folder nobody holds.
     private func dropFoldersOnDisk(ids: Set<String>) throws {
         let kept = try foldersOnDisk().folders.filter { !ids.contains($0.id) }
         let file = FoldersFile(folders: kept, serverTimestamp: NotableDate.format(Date()))
@@ -264,12 +274,12 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(NotebookManifest.self, from: data).title, "New")
     }
 
-    func testDeleteNotebookRemovesDirAndRecordsPendingDeletion() throws {
+    func testPurgeNotebookRemovesDirAndRecordsPendingDeletion() throws {
         let manifest = try store.createNotebook(title: "Doomed")
         let dir = rootURL.appendingPathComponent("notebooks/\(manifest.notebookId)")
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path))
 
-        try store.deleteNotebook(id: manifest.notebookId)
+        try store.purgeNotebook(id: manifest.notebookId)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
         XCTAssertTrue(store.notebooks.isEmpty)
