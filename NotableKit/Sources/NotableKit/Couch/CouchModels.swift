@@ -184,6 +184,7 @@ public struct CouchImage: Codable, Equatable, Sendable {
 public struct CouchPage: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case type, schema, notebookId, title, background, backgroundType
+        case pageWidth, pageHeight
         case strokes, deletedStrokes, images, deletedImages
         case createdAt, updatedAt, updatedBy
     }
@@ -199,6 +200,10 @@ public struct CouchPage: Codable, Equatable, Sendable {
     public var title: String?
     public var background: String
     public var backgroundType: String
+    /// The sheet this page's coordinates are laid out on, in page units; nil for a page written
+    /// before page sizes existed. Mirrors `PageFile.pageWidth`/`pageHeight` — see there.
+    public var pageWidth: Int?
+    public var pageHeight: Int?
     public var strokes: [CouchStroke]
     public var deletedStrokes: [CouchTombstone]
     public var images: [CouchImage]
@@ -211,6 +216,7 @@ public struct CouchPage: Codable, Equatable, Sendable {
         type: String = CouchDocType.page, schema: Int = couchSchemaVersion,
         notebookId: String?, title: String? = nil,
         background: String = "blank", backgroundType: String = "native",
+        pageWidth: Int? = nil, pageHeight: Int? = nil,
         strokes: [CouchStroke] = [], deletedStrokes: [CouchTombstone] = [],
         images: [CouchImage] = [], deletedImages: [CouchTombstone] = [],
         createdAt: String, updatedAt: String, updatedBy: String
@@ -221,6 +227,8 @@ public struct CouchPage: Codable, Equatable, Sendable {
         self.title = title
         self.background = background
         self.backgroundType = backgroundType
+        self.pageWidth = pageWidth
+        self.pageHeight = pageHeight
         self.strokes = strokes
         self.deletedStrokes = deletedStrokes
         self.images = images
@@ -238,6 +246,10 @@ public struct CouchPage: Codable, Equatable, Sendable {
         title = try c.decodeIfPresent(String.self, forKey: .title)
         background = try c.decodeIfPresent(String.self, forKey: .background) ?? "blank"
         backgroundType = try c.decodeIfPresent(String.self, forKey: .backgroundType) ?? "native"
+        // Non-positive is treated as no declaration, matching `PageFile`.
+        pageWidth = try c.decodeIfPresent(Int.self, forKey: .pageWidth).flatMap { $0 > 0 ? $0 : nil }
+        pageHeight = try c.decodeIfPresent(Int.self, forKey: .pageHeight)
+            .flatMap { $0 > 0 ? $0 : nil }
         strokes = try c.decodeIfPresent([CouchStroke].self, forKey: .strokes) ?? []
         deletedStrokes = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedStrokes) ?? []
         images = try c.decodeIfPresent([CouchImage].self, forKey: .images) ?? []
@@ -255,6 +267,8 @@ public struct CouchPage: Codable, Equatable, Sendable {
         try c.encode(title, forKey: .title)
         try c.encode(background, forKey: .background)
         try c.encode(backgroundType, forKey: .backgroundType)
+        try c.encode(pageWidth, forKey: .pageWidth)
+        try c.encode(pageHeight, forKey: .pageHeight)
         try c.encode(strokes, forKey: .strokes)
         try c.encode(deletedStrokes, forKey: .deletedStrokes)
         try c.encode(images, forKey: .images)
@@ -269,6 +283,7 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case type, schema, title, pageIds, deletedPageIds, parentFolderId
         case defaultBackground, defaultBackgroundType
+        case defaultPageWidth, defaultPageHeight
         case createdAt, updatedAt, updatedBy
     }
 
@@ -280,6 +295,10 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
     public var parentFolderId: String?
     public var defaultBackground: String
     public var defaultBackgroundType: String
+    /// Sheet size for new pages here, in page units; nil for a notebook created before page
+    /// sizes existed. Mirrors `NotebookManifest.defaultPageWidth`/`defaultPageHeight`.
+    public var defaultPageWidth: Int?
+    public var defaultPageHeight: Int?
     public var createdAt: String
     public var updatedAt: String
     public var updatedBy: String
@@ -289,6 +308,7 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         title: String, pageIds: [String] = [], deletedPageIds: [CouchTombstone] = [],
         parentFolderId: String? = nil,
         defaultBackground: String = "blank", defaultBackgroundType: String = "native",
+        defaultPageWidth: Int? = nil, defaultPageHeight: Int? = nil,
         createdAt: String, updatedAt: String, updatedBy: String
     ) {
         self.type = type
@@ -299,6 +319,8 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         self.parentFolderId = parentFolderId
         self.defaultBackground = defaultBackground
         self.defaultBackgroundType = defaultBackgroundType
+        self.defaultPageWidth = defaultPageWidth
+        self.defaultPageHeight = defaultPageHeight
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.updatedBy = updatedBy
@@ -315,6 +337,10 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         defaultBackground = try c.decodeIfPresent(String.self, forKey: .defaultBackground) ?? "blank"
         defaultBackgroundType =
             try c.decodeIfPresent(String.self, forKey: .defaultBackgroundType) ?? "native"
+        defaultPageWidth = try c.decodeIfPresent(Int.self, forKey: .defaultPageWidth)
+            .flatMap { $0 > 0 ? $0 : nil }
+        defaultPageHeight = try c.decodeIfPresent(Int.self, forKey: .defaultPageHeight)
+            .flatMap { $0 > 0 ? $0 : nil }
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
         updatedBy = try c.decodeIfPresent(String.self, forKey: .updatedBy) ?? ""
@@ -330,6 +356,8 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         try c.encode(parentFolderId, forKey: .parentFolderId)
         try c.encode(defaultBackground, forKey: .defaultBackground)
         try c.encode(defaultBackgroundType, forKey: .defaultBackgroundType)
+        try c.encode(defaultPageWidth, forKey: .defaultPageWidth)
+        try c.encode(defaultPageHeight, forKey: .defaultPageHeight)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(updatedBy, forKey: .updatedBy)

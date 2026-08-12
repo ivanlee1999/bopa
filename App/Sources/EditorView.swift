@@ -243,6 +243,7 @@ struct EditorView: View {
                     images: pageImages,
                     pageScroll: page?.scroll ?? 0,
                     template: pageTemplate,
+                    pageSize: page?.pageSize ?? .legacyUndeclared,
                     drawing: $drawing,
                     config: handwriting.config,
                     toolSelection: toolSelection,
@@ -488,6 +489,9 @@ struct EditorCanvasView: UIViewRepresentable {
     var pageScroll: Int = 0
     /// Native paper drawn behind the ink (`.blank` for PDF-backed pages).
     var template: NativeTemplate = .blank
+    /// The sheet this page is laid out on, in page units — the page's own declaration, or
+    /// `PageSize.legacyUndeclared` for one written before page sizes existed.
+    var pageSize: PageSize = .legacyUndeclared
     @Binding var drawing: PKDrawing
     var config = HandwritingConfig()
     /// The docked rail's choice of tool and ink. Authoritative: a tool picked anywhere
@@ -500,10 +504,11 @@ struct EditorCanvasView: UIViewRepresentable {
     /// The pencil lifted. The editor uses it to retry work it would not do mid-stroke.
     var onIdle: () -> Void = {}
 
-    /// Logical page width shared with the BOOX (Notable uses the device's pixel width;
-    /// strokes beyond this width would clip on the tablet).
-    static let pageWidth: CGFloat = 1404
-    static let minimumHeight: CGFloat = 3744
+    /// The scroll extent a freshly opened page starts with: two sheets, so there is somewhere
+    /// to write before the first stroke grows it.
+    static func minimumHeight(for pageSize: PageSize) -> CGFloat {
+        CGFloat(pageSize.height) * 2
+    }
 
     func makeUIView(context: Context) -> CanvasContainerView {
         let container = CanvasContainerView()
@@ -513,7 +518,10 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.isAccessibilityElement = true
         canvas.accessibilityIdentifier = "editor.canvas"
         canvas.accessibilityValue = "strokes:0"
-        canvas.contentSize = CGSize(width: Self.pageWidth, height: Self.minimumHeight)
+        container.pageWidth = CGFloat(pageSize.width)
+        container.setContentExtent(
+            pageSize: pageSize, ink: drawing.bounds,
+            minimumHeight: Self.minimumHeight(for: pageSize))
         canvas.minimumZoomScale = 0.25
         canvas.maximumZoomScale = 3
 
@@ -565,24 +573,17 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.drawing = drawing
         context.coordinator.programmaticUpdate = false
         canvas.accessibilityValue = "strokes:\(drawing.strokes.count)"
-        Self.growContent(canvas, for: drawing)
+        // Sized from the page being loaded rather than grown into: pages in a notebook can
+        // declare different sheets, and the extent left over from the previous page is not this
+        // page's.
+        container.setContentExtent(
+            pageSize: pageSize, ink: drawing.bounds,
+            minimumHeight: Self.minimumHeight(for: pageSize))
         // A page switch must not be undoable into the previous page's drawing.
         container.pageUndoManager.removeAllActions()
         undoController.refresh()
         // Restore the persisted scroll position for this page.
         container.setInitialScroll(pageY: CGFloat(pageScroll))
-    }
-
-    /// Grows the scrollable height to fit the drawing. An EMPTY drawing has a null bounds
-    /// whose maxY is CGFLOAT_MAX — setting contentSize to that breaks the scroll view's
-    /// gesture system and permanently disables inking (found by UI-test bisect).
-    static func growContent(_ canvas: PKCanvasView, for drawing: PKDrawing) {
-        let bounds = drawing.bounds
-        guard !bounds.isNull, bounds.maxY.isFinite else { return }
-        let needed = bounds.maxY + 1000
-        if needed > canvas.contentSize.height {
-            canvas.contentSize.height = needed
-        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -780,7 +781,7 @@ struct EditorCanvasView: UIViewRepresentable {
             parent.drawing = drawing
             canvasView.accessibilityValue = "strokes:\(drawing.strokes.count)"
             parent.onChanged()
-            EditorCanvasView.growContent(canvasView, for: drawing)
+            container?.growContent(toCover: drawing.bounds)
         }
     }
 }

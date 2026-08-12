@@ -76,12 +76,58 @@ e.g. `2026-08-02T10:00:00.123Z`). Notable skips (does not fail on) entries with 
   "defaultBackground": "blank",         // see §7 backgrounds
   "defaultBackgroundType": "native",
   "linkedExternalUri": null,
+  "defaultPageWidth": 1400,             // page units; null = undeclared, see §3.1
+  "defaultPageHeight": 1980,
   "createdAt": "...", "updatedAt": "...",
   "serverTimestamp": "..."
 }
 ```
 
 `updatedAt` is the conflict-resolution clock for the whole notebook (see §8).
+
+### 3.1 Page size (page units)
+
+`defaultPageWidth`/`defaultPageHeight` are the sheet **new pages in this notebook** are created
+with; the authoritative geometry for laying out a given page is that page's own `pageWidth`/
+`pageHeight` (§4). Same division of labour as `defaultBackground` and `background`.
+
+Both are in **page units**: the coordinate space stroke and image geometry is already expressed
+in. One unit is exactly **0.15 mm** (≈169.3 dpi), which makes a unit ≈ 0.42520 PostScript points,
+so A4 in page units is the standard 595.3 × 841.9 pt PDF page box.
+
+Sizes are stored **portrait** (`width <= height`). There is no orientation field: turning a device
+sideways changes how much of the sheet is on screen, not how big the sheet is.
+
+| Preset | mm | page units |
+|---|---|---|
+| `a3` | 297 × 420 | 1980 × 2800 |
+| `a4` | 210 × 297 | 1400 × 1980 |
+| `a5` | 148 × 210 | 987 × 1400 |
+| `letter` | 215.9 × 279.4 | 1439 × 1863 |
+| `legal` | 215.9 × 355.6 | 1439 × 2371 |
+
+This table is normative: it exists in both repos (`NotableKit/PageSize.swift`, Kotlin
+`PageSizes.kt`) and both test suites pin the values, because a dimension differing by one unit
+between the two would put the apps back to laying out different pages.
+
+**Absent, null or non-positive means undeclared** — a notebook or page written before page sizes
+existed. Nothing retrofits a size onto one: each app falls back to what it always used (bopa 1404
+× 1872, Notable the device's own screen width), so old notebooks keep rendering as they did.
+
+Rules both implementations follow:
+
+- The size is chosen when a notebook is created and never edited afterwards. Ink is positioned
+  against the sheet from the first stroke, so changing it later would move every stroke on the
+  page relative to the paper.
+- A declaration is never lost to a peer that has none: on merge, `winner.pageWidth ?? loser
+  .pageWidth`. Otherwise one sync from a build that has not learned the field would silently
+  reflow every page it touched.
+- Height is the *sheet* height, not a limit on writing. Both apps keep scrolling past the bottom
+  of the sheet; the height is what pagination and export divide by.
+- **The scrollable area must cover the ink even when the ink is outside the sheet.** Ink lands
+  past the right edge whenever it was written on a device wider than the sheet (including every
+  undeclared page). An area that stops at the sheet's edge does not merely park that ink
+  off-page, it makes it unreachable.
 
 ## 4. Page file (`pages/<pageId>.json`)
 
@@ -97,6 +143,8 @@ first, then `strokes`, then `images`. Parsers must not rely on whitespace.
   "backgroundType": "native",
   "parentFolderId": null,
   "scroll": 0,                          // int, vertical scroll position
+  "pageWidth": 1400,                    // page units; null = undeclared, see §3.1
+  "pageHeight": 1980,
   "createdAt": "...", "updatedAt": "...",
   "strokes": [ <StrokeDto>... ],
   "images":  [ <ImageDto>... ]

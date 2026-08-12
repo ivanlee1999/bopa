@@ -121,6 +121,7 @@ public enum CouchMerge {
             createdAt: \.createdAt, id: \.id)
 
         let winner = pageWins(a, over: b) ? a : b
+        let loser = pageWins(a, over: b) ? b : a
         return CouchPage(
             type: CouchDocType.page,
             schema: Swift.max(a.schema, b.schema),
@@ -128,6 +129,12 @@ public enum CouchMerge {
             title: winner.title,
             background: winner.background,
             backgroundType: winner.backgroundType,
+            // A declared sheet is never lost to a peer that has none: geometry describes how the
+            // ink already on the page is laid out, so a writer that has not learned the field
+            // cannot un-declare it by winning the scalar tiebreak. When both declare, the winner's
+            // wins like any other scalar.
+            pageWidth: winner.pageWidth ?? loser.pageWidth,
+            pageHeight: winner.pageHeight ?? loser.pageHeight,
             strokes: strokes,
             deletedStrokes: deletedStrokes,
             images: images,
@@ -207,6 +214,8 @@ public enum CouchMerge {
             ("updatedBy", page.updatedBy), ("notebookId", page.notebookId),
             ("title", page.title),
             ("background", page.background), ("backgroundType", page.backgroundType),
+            ("pageWidth", page.pageWidth.map(String.init)),
+            ("pageHeight", page.pageHeight.map(String.init)),
         ])
     }
 
@@ -235,6 +244,8 @@ public enum CouchMerge {
             parentFolderId: winner.parentFolderId,
             defaultBackground: winner.defaultBackground,
             defaultBackgroundType: winner.defaultBackgroundType,
+            defaultPageWidth: winner.defaultPageWidth ?? loser.defaultPageWidth,
+            defaultPageHeight: winner.defaultPageHeight ?? loser.defaultPageHeight,
             createdAt: earlier(a.createdAt, b.createdAt),
             updatedAt: later(a.updatedAt, b.updatedAt),
             updatedBy: winner.updatedBy)
@@ -253,6 +264,8 @@ public enum CouchMerge {
             ("parentFolderId", notebook.parentFolderId),
             ("defaultBackground", notebook.defaultBackground),
             ("defaultBackgroundType", notebook.defaultBackgroundType),
+            ("defaultPageWidth", notebook.defaultPageWidth.map(String.init)),
+            ("defaultPageHeight", notebook.defaultPageHeight.map(String.init)),
         ])
     }
 

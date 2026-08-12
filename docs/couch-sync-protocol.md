@@ -68,8 +68,15 @@ Deletion: `PUT` the document with `"_deleted": true` while retaining `type`, `de
   "deletedPageIds": [{ "id": "<uuid>", "deletedAt": "…" }],
   "parentFolderId": null,
   "defaultBackground": "blank", "defaultBackgroundType": "native",
+  "defaultPageWidth": 1400, "defaultPageHeight": 1980,
   "createdAt": "…", "updatedAt": "…", "updatedBy": "ipad" }
 ```
+
+`defaultPageWidth`/`defaultPageHeight` are the sheet new pages here are created with, in page
+units; a page's own `pageWidth`/`pageHeight` (§3.3) is what lays that page out. Null means
+undeclared — written before page sizes existed. The unit, the preset table and the layout rules
+are normative in [notable-sync-protocol.md](notable-sync-protocol.md) §3.1; the merge rule is
+§6.7 below.
 
 `openPageId`, scroll position and `linkedExternalUri` are device-local and **never** written.
 
@@ -80,6 +87,7 @@ Deletion: `PUT` the document with `"_deleted": true` while retaining `type`, `de
   "notebookId": "<uuid>",
   "title": "Shopping list",
   "background": "blank", "backgroundType": "native",
+  "pageWidth": 1400, "pageHeight": 1980,
   "strokes": [ { "id": "<uuid>", "createdAt": "…", "updatedAt": "…", "deviceId": "boox",
                  "pen": "FOUNTAIN", "color": -16777216, "size": 4.48, "maxPressure": 1,
                  "top": 312, "bottom": 393, "left": 214, "right": 262,
@@ -138,8 +146,10 @@ it places instead of dropping references to bytes that are on their way.
 millis(ts)         = parsed epoch millis, or Long.MIN_VALUE if unparseable
 scalarKey(doc)     = the doc's scalar fields only, rendered as key-sorted minimal JSON:
                      type, schema, createdAt, updatedAt, updatedBy, and per type —
-                     page:     notebookId, title, background, backgroundType
-                     notebook: title, parentFolderId, defaultBackground, defaultBackgroundType
+                     page:     notebookId, title, background, backgroundType,
+                               pageWidth, pageHeight
+                     notebook: title, parentFolderId, defaultBackground, defaultBackgroundType,
+                               defaultPageWidth, defaultPageHeight
                      folder:   title, parentFolderId
                      Absent/null values render as `null`.
 ```
@@ -262,6 +272,20 @@ them can conflict.
 ### 5.4 mergeAsset(a, b)
 
 Assets are immutable; return either (they are equal by construction).
+
+### 5.1 Page geometry is picked, but a declaration is never dropped
+
+`pageWidth`/`pageHeight` (and `defaultPageWidth`/`defaultPageHeight`) follow `pick` like any
+other scalar **except** that the winner's value is only used when it has one:
+
+```
+pageWidth(merge(a, b)) = pick(a, b).pageWidth ?? other(a, b).pageWidth
+```
+
+A page's sheet describes how the ink already on that page is laid out. A writer that has not
+learned the field would otherwise un-declare the size by merely writing last, silently reflowing
+every page it touched. The dimensions are also in `scalarKey` (§4): the merge picks them, so
+omitting them there would make both argument orders "win" and cost commutativity.
 
 ## 6. Conflict rules beyond field merging
 

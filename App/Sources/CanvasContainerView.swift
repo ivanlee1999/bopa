@@ -34,9 +34,15 @@ final class CanvasContainerView: UIView {
     /// every width change, until a pinch takes it off the fit. Off means "actual size":
     /// open at 1:1 and leave the zoom alone.
     var keepsFitToWidth = true
-    var pageWidth: CGFloat = 1404 {
+    /// The width of the sheet, in page units — the page's declared page size, or the legacy
+    /// fallback. What "fit to width" fits, and how wide the paper is drawn.
+    var pageWidth: CGFloat = CGFloat(PageSize.legacyUndeclared.width) {
         didSet { paperView.pageWidth = pageWidth }
     }
+    /// Slack kept to the right of ink that overflows the sheet, so the last stroke is not flush
+    /// against the edge of the scrollable area. Small on purpose: unlike the downward slack,
+    /// which is room to keep writing, this only has to make the overflow legible.
+    private static let horizontalInkSlack: CGFloat = 100
     private(set) var backgroundImage: UIImage?
     private(set) var pageImages: [PageImage] = []
 
@@ -206,6 +212,57 @@ final class CanvasContainerView: UIView {
             insertSubview(view, belowSubview: canvas)
             return view
         }
+        updateContentGeometry()
+    }
+
+    /// The scrollable area in page units. `contentSize` is in zoomed points — the same reading
+    /// `setBackground` and `applyScroll` work from — so both directions go through the zoom.
+    var contentExtent: CGSize {
+        get {
+            let scale = max(canvas.zoomScale, 0.01)
+            return CGSize(
+                width: canvas.contentSize.width / scale,
+                height: canvas.contentSize.height / scale)
+        }
+        set {
+            let scale = max(canvas.zoomScale, 0.01)
+            canvas.contentSize = CGSize(
+                width: newValue.width * scale, height: newValue.height * scale)
+        }
+    }
+
+    /// Sizes the scrollable area to a page: the sheet, plus whatever the ink spans beyond it.
+    ///
+    /// The width matters as much as the height. Ink can sit to the *right* of the sheet — a page
+    /// written on a BOOX whose screen is wider than this page's sheet puts it there, and a page
+    /// from before page sizes existed has no agreed sheet at all — and an area that stops at the
+    /// sheet's edge does not merely park that ink off-page, it makes it unreachable: there is
+    /// nothing to scroll to and no zoom that brings it back. So the area covers the ink even when
+    /// the ink is out of bounds, and the paper stays sheet-sized underneath it.
+    func setContentExtent(pageSize: PageSize, ink: CGRect, minimumHeight: CGFloat) {
+        var extent = CGSize(width: CGFloat(pageSize.width), height: minimumHeight)
+        // An EMPTY drawing has a null bounds whose maxX/maxY are CGFLOAT_MAX; letting that
+        // through breaks the scroll view's gesture system and permanently disables inking
+        // (found by UI-test bisect).
+        if !ink.isNull, ink.maxX.isFinite, ink.maxY.isFinite {
+            extent.width = max(extent.width, ink.maxX + Self.horizontalInkSlack)
+            extent.height = max(extent.height, ink.maxY + 1000)
+        }
+        contentExtent = extent
+        updateContentGeometry()
+    }
+
+    /// Grows the scrollable area to keep covering a drawing that is being added to. Grow-only:
+    /// the extent a page opened with is a floor, so writing near an edge never yanks the
+    /// scroll position around.
+    func growContent(toCover ink: CGRect) {
+        guard !ink.isNull, ink.maxX.isFinite, ink.maxY.isFinite else { return }
+        let current = contentExtent
+        let needed = CGSize(
+            width: max(current.width, ink.maxX + Self.horizontalInkSlack),
+            height: max(current.height, ink.maxY + 1000))
+        guard needed != current else { return }
+        contentExtent = needed
         updateContentGeometry()
     }
 

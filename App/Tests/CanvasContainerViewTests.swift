@@ -1,3 +1,4 @@
+import NotableKit
 import UIKit
 import XCTest
 
@@ -17,16 +18,22 @@ final class CanvasContainerViewTests: XCTestCase {
 
     /// Uncapped on purpose: "fit width" fills the screen, so a landscape iPad wider than the
     /// 1404pt page scales the page UP rather than leaving it in a band of empty desk.
-    private func fit(_ width: CGFloat) -> CGFloat {
-        width / EditorCanvasView.pageWidth
+    private func fit(_ width: CGFloat, pageSize: PageSize = .legacyUndeclared) -> CGFloat {
+        width / CGFloat(pageSize.width)
     }
 
     /// A container configured the way `EditorCanvasView.makeUIView` configures it, laid out
     /// once at `frame`.
-    private func makeContainer(_ frame: CGRect = .zero) -> CanvasContainerView {
+    private func makeContainer(
+        _ frame: CGRect = .zero,
+        pageSize: PageSize = .legacyUndeclared,
+        ink: CGRect = .null
+    ) -> CanvasContainerView {
         let container = CanvasContainerView()
-        container.canvas.contentSize = CGSize(
-            width: EditorCanvasView.pageWidth, height: EditorCanvasView.minimumHeight)
+        container.pageWidth = CGFloat(pageSize.width)
+        container.setContentExtent(
+            pageSize: pageSize, ink: ink,
+            minimumHeight: EditorCanvasView.minimumHeight(for: pageSize))
         container.canvas.minimumZoomScale = 0.25
         container.canvas.maximumZoomScale = 3
         if frame != .zero { rotate(container, to: frame) }
@@ -205,9 +212,91 @@ final class CanvasContainerViewTests: XCTestCase {
         container.canvasZoomDidChange()
         container.updateContentGeometry()
 
-        let expected = (portrait.width - EditorCanvasView.pageWidth * 0.3) / 2
+        let expected =
+            (portrait.width - CGFloat(PageSize.legacyUndeclared.width) * 0.3) / 2
         XCTAssertEqual(container.canvas.contentInset.left, expected, accuracy: 1)
         XCTAssertEqual(container.canvas.contentInset.right, expected, accuracy: 1)
         XCTAssertEqual(container.canvas.contentOffset.x, -expected, accuracy: 1)
+    }
+
+    // MARK: - Reaching the ink
+
+    /// The bug this was written for: ink written near the right edge of a BOOX whose screen is
+    /// wider than the page's sheet had nothing to scroll to on the iPad, so it was invisible —
+    /// not merely off-page. The scrollable area has to cover the ink wherever it landed.
+    func testInkPastTheSheetIsReachable() {
+        let sheet = PageSizePreset.a4.size
+        let ink = CGRect(x: 1700, y: 100, width: 150, height: 40)
+        let container = makeContainer(portrait, pageSize: sheet, ink: ink)
+
+        XCTAssertGreaterThanOrEqual(container.contentExtent.width, ink.maxX)
+    }
+
+    /// …and the paper does not stretch to meet it: the sheet stays the sheet, so overflowing
+    /// ink reads as overflowing rather than silently redefining the page.
+    func testInkPastTheSheetDoesNotWidenThePaper() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(
+            portrait, pageSize: sheet, ink: CGRect(x: 1700, y: 100, width: 150, height: 40))
+
+        XCTAssertEqual(container.pageWidth, CGFloat(sheet.width))
+        XCTAssertEqual(
+            container.canvas.zoomScale, fit(portrait.width, pageSize: sheet), accuracy: 0.001)
+    }
+
+    /// A page whose ink stays on the sheet is not made horizontally scrollable for nothing.
+    func testInkInsideTheSheetLeavesNoHorizontalSlack() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(
+            portrait, pageSize: sheet, ink: CGRect(x: 10, y: 10, width: 100, height: 100))
+
+        XCTAssertEqual(container.contentExtent.width, CGFloat(sheet.width), accuracy: 1)
+    }
+
+    /// Writing off the right edge grows the area under the pen, not only on load.
+    func testGrowingCoversInkAddedBeyondTheSheet() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet)
+        XCTAssertEqual(container.contentExtent.width, CGFloat(sheet.width), accuracy: 1)
+
+        container.growContent(toCover: CGRect(x: 1500, y: 0, width: 400, height: 50))
+        XCTAssertGreaterThanOrEqual(container.contentExtent.width, 1900)
+    }
+
+    /// An empty drawing's bounds are null, with infinite maxX/maxY. Letting those through breaks
+    /// the scroll view's gesture system and permanently disables inking.
+    func testNullInkBoundsDoNotCorruptTheExtent() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet, ink: .null)
+
+        XCTAssertEqual(container.contentExtent.width, CGFloat(sheet.width), accuracy: 1)
+        XCTAssertEqual(
+            container.contentExtent.height,
+            EditorCanvasView.minimumHeight(for: sheet), accuracy: 1)
+
+        container.growContent(toCover: .null)
+        XCTAssertEqual(container.contentExtent.width, CGFloat(sheet.width), accuracy: 1)
+    }
+
+    // MARK: - Declared page sizes
+
+    /// Fit-to-width fits whatever sheet the page declares, so the same page fills the screen
+    /// on both devices instead of each app deciding for itself how wide a page is.
+    func testFitUsesTheDeclaredSheetWidth() {
+        for preset in PageSizePreset.all {
+            let container = makeContainer(portrait, pageSize: preset.size)
+            XCTAssertEqual(
+                container.canvas.zoomScale, portrait.width / CGFloat(preset.size.width),
+                accuracy: 0.001, "\(preset.name)")
+        }
+    }
+
+    /// Opening a page gives it somewhere to write: two sheets tall, measured in the sheet the
+    /// page declares rather than a constant left over from another page size.
+    func testInitialHeightIsTwoSheets() {
+        let container = makeContainer(portrait, pageSize: PageSizePreset.a3.size)
+        XCTAssertEqual(
+            container.contentExtent.height, CGFloat(PageSizePreset.a3.size.height * 2),
+            accuracy: 1)
     }
 }

@@ -106,6 +106,7 @@ private struct FolderContentsView: View {
 
     @State private var showingNewNotebook = false
     @State private var newNotebookTitle = ""
+    @State private var newNotebookPageSize = PageSizePreset.default.size
     @State private var showingNewFolder = false
     @State private var newFolderTitle = ""
 
@@ -151,15 +152,20 @@ private struct FolderContentsView: View {
                 SettingsView(backendHost: backendHost)
             }
         }
-        .alert("New notebook", isPresented: $showingNewNotebook) {
-            TextField("Title", text: $newNotebookTitle)
-            Button("Create") {
-                let title = newNotebookTitle.trimmingCharacters(in: .whitespaces)
-                _ = try? store.createNotebook(
-                    title: title.isEmpty ? "Untitled" : title, parentFolderId: folderId,
-                    template: handwriting.config.defaultTemplate)
-            }
-            Button("Cancel", role: .cancel) {}
+        // A sheet rather than an alert: an alert holds text fields and buttons and nothing
+        // else, and the paper size has to be chosen here — it is the one moment it can be.
+        .sheet(isPresented: $showingNewNotebook) {
+            NewNotebookSheet(
+                title: $newNotebookTitle,
+                pageSize: $newNotebookPageSize,
+                create: { title, pageSize in
+                    _ = try? store.createNotebook(
+                        title: title, parentFolderId: folderId,
+                        template: handwriting.config.defaultTemplate,
+                        pageSize: pageSize)
+                    // The choice sticks, so a second notebook does not need making again.
+                    handwriting.config.defaultPageSize = pageSize
+                })
         }
         .alert("New folder", isPresented: $showingNewFolder) {
             TextField("Name", text: $newFolderTitle)
@@ -250,6 +256,7 @@ private struct FolderContentsView: View {
 
                 Button {
                     newNotebookTitle = ""
+                    newNotebookPageSize = handwriting.config.defaultPageSize
                     showingNewNotebook = true
                 } label: {
                     Image(systemName: "plus").font(.system(size: 22, weight: .bold))
@@ -538,5 +545,50 @@ private struct FolderContentsView: View {
     private func notebookSubtitle(_ notebook: NotebookManifest) -> String {
         NotableDate.parse(notebook.updatedAt)
             .map { $0.formatted(.relative(presentation: .named)) } ?? notebook.updatedAt
+    }
+}
+
+/// The New-notebook form: a title, and the paper size the notebook's pages are laid out on.
+///
+/// The size is asked for here because here is the only place it can be asked. Both apps read a
+/// page's sheet from the page file, so ink is positioned against it from the first stroke;
+/// changing it afterwards would slide every stroke on every page relative to the paper.
+private struct NewNotebookSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var title: String
+    @Binding var pageSize: PageSize
+    let create: (String, PageSize) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Title", text: $title)
+                        .accessibilityIdentifier("newNotebook.title")
+                }
+                Section {
+                    PageSizePicker(selection: $pageSize)
+                        .accessibilityIdentifier("newNotebook.pageSize")
+                } footer: {
+                    Text("Every page in this notebook is laid out on this sheet, on the iPad and "
+                        + "on the BOOX alike. It is fixed once the notebook exists, so that ink "
+                        + "never has to move relative to the paper.")
+                }
+            }
+            .navigationTitle("New notebook")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        let trimmed = title.trimmingCharacters(in: .whitespaces)
+                        create(trimmed.isEmpty ? "Untitled" : trimmed, pageSize)
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("newNotebook.create")
+                }
+            }
+        }
     }
 }
