@@ -106,7 +106,43 @@ struct CouchSettings: Equatable {
 /// Not main-actor isolated: the engine persists its state from whatever context a sync runs on,
 /// so the load/save pair has to be callable from off the main actor.
 enum CouchSyncStack {
-    static let stateFileName = ".bopa-couch-state.json"
+    /// Where this server's sync state lives. Named after the server and database, because that is
+    /// what the state describes: `lastSeq` is a position in *one* server's change feed, and the
+    /// revisions are that server's revisions.
+    ///
+    /// All of it used to live in a single file, so pointing the app at a different server — or a
+    /// different database on the same one — handed the new server the old one's checkpoint. A
+    /// foreign `since` skips changes rather than failing loudly, and stale revisions suppress real
+    /// updates as though they were this device's own echoes.
+    ///
+    /// Credentials and the device id are deliberately *not* part of the name: changing a password
+    /// does not change what is on the server, and discarding the checkpoint would mean replaying
+    /// the whole feed for nothing.
+    ///
+    /// Hashed to keep a URL's punctuation out of a file name. Anyone upgrading replays from the
+    /// start once, which is slow and correct rather than fast and wrong.
+    static func stateFileName(for settings: CouchSettings) -> String {
+        let identity = [endpointIdentity(settings.serverURL), settings.database]
+            // NUL-separated, so a value that contains the separator cannot forge a name matching a
+            // different configuration.
+            .joined(separator: "\0")
+        return ".bopa-couch-state-\(CouchAssetID.sha256Hex(Data(identity.utf8))).json"
+    }
+
+    /// The part of a server address that says *which server*, with the differences that are not
+    /// differences folded away: a trailing slash and the case of the scheme and host are how the
+    /// same endpoint gets typed twice, and re-typing it must not throw the checkpoint away.
+    /// Userinfo is dropped for the same reason the password is — it is a credential, not a place.
+    private static func endpointIdentity(_ serverURL: String) -> String {
+        let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmed) else { return trimmed }
+        components.user = nil
+        components.password = nil
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        while components.path.hasSuffix("/") { components.path.removeLast() }
+        return components.string ?? trimmed
+    }
 
     /// - Parameter onState: every sync state the engine persists, plus the one it starts from.
     ///   The state carries the rev map, which is this backend's record of what the server holds —
@@ -122,7 +158,7 @@ enum CouchSyncStack {
         let store = FileCouchStore(rootURL: rootURL, deviceID: settings.deviceID)
         store.didApplyChanges = onChange
 
-        let stateURL = rootURL.appendingPathComponent(stateFileName)
+        let stateURL = rootURL.appendingPathComponent(stateFileName(for: settings))
         let initialState = loadState(stateURL)
         onState?(initialState)
         let engine = CouchSyncEngine(

@@ -344,15 +344,15 @@ final class NotebookStoreCouchTests: XCTestCase {
     /// every launch would show the whole library as local-only until the first sync landed.
     func testTheStackReportsItsLoadedStateBeforeAnySync() throws {
         let notebook = try store.createNotebook(title: "notes")
+        let settings = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
         CouchSyncStack.save(
             CouchSyncState(
                 lastSeq: "42",
                 revs: [CouchDocID.notebook(notebook.notebookId): "1-abc"]),
-            to: rootURL.appendingPathComponent(CouchSyncStack.stateFileName))
+            to: rootURL.appendingPathComponent(CouchSyncStack.stateFileName(for: settings)))
 
-        let settings = CouchSettings(
-            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
-            password: "pw", deviceID: "ipad")
         let sink = StateSink()
         let stack = CouchSyncStack.make(
             settings: settings, rootURL: rootURL, onChange: {},
@@ -363,6 +363,55 @@ final class NotebookStoreCouchTests: XCTestCase {
         XCTAssertEqual(sink.reported.first?.lastSeq, "42")
         XCTAssertEqual(
             sink.reported.first?.revs[CouchDocID.notebook(notebook.notebookId)], "1-abc")
+    }
+
+    /// A checkpoint describes one server's change feed and one server's revisions. Kept in a single
+    /// file, it was handed to whichever endpoint the user pointed at next: a foreign `since` skips
+    /// changes instead of failing loudly, and foreign revisions suppress real updates as echoes.
+    func testEachServerAndDatabaseGetsItsOwnState() throws {
+        let first = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+        let otherDatabase = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "archive", username: "sync",
+            password: "pw", deviceID: "ipad")
+        let otherServer = CouchSettings(
+            serverURL: "http://couch.example:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+
+        let names = [first, otherDatabase, otherServer].map(CouchSyncStack.stateFileName(for:))
+        XCTAssertEqual(Set(names).count, 3, "each endpoint needs its own file")
+
+        // And the file is genuinely not read across the switch: the first server's checkpoint must
+        // not become the second's starting point.
+        CouchSyncStack.save(
+            CouchSyncState(lastSeq: "42", revs: [CouchDocID.notebook("nb1"): "1-abc"]),
+            to: rootURL.appendingPathComponent(CouchSyncStack.stateFileName(for: first)))
+
+        let sink = StateSink()
+        XCTAssertNotNil(CouchSyncStack.make(
+            settings: otherDatabase, rootURL: rootURL, onChange: {},
+            onState: { state in sink.reported.append(state) }))
+        XCTAssertEqual(sink.reported.first?.lastSeq, "0", "a new database replays from the start")
+        XCTAssertTrue(sink.reported.first?.revs.isEmpty ?? false)
+    }
+
+    /// The other half of the rule: only the *endpoint* names the file. Changing a password does not
+    /// change what is on the server, and neither does spelling the same address differently — so
+    /// none of it may throw away a checkpoint and replay the whole feed for nothing.
+    func testCredentialsDeviceIdAndUrlSpellingDoNotChangeTheStateFile() throws {
+        let settings = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+        var changed = settings
+        changed.password = "a new password"
+        changed.username = "someone else"
+        changed.deviceID = "ipad-mini"
+        changed.serverURL = "HTTP://127.0.0.1:5984/"
+
+        XCTAssertEqual(
+            CouchSyncStack.stateFileName(for: settings),
+            CouchSyncStack.stateFileName(for: changed))
     }
 }
 
