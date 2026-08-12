@@ -170,6 +170,14 @@ public protocol CouchLocalStore: Sendable {
     /// about the library, and only the store can answer it.
     func allDocumentIDs() throws -> [String]
 
+    /// Forgets a locally recorded deletion, so this device stops producing a tombstone for it.
+    ///
+    /// The one caller is §6.7's "keep them on the server": the deletion is abandoned here rather
+    /// than published, and the peer's copy returns on the next pull. It is not an "undelete" — the
+    /// notebook's files are already gone from this device — which is exactly why the resurrection
+    /// has to come from the server.
+    func forgetDeletion(_ documentID: String) throws
+
     /// `asset:<sha256>` ids a local page places but whose bytes this device does not hold — an
     /// image the peer drew in, whose blob has still to be fetched.
     ///
@@ -189,6 +197,10 @@ public extension CouchLocalStore {
     /// it only holds back the deletions themselves, a false positive costs nothing else.
     func allDocumentIDs() throws -> [String] { [] }
 
+    /// A store that keeps no deletion record of its own has nothing to forget — its tombstones are
+    /// whatever `load` reports. Leaving the outbox entry to the engine is then the whole discard.
+    func forgetDeletion(_ documentID: String) throws {}
+
     /// Writes content that is not the result of a merge — seeding a store, or landing bytes whose
     /// document nothing local can contradict. There is no snapshot to preserve content against, so
     /// the body is written as given.
@@ -205,11 +217,16 @@ public actor CouchSyncEngine {
         public var merged: [String] = []
         public var stillDirty: [String] = []
         public var failures: [String: String] = [:]
-        /// Set when the mass-deletion guard refused the run (protocol §6.6).
+        /// Set when the mass-deletion guard refused the run (protocol §6.7).
         public var blockedByDeletionGuard = false
-        /// How many notebook tombstones the guard held back — not the size of the whole queue,
-        /// which is what the warning used to report.
-        public var deletionsHeldBack = 0
+        /// *Which* notebook tombstones the guard held back — not the size of the whole queue,
+        /// which is what the warning used to report, and not merely how many.
+        ///
+        /// The ids are the point: the user's answer to the guard is `approveHeldDeletions` or
+        /// `discardHeldDeletions`, and both are set-scoped. A count would let the UI describe the
+        /// batch but not act on exactly it, which is how an approval meant for one batch ends up
+        /// applied to whatever the outbox holds by the time the tap arrives.
+        public var heldDeletions: [String] = []
 
         public init() {}
     }
@@ -238,6 +255,15 @@ public actor CouchSyncEngine {
     private var state: CouchSyncState
     private let onStateChange: (@Sendable (CouchSyncState) -> Void)?
 
+    /// Deletions the user has explicitly approved, waiting for the flush that will act on them.
+    ///
+    /// Deliberately not part of `CouchSyncState`, so it is neither persisted nor a setting: it is
+    /// one answer to one question. Set-scoped because the question was about a named batch — a
+    /// device that was wiped and then genuinely had ten notebooks deleted must ask again — and
+    /// one-shot because a flag that survived its flush would be a "stop guarding" switch that a
+    /// single tap disarmed forever.
+    private var approvedDeletions: Set<String> = []
+
     public init(
         client: CouchDBClient,
         store: CouchLocalStore,
@@ -264,22 +290,65 @@ public actor CouchSyncEngine {
         persist()
     }
 
+    // MARK: Resolving a held deletion
+
+    /// "Yes, delete these on the server too" — protocol §6.7.
+    ///
+    /// The next flush sends exactly these ids past the guard, and nothing else: the guard stays
+    /// armed for every id not named here, including ones that reach the outbox a moment later. It
+    /// is a decision about a batch someone looked at, not a setting.
+    public func approveHeldDeletions(_ documentIDs: [String]) {
+        approvedDeletions.formUnion(documentIDs)
+    }
+
+    /// "No, keep these on the server" — protocol §6.7.
+    ///
+    /// The tombstone goes away entirely: out of the outbox, and out of the store's record of
+    /// local deletions, so it is not reproduced on the next flush. **The document is still on the
+    /// server**, so the peer's copy comes back to this device on the next pull. That is the undo,
+    /// and it is the whole point of offering this rather than a plain "dismiss": a device whose
+    /// database was wiped recovers its library by declining to publish the wipe.
+    ///
+    /// Ids that are not tombstones here are ignored rather than acted on. The list comes back from
+    /// a report through a UI and an actor hop, and "forget the local deletion of X" applied to a
+    /// live document would silently drop a real edit out of the outbox.
+    public func discardHeldDeletions(_ documentIDs: [String]) {
+        for documentID in documentIDs {
+            guard (try? store.load(documentID))?.isDeleted ?? false else { continue }
+            state.dirty.remove(documentID)
+            approvedDeletions.remove(documentID)
+            try? store.forgetDeletion(documentID)
+        }
+        persist()
+    }
+
     // MARK: Push
 
     public func flush() async -> FlushReport {
         var report = FlushReport()
         var queue = orderedDirty()
 
+        // The approval is consumed here, before anything is sent, whether or not the guard turns
+        // out to trip. It is an answer to the question this flush is about to ask, and a flush that
+        // dies offline halfway through has not delivered the deletions — so the next one asks
+        // again. Asking twice about a destructive irreversible act is the safe direction to err in;
+        // carrying the answer forward until it happens to be used is not.
+        let approved = approvedDeletions
+        approvedDeletions = []
+
         // Only the deletions are held back. Blocking the whole queue meant a guard meant to
-        // question a suspicious *deletion* also stopped ordinary edits syncing — and since the
-        // confirmation it asks for does not exist yet, that was a permanent stall rather than a
-        // prompt. Drawings keep flowing; the tombstones wait.
+        // question a suspicious *deletion* also stopped ordinary edits syncing — a permanent stall
+        // rather than a prompt. Drawings keep flowing; the tombstones wait for an answer.
         if exceedsDeletionGuard(queue) {
-            let held = queue.filter { isNotebookTombstone($0) }
-            report.blockedByDeletionGuard = true
-            report.deletionsHeldBack = held.count
-            report.stillDirty = held
-            queue.removeAll { held.contains($0) }
+            let held = queue.filter { isNotebookTombstone($0) && !approved.contains($0) }
+            // An approval that covered the whole batch leaves nothing held, so there is nothing to
+            // report and nothing to ask about: the flush proceeds as if the guard had not fired.
+            if !held.isEmpty {
+                report.blockedByDeletionGuard = true
+                report.heldDeletions = held
+                report.stillDirty = held
+                queue.removeAll { held.contains($0) }
+            }
         }
 
         for (index, documentID) in queue.enumerated() {
@@ -428,7 +497,7 @@ public actor CouchSyncEngine {
         return queue.sorted { (rank($0), $0) < (rank($1), $1) }
     }
 
-    /// Protocol §6.6: a device whose local database was wiped looks exactly like a user who
+    /// Protocol §6.7: a device whose local database was wiped looks exactly like a user who
     /// deleted everything. Ten-plus notebook tombstones that are also most of what this device
     /// knows is treated as the former until a human says otherwise.
     private func isNotebookTombstone(_ documentID: String) -> Bool {

@@ -301,6 +301,13 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
         lock.withLock { conflictCopies.append(documentID) }
     }
 
+    /// A recorded deletion here *is* the stored `.deleted` body, so forgetting one drops the
+    /// document — the same shape as the real store, where clearing the deletion record is what
+    /// stops `load` answering `.deleted`.
+    func forgetDeletion(_ documentID: String) throws {
+        lock.withLock { documents[documentID] = nil }
+    }
+
     func allDocumentIDs() throws -> [String] {
         lock.withLock { documents.keys.sorted() }
     }

@@ -390,10 +390,36 @@ majority of the device's known notebooks must be refused pending explicit user
 confirmation. This protects against a wiped local database masquerading as intent.
 
 The refusal covers **only the tombstones**. The rest of the flush proceeds: a guard that questions
-a suspicious deletion has no business stopping a drawing from reaching the other device, and while
-the confirmation it asks for is unimplemented, holding the whole outbox is not a prompt but a
-permanent stall. What is reported to the user is the number of deletions held back, not the size of
-the queue.
+a suspicious deletion has no business stopping a drawing from reaching the other device, and
+holding the whole outbox is not a prompt but a permanent stall. What is reported to the user is the
+set of deletions held back — the **document ids**, not merely how many — because the two ways out
+below act on exactly that set.
+
+The held tombstones stay in the outbox and are re-offered on every flush until one of two
+explicit, one-shot, set-scoped resolutions is applied:
+
+| Resolution | Effect |
+|---|---|
+| **approve** *(ids)* | The next flush sends exactly those ids past the guard. Every id not named stays held, including ones that reach the outbox afterwards. |
+| **discard** *(ids)* | The tombstones are dropped entirely — out of the outbox and out of the store's record of local deletions — and never published. |
+
+Both are **consumed by the flush that acts on them** and neither is persisted. An approval is an
+answer to a question about one batch, not a setting: an implementation MUST NOT let it disarm the
+guard for a later batch, and MUST NOT carry it across a restart. A flush that fails before
+delivering the approved deletions therefore asks again, which is the safe direction to err in for
+an irreversible act.
+
+**Discarding resurrects from the peer, and the user must be told so before choosing.** The
+documents are still on the server, so the next pull brings them back to this device. That is the
+whole point: a device whose local database was wiped recovers its library by declining to publish
+the wipe. It also means "discard" is not "cancel" — an implementation that presents it as merely
+dismissing the prompt is presenting the wrong outcome. The two choices are surfaced with distinct
+labels naming their consequence (bopa: "Delete them on the server too" / "Keep them on the
+server"), and the status message that announces the hold names both actions and where to find them.
+
+A discard is applied only to ids that are in fact tombstones locally. The list travels through a
+report and a user interface before it comes back, and "forget the local deletion of X" applied to a
+live document would silently drop a real edit out of the outbox.
 
 ## 7. Transport
 

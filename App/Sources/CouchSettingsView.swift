@@ -42,6 +42,13 @@ struct CouchSettingsSection: View {
                     + "what decides the winner when both change the same thing at the same moment.")
         }
 
+        // Only rendered when there is something on hold, and only this subview observes the
+        // controller: the choice has to appear and disappear as the guard decides, which a
+        // one-shot read of `host` would not do.
+        if let couch = host?.couch {
+            HeldDeletionsSection(controller: couch)
+        }
+
         Section {
             Button {
                 settings.save()
@@ -80,5 +87,56 @@ struct CouchSettingsSection: View {
                     + "against a new server. After that, changes sync on their own.")
             }
         }
+    }
+}
+
+/// The mass-deletion guard's prompt (protocol §6.7).
+///
+/// The guard holds a suspiciously large batch of notebook deletions rather than publishing it,
+/// because a wiped local database looks exactly like a user who deleted everything. Only a person
+/// can tell those apart, so this is where they say which it was — and until they do, the held
+/// tombstones sit in the outbox and everything else goes on syncing.
+///
+/// Split into its own view purely to observe the controller: the section has to appear when a
+/// flush finds a batch and vanish when the choice is made.
+private struct HeldDeletionsSection: View {
+    @ObservedObject var controller: CouchSyncController
+
+    var body: some View {
+        if !controller.heldDeletions.isEmpty {
+            Section {
+                Button(role: .destructive) {
+                    Task { await controller.approveHeldDeletions() }
+                } label: {
+                    Label("Delete them on the server too", systemImage: "trash")
+                }
+                .accessibilityIdentifier("couch.deletions.approve")
+
+                Button {
+                    Task { await controller.discardHeldDeletions() }
+                } label: {
+                    Label("Keep them on the server", systemImage: "arrow.uturn.backward")
+                }
+                .accessibilityIdentifier("couch.deletions.keep")
+            } header: {
+                Text("Deletions on hold")
+            } footer: {
+                Text(explanation)
+            }
+        }
+    }
+
+    /// Both outcomes stated plainly, including the one that is easy to read as "cancel": keeping
+    /// them on the server means they come back here. That is the recovery path for a device whose
+    /// database was wiped, so the user has to know it before choosing — it is the feature, not a
+    /// side effect to be surprised by afterwards.
+    private var explanation: String {
+        let count = controller.heldDeletions.count
+        let notebooks = count == 1 ? "1 notebook" : "\(count) notebooks"
+        return "\(notebooks) deleted on this iPad — most of the library — have not been sent to "
+            + "the server yet, in case this iPad lost its notes rather than you deleting them.\n\n"
+            + "Delete them on the server too removes them from your other devices as well.\n\n"
+            + "Keep them on the server forgets the deletions on this iPad instead. Those "
+            + "notebooks are still on the server, so they come back here on the next sync."
     }
 }

@@ -37,6 +37,15 @@ final class CouchSyncControllerTests: XCTestCase {
             lock.withLock { _flushCount += 1; return _flushReport }
         }
 
+        /// The ids each answer to the mass-deletion guard carried, newest last.
+        private var _approved: [[String]] = []
+        private var _discarded: [[String]] = []
+        var approved: [[String]] { lock.withLock { _approved } }
+        var discarded: [[String]] { lock.withLock { _discarded } }
+
+        func approveDeletions(_ ids: [String]) async { lock.withLock { _approved.append(ids) } }
+        func discardDeletions(_ ids: [String]) async { lock.withLock { _discarded.append(ids) } }
+
         func pull(longpoll: Bool) async throws -> CouchSyncEngine.PullReport {
             let (error, report): (Error?, CouchSyncEngine.PullReport) = lock.withLock {
                 _pullCalls.append(longpoll)
@@ -75,7 +84,9 @@ final class CouchSyncControllerTests: XCTestCase {
             sleeper: { try await sleeper.sleep($0) },
             flush: { await engine.flush() },
             pull: { try await engine.pull(longpoll: $0) },
-            pending: { await engine.pendingCount() })
+            pending: { await engine.pendingCount() },
+            approveDeletions: { await engine.approveDeletions($0) },
+            discardDeletions: { await engine.discardDeletions($0) })
     }
 
     // MARK: Push
@@ -143,7 +154,7 @@ final class CouchSyncControllerTests: XCTestCase {
         // The deletions are what is held back; the rest of the queue went out as usual, which is
         // why the message counts these and not everything that was waiting.
         report.stillDirty = (0..<12).map { "notebook:n\($0)" }
-        report.deletionsHeldBack = 12
+        report.heldDeletions = report.stillDirty
         engine.setFlushReport(report)
 
         let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))
@@ -153,6 +164,58 @@ final class CouchSyncControllerTests: XCTestCase {
             return XCTFail("the guard should surface as a failure, got \(controller.status)")
         }
         XCTAssertTrue(message.contains("12"), "the message should name the count: \(message)")
+        // A warning about something the user cannot act on is worse than none, so the message has
+        // to name both ways out and where they are.
+        XCTAssertTrue(message.contains("Settings"), "say where the choice lives: \(message)")
+        XCTAssertTrue(message.contains("Delete them on the server too"), message)
+        XCTAssertTrue(message.contains("Keep them on the server"), message)
+        XCTAssertEqual(controller.heldDeletions, report.heldDeletions,
+                       "the settings screen answers for exactly the ids that were held")
+    }
+
+    /// Both answers are scoped to the batch that was shown. Sending "everything currently dirty"
+    /// instead would approve deletions that arrived while the user was reading the question.
+    func testAnsweringTheDeletionGuardCarriesExactlyTheHeldIDs() async {
+        let engine = EngineSpy()
+        var blocked = CouchSyncEngine.FlushReport()
+        blocked.blockedByDeletionGuard = true
+        blocked.heldDeletions = ["notebook:a", "notebook:b"]
+        blocked.stillDirty = blocked.heldDeletions
+        engine.setFlushReport(blocked)
+
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))
+        await controller.pushNow()
+
+        // Answering re-flushes, and this time the guard lets the batch through.
+        engine.setFlushReport(CouchSyncEngine.FlushReport())
+        await controller.approveHeldDeletions()
+        XCTAssertEqual(engine.approved, [["notebook:a", "notebook:b"]])
+        XCTAssertTrue(controller.heldDeletions.isEmpty, "the question is answered, so it goes away")
+        XCTAssertEqual(controller.status, .idle)
+
+        // And with nothing held, neither answer has anything to say to the engine.
+        await controller.discardHeldDeletions()
+        XCTAssertTrue(engine.discarded.isEmpty)
+    }
+
+    func testKeepingNotebooksOnTheServerDiscardsExactlyTheHeldTombstones() async {
+        let engine = EngineSpy()
+        var blocked = CouchSyncEngine.FlushReport()
+        blocked.blockedByDeletionGuard = true
+        blocked.heldDeletions = ["notebook:a", "notebook:b"]
+        blocked.stillDirty = blocked.heldDeletions
+        engine.setFlushReport(blocked)
+
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))
+        await controller.pushNow()
+
+        engine.setFlushReport(CouchSyncEngine.FlushReport())
+        await controller.discardHeldDeletions()
+
+        XCTAssertEqual(engine.discarded, [["notebook:a", "notebook:b"]])
+        XCTAssertTrue(engine.approved.isEmpty, "keeping them must not also publish them")
+        XCTAssertTrue(controller.heldDeletions.isEmpty)
+        XCTAssertEqual(controller.pendingCount, 0)
     }
 
     // MARK: Pull loop

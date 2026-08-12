@@ -547,7 +547,7 @@ final class CouchSyncEngineTests: XCTestCase {
 
         let report = await ipad.flush()
         XCTAssertTrue(report.blockedByDeletionGuard)
-        XCTAssertEqual(report.deletionsHeldBack, 12)
+        XCTAssertEqual(report.heldDeletions.sorted(), ids.sorted())
         XCTAssertTrue(report.pushed.isEmpty)
         XCTAssertTrue(server.documentIDs().isEmpty, "nothing should have reached the server")
     }
@@ -605,6 +605,85 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertEqual(report.pushed, [pageID], "the drawing should still have gone out")
         XCTAssertEqual(server.documentIDs(), [pageID])
         XCTAssertFalse(report.stillDirty.contains(pageID))
+    }
+
+    /// The guard is a question, so there has to be an answer. "Yes, delete them on the server too"
+    /// sends exactly the ids that were approved — and nothing else, because the approval is about
+    /// the batch someone looked at rather than about deletions in general.
+    func testApprovingHeldDeletionsSendsExactlyThoseOnTheNextFlush() async throws {
+        let ids = deleteTwelveNotebooks()
+        await ipad.markDirty(ids)
+
+        let held = await ipad.flush()
+        XCTAssertEqual(held.heldDeletions.sorted(), ids.sorted())
+
+        let approved = Array(ids.prefix(10))
+        await ipad.approveHeldDeletions(approved)
+        let report = await ipad.flush()
+
+        XCTAssertEqual(report.pushed.sorted(), approved.sorted())
+        XCTAssertEqual(server.documentIDs(), approved.sorted())
+        XCTAssertTrue(approved.allSatisfy { server.isDeleted($0) },
+                      "the approved ids should have gone out as tombstones")
+        // The two nobody spoke for are still on hold, in the same flush that sent the other ten.
+        XCTAssertTrue(report.blockedByDeletionGuard)
+        XCTAssertEqual(report.heldDeletions.sorted(), ids.suffix(2).sorted())
+    }
+
+    /// "Keep them on the server" is the recovery path for a device that lost its library: the
+    /// tombstones are dropped rather than published, so the server's copies survive and come back
+    /// on the next pull. Nothing is sent, and nothing is left queued to send later.
+    func testDiscardingHeldDeletionsDropsTheTombstonesWithoutSendingAnything() async throws {
+        let ids = deleteTwelveNotebooks()
+        await ipad.markDirty(ids)
+        let held = await ipad.flush()
+
+        await ipad.discardHeldDeletions(held.heldDeletions)
+
+        XCTAssertTrue(ids.allSatisfy { ipadStore.body($0) == nil },
+                      "the recorded deletions should be gone from the store")
+        let pending = await ipad.pendingCount
+        XCTAssertEqual(pending, 0, "and out of the outbox, so no later flush reproduces them")
+
+        let report = await ipad.flush()
+        XCTAssertFalse(report.blockedByDeletionGuard)
+        XCTAssertTrue(report.pushed.isEmpty)
+        XCTAssertTrue(server.documentIDs().isEmpty, "the server should still hold the notebooks")
+    }
+
+    /// One tap must not disarm the guard. An approval is consumed by the flush that acts on it and
+    /// names only the ids it was given, so the *next* suspicious batch is asked about afresh —
+    /// which is the difference between answering a question and turning a safety off.
+    func testApprovingOneBatchDoesNotApproveTheNext() async throws {
+        let first = deleteTwelveNotebooks()
+        await ipad.markDirty(first)
+        _ = await ipad.flush()
+        await ipad.approveHeldDeletions(first)
+        let sent = await ipad.flush()
+        XCTAssertEqual(sent.pushed.sorted(), first.sorted())
+        // Reaped the way a store drops a tombstone once it is published, so the second batch is
+        // measured against a library that no longer counts the first.
+        for id in first { ipadStore.remove(id) }
+
+        let second = deleteTwelveNotebooks(prefix: "later")
+        await ipad.markDirty(second)
+        let report = await ipad.flush()
+
+        XCTAssertTrue(report.blockedByDeletionGuard, "the second batch should be asked about too")
+        XCTAssertEqual(report.heldDeletions.sorted(), second.sorted())
+        XCTAssertTrue(report.pushed.isEmpty)
+        XCTAssertTrue(second.allSatisfy { !server.documentIDs().contains($0) })
+    }
+
+    /// Twelve deleted notebooks in the local store: over the guard's threshold, and the whole
+    /// library as far as this device is concerned.
+    private func deleteTwelveNotebooks(prefix: String = "nb") -> [String] {
+        (0..<12).map { index in
+            let id = CouchDocID.notebook("\(prefix)\(index)")
+            ipadStore.set(id, .deleted(CouchDeletedDoc(
+                type: CouchDocType.notebook, deletedAt: stamp(10), updatedBy: "ipad")))
+            return id
+        }
     }
 
     /// A catch-up from `0` — a fresh install, or any device whose checkpoint was lost — used to

@@ -17,6 +17,8 @@ final class CouchSyncController: ObservableObject {
     typealias Pull = @Sendable (_ longpoll: Bool) async throws -> CouchSyncEngine.PullReport
     /// How many documents are still waiting in the engine's outbox.
     typealias Pending = @Sendable () async -> Int
+    /// Answers the mass-deletion guard for a named set of tombstones — approve or discard.
+    typealias ResolveDeletions = @Sendable ([String]) async -> Void
     typealias Sleeper = @Sendable (TimeInterval) async throws -> Void
 
     enum Status: Equatable {
@@ -40,6 +42,10 @@ final class CouchSyncController: ObservableObject {
     @Published private(set) var lastSyncedAt: Date?
     /// Documents this build could not understand, materialized alongside the local copy.
     @Published private(set) var conflictCopies: [String] = []
+    /// Notebook tombstones the mass-deletion guard is holding, by document id (protocol §6.7).
+    /// Published as the ids rather than a count because the settings screen answers for exactly
+    /// this set: whatever else reaches the outbox while the user is deciding is not covered.
+    @Published private(set) var heldDeletions: [String] = []
 
     /// How long after the last edit to push. Short because a flush sends only the documents that
     /// changed — unlike the WebDAV engine, which re-sent a whole notebook and so needed 20s.
@@ -52,6 +58,8 @@ final class CouchSyncController: ObservableObject {
     private let flush: Flush
     private let pull: Pull
     private let pending: Pending
+    private let approveDeletions: ResolveDeletions
+    private let discardDeletions: ResolveDeletions
     private let sleeper: Sleeper
     private let now: @MainActor () -> Date
 
@@ -67,7 +75,9 @@ final class CouchSyncController: ObservableObject {
         sleeper: @escaping Sleeper = { try await Task.sleep(for: .seconds($0)) },
         flush: @escaping Flush,
         pull: @escaping Pull,
-        pending: @escaping Pending = { 0 }
+        pending: @escaping Pending = { 0 },
+        approveDeletions: @escaping ResolveDeletions = { _ in },
+        discardDeletions: @escaping ResolveDeletions = { _ in }
     ) {
         self.editQuietPeriod = editQuietPeriod
         self.retryFloor = retryFloor
@@ -78,6 +88,8 @@ final class CouchSyncController: ObservableObject {
         self.flush = flush
         self.pull = pull
         self.pending = pending
+        self.approveDeletions = approveDeletions
+        self.discardDeletions = discardDeletions
     }
 
     /// Wires the controller to a real engine.
@@ -91,7 +103,9 @@ final class CouchSyncController: ObservableObject {
             sleeper: sleeper,
             flush: { await engine.flush() },
             pull: { longpoll in try await engine.pull(longpoll: longpoll) },
-            pending: { await engine.pendingCount })
+            pending: { await engine.pendingCount },
+            approveDeletions: { await engine.approveHeldDeletions($0) },
+            discardDeletions: { await engine.discardHeldDeletions($0) })
     }
 
     var isRunning: Bool { pullTask != nil }
@@ -182,18 +196,51 @@ final class CouchSyncController: ObservableObject {
         status = .syncing
         let report = await flush()
         pendingCount = report.stillDirty.count
+        // Always assigned, never merged: the guard re-decides from scratch on every flush, so a
+        // set that is no longer held has been resolved — by the user, or by the deletions ceasing
+        // to be most of the library — and offering the choice again would be offering it about
+        // documents nothing is waiting on.
+        heldDeletions = report.heldDeletions
 
         if report.blockedByDeletionGuard {
-            let count = report.deletionsHeldBack
-            status = .failed(
-                "Holding back \(count) notebook deletion\(count == 1 ? "" : "s") that would remove "
-                    + "most of this library. Everything else is still syncing.")
+            status = .failed(Self.deletionGuardMessage(count: report.heldDeletions.count))
         } else if let firstFailure = report.failures.values.sorted().first {
             status = .failed(firstFailure)
         } else {
             lastSyncedAt = now()
             status = .idle
         }
+    }
+
+    /// Names both ways out and where they live. A warning about a batch the user cannot act on is
+    /// worse than none: it reads as a fault to wait through, and the wait never ends.
+    private static func deletionGuardMessage(count: Int) -> String {
+        "Holding back \(count) notebook deletion\(count == 1 ? "" : "s") that would remove most of "
+            + "this library. In Settings › Sync, choose “Delete them on the server too” or “Keep "
+            + "them on the server”. Everything else is still syncing."
+    }
+
+    // MARK: Answering the mass-deletion guard
+
+    /// "Delete them on the server too": the held batch goes out on the flush that follows, and the
+    /// guard stays armed for everything else.
+    func approveHeldDeletions() async {
+        let ids = heldDeletions
+        guard !ids.isEmpty else { return }
+        await approveDeletions(ids)
+        await pushNow()
+    }
+
+    /// "Keep them on the server": the tombstones are dropped instead of published. The notebooks
+    /// are still on the server, so they return to this iPad on the next pull — which is what makes
+    /// this the undo for a wiped device rather than merely a dismissal.
+    func discardHeldDeletions() async {
+        let ids = heldDeletions
+        guard !ids.isEmpty else { return }
+        await discardDeletions(ids)
+        // Push rather than just clearing the banner: the outbox has changed, the guard has to
+        // re-decide over what is left, and `pushNow` is the one place that reads its answer.
+        await pushNow()
     }
 
     /// One catch-up pass plus a push, for foregrounding and "Sync now" — no long poll, so it
