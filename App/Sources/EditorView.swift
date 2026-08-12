@@ -246,6 +246,9 @@ struct EditorView: View {
                     pageScroll: page?.scroll ?? 0,
                     template: pageTemplate,
                     pageSize: page?.pageSize ?? .legacyUndeclared,
+                    // The *declared* sheet, not the fallback: an undeclared page has no
+                    // agreed sheet, so there is no break to promise and none is drawn.
+                    declaredSheet: page?.declaredPageSize,
                     drawing: $drawing,
                     config: handwriting.config,
                     toolSelection: toolSelection,
@@ -501,6 +504,10 @@ struct EditorCanvasView: UIViewRepresentable {
     /// The sheet this page is laid out on, in page units — the page's own declaration, or
     /// `PageSize.legacyUndeclared` for one written before page sizes existed.
     var pageSize: PageSize = .legacyUndeclared
+    /// The sheet the page actually *declares*, or nil for one written before page sizes existed.
+    /// What the page-break hairlines are drawn at — an undeclared page has no agreed sheet, so
+    /// there is no break to promise.
+    var declaredSheet: PageSize?
     @Binding var drawing: PKDrawing
     var config = HandwritingConfig()
     /// The docked rail's choice of tool and ink. Authoritative: a tool picked anywhere
@@ -528,6 +535,7 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.accessibilityIdentifier = "editor.canvas"
         canvas.accessibilityValue = "strokes:0"
         container.pageWidth = CGFloat(pageSize.width)
+        container.sheetHeight = declaredSheet.map { CGFloat($0.height) } ?? 0
         container.setContentExtent(
             pageSize: pageSize, ink: drawing.bounds,
             minimumHeight: Self.minimumHeight(for: pageSize))
@@ -568,6 +576,7 @@ struct EditorCanvasView: UIViewRepresentable {
         // Before the reload guard below: the sheet arrives with the page, which is later than the
         // canvas was created, and on a page switch it can differ from the page just closed.
         container.setPageWidth(CGFloat(pageSize.width))
+        container.sheetHeight = declaredSheet.map { CGFloat($0.height) } ?? 0
         // Background and images may arrive/change without a page switch; both setters are
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)

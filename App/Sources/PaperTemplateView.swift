@@ -16,10 +16,28 @@ final class PaperTemplateView: UIView {
     var pageWidth: CGFloat = 1404 {
         didSet { redrawIfChanged(oldValue != pageWidth) }
     }
+
+    /// The declared sheet height, or 0 for a page that declares none. What the export splits on.
+    var sheetHeight: CGFloat = 0 {
+        didSet { redrawIfChanged(oldValue != sheetHeight) }
+    }
+
+    /// Whether to mark where an export would break the page.
+    var showsSheetBoundaries = true {
+        didSet { redrawIfChanged(oldValue != showsSheetBoundaries) }
+    }
+
     private var zoomScale: CGFloat = 1
     private var contentOffset: CGPoint = .zero
 
     private var isBlank: Bool { !template.isDrawable }
+
+    /// Whether there are breaks to draw: a page that declares a sheet, on a canvas that runs past
+    /// the bottom of it.
+    private var drawsBoundaries: Bool { showsSheetBoundaries && sheetHeight > 0 }
+
+    /// Nothing to paint at all — the one case where the view can sit out the redraw entirely.
+    private var drawsNothing: Bool { isBlank && !drawsBoundaries }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -38,17 +56,18 @@ final class PaperTemplateView: UIView {
         guard zoomScale != self.zoomScale || contentOffset != self.contentOffset else { return }
         self.zoomScale = zoomScale
         self.contentOffset = contentOffset
-        if !isBlank { setNeedsDisplay() }
+        if !drawsNothing { setNeedsDisplay() }
     }
 
     private func redrawIfChanged(_ changed: Bool) {
         guard changed else { return }
-        isHidden = isBlank
+        isHidden = drawsNothing
         setNeedsDisplay()
     }
 
     override func draw(_ rect: CGRect) {
-        guard !isBlank, pageWidth > 0, let context = UIGraphicsGetCurrentContext() else { return }
+        guard !drawsNothing, pageWidth > 0, let context = UIGraphicsGetCurrentContext()
+        else { return }
         let scale = max(zoomScale, 0.01)
         let minY = max(contentOffset.y / scale, 0)
         let maxY = (contentOffset.y + bounds.height) / scale
@@ -58,10 +77,45 @@ final class PaperTemplateView: UIView {
         // Page point -> view point, so the renderer can work purely in page coordinates.
         context.translateBy(x: -contentOffset.x, y: -contentOffset.y)
         context.scaleBy(x: scale, y: scale)
-        NativeTemplateRenderer.draw(
-            template, in: context,
-            viewport: CGRect(x: 0, y: minY, width: pageWidth, height: maxY - minY),
-            pageWidth: pageWidth)
+        if !isBlank {
+            NativeTemplateRenderer.draw(
+                template, in: context,
+                viewport: CGRect(x: 0, y: minY, width: pageWidth, height: maxY - minY),
+                pageWidth: pageWidth)
+        }
+        if drawsBoundaries {
+            drawSheetBoundaries(in: context, from: minY, to: maxY, scale: scale)
+        }
         context.restoreGState()
+    }
+
+    /// Marks where an export would cut the page.
+    ///
+    /// The canvas is continuous and the export is not: it splits at fixed sheet-height intervals.
+    /// With nothing drawn there, the user writes straight across a break without knowing one
+    /// exists — the export stays technically complete, and a diagram or a line of handwriting
+    /// comes out cut in half.
+    ///
+    /// Drawn as a hairline that stays a hairline at any zoom, and in a grey light enough to read
+    /// as paper furniture rather than as ink. It has to be quieter than anything the user could
+    /// have written, or it becomes a mark on their page instead of a fact about the paper.
+    private func drawSheetBoundaries(
+        in context: CGContext, from minY: CGFloat, to maxY: CGFloat, scale: CGFloat
+    ) {
+        let first = max(1, Int((minY / sheetHeight).rounded(.down)))
+        let last = Int((maxY / sheetHeight).rounded(.up))
+        guard last >= first else { return }
+
+        context.setStrokeColor(UIColor(white: 0.72, alpha: 1).cgColor)
+        context.setLineWidth(1 / scale)
+        context.setLineDash(phase: 0, lengths: [12 / scale, 10 / scale])
+        for index in first...last {
+            let y = CGFloat(index) * sheetHeight
+            guard y >= minY, y <= maxY else { continue }
+            context.move(to: CGPoint(x: 0, y: y))
+            context.addLine(to: CGPoint(x: pageWidth, y: y))
+        }
+        context.strokePath()
+        context.setLineDash(phase: 0, lengths: [])
     }
 }

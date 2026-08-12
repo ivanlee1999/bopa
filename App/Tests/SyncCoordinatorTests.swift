@@ -230,6 +230,10 @@ final class SyncCoordinatorTests: XCTestCase {
 
         let coordinator = SyncCoordinator(
             loadSettings: { self.configuredSettings() },
+            // Stated rather than inherited. The default reads CouchSettings.backend out of
+            // UserDefaults, which persist in the simulator between runs — so this test passed or
+            // failed according to which backend some *earlier* run happened to leave selected.
+            isSelectedBackend: { true },
             performSync: { _, rootURL, _ in
                 // Simulate the engine downloading a notebook into the local tree.
                 let now = NotableDate.format(Date())
