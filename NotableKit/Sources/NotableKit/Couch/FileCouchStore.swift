@@ -373,6 +373,16 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         deletions().keys.sorted()
     }
 
+    /// Abandons a locally-initiated deletion without publishing it — §6.7's "keep them on the
+    /// server". The record is what makes `load` answer `.deleted`, so dropping it is what stops
+    /// the tombstone being produced again on the flush after next.
+    ///
+    /// The notebook's files are already gone from disk; nothing here brings them back. The copy on
+    /// the server does, on the next pull, because this device never told it otherwise.
+    public func forgetDeletion(_ documentID: String) throws {
+        clearDeletion(documentID)
+    }
+
     private func clearDeletion(_ documentID: String) {
         var all = deletions()
         guard all.removeValue(forKey: documentID) != nil else { return }
