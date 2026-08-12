@@ -311,9 +311,16 @@ Remove the bump and an ink-only edit after a deletion no longer resurrects anyth
 destroyed by a delete it outlived, with no error anywhere.
 
 Scenario 12 of §8.1, `delete-vs-later-edit-resurrects`, pins that rule — but it exercises it with
-a *rename*, whose own `updatedAt` write would survive the change. So the vectors as they stand
-would not catch this regression. That is precisely why it is recorded here rather than left to be
-rediscovered.
+a *rename*, whose own `updatedAt` write would survive the change, so on its own it would not catch
+the regression. Scenario 23, `ink-only-edit-resurrects`, closes that hole: the peer's later edit is
+a single stroke and nothing else, so the notebook survives only by way of the bump. Remove the bump
+and that scenario fails loudly, which is the whole reason it exists.
+
+Because the bump is what the scenario turns on, the runners have to model it. A `draw` op **MUST**
+also set the owning notebook's `updatedAt`/`updatedBy` and queue it, exactly as the real save paths
+do (bopa `NotebookStore.savePage` writes the manifest; notable bumps the same timestamps). A runner
+whose `draw` writes only the page models the app less faithfully than the app behaves, and would
+report this scenario as a failure while the product is correct.
 
 Two future protocol changes could give independent scalar edits their own answer. Both are future
 work; neither is part of this version:
@@ -573,6 +580,12 @@ the `ipad` steps, notable the `boox` steps, each against one real CouchDB, with 
 content and sync state persisted between steps so an edit made now and pushed three steps later is
 genuinely an offline edit.
 
-Both defects §7 describes were found this way and are invisible to a mock: the mocks had modelled a
-`GET` of a tombstone as `200`, which no CouchDB does. When a mock disagrees with the server, fix the
-mock — the point of it is to be the server.
+There are **23 scenarios**. Both defects §7 describes were found this way and are invisible to a
+mock: the mocks had modelled a `GET` of a tombstone as `200`, which no CouchDB does. When a mock
+disagrees with the server, fix the mock — the point of it is to be the server.
+
+Two of the 23 are about the same rule and neither replaces the other. Scenario 12,
+`delete-vs-later-edit-resurrects`, is delete-vs-edit where the later edit is a **rename**; scenario
+23, `ink-only-edit-resurrects`, is the same shape where the later edit is **a stroke and nothing
+else**. The second is the one that fails if the notebook `updatedAt` bump on an ink save is ever
+removed — see §5.5, which also states the `draw` fidelity requirement both runners must meet.

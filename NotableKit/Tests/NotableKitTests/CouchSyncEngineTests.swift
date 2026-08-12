@@ -716,6 +716,53 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertTrue(second.allSatisfy { !server.documentIDs().contains($0) })
     }
 
+    /// The engine-level twin of scenario 23, `ink-only-edit-resurrects` — protocol §6.4 and §5.5.
+    ///
+    /// The peer's later edit is a stroke and nothing else. What saves the notebook is that an ink
+    /// save also bumps the owning notebook's `updatedAt`, which §6.4 reads as liveness: the
+    /// notebook was alive more recently than the deletion, so it comes back and the drawing with
+    /// it. Scenario 12 pins the same rule using a rename, whose own timestamp write would survive
+    /// the tempting removal of that bump — this one would not, which is the point of having both.
+    func testAnInkOnlyEditLaterThanADeletionResurrectsTheNotebook() async throws {
+        let notebook = CouchDocID.notebook("nbW")
+        ipadStore.set(notebook, .notebook(CouchNotebook(
+            title: "W", pageIds: ["p1"], createdAt: stamp(0), updatedAt: stamp(0),
+            updatedBy: "ipad")))
+        ipadStore.set(pageID, .page(page(strokes: [stroke("w1", at: 1, device: "ipad")],
+                                         updatedAt: 5, by: "ipad")))
+        await ipad.markDirty([notebook, pageID])
+        _ = await ipad.flush()
+        _ = try await boox.pull()
+
+        // The iPad deletes the whole notebook while the BOOX is offline.
+        ipadStore.set(notebook, .deleted(CouchDeletedDoc(
+            type: CouchDocType.notebook, deletedAt: stamp(100), updatedBy: "ipad")))
+        await ipad.markDirty([notebook])
+
+        // The BOOX draws — no rename, no metadata edit — later than the deletion. Saving ink
+        // bumps the notebook too, exactly as `NotebookStore.savePage` does in the app.
+        var drawn = booxStore.page(pageID)!
+        drawn.strokes.append(stroke("w2", at: 200, device: "boox"))
+        drawn.updatedAt = stamp(200)
+        drawn.updatedBy = "boox"
+        booxStore.set(pageID, .page(drawn))
+        var owning = booxStore.notebook(notebook)!
+        owning.updatedAt = stamp(200)
+        owning.updatedBy = "boox"
+        booxStore.set(notebook, .notebook(owning))
+        await boox.markDirty([notebook, pageID])
+        _ = await boox.flush()
+
+        _ = await ipad.flush()
+        _ = try await ipad.pull()
+
+        guard case .notebook(let survived)? = ipadStore.body(notebook) else {
+            return XCTFail("the notebook stayed deleted, taking the later drawing with it")
+        }
+        XCTAssertEqual(survived.title, "W")
+        XCTAssertEqual(ipadStore.page(pageID)?.strokes.map(\.id).sorted(), ["w1", "w2"])
+    }
+
     /// Twelve deleted notebooks in the local store: over the guard's threshold, and the whole
     /// library as far as this device is concerned.
     private func deleteTwelveNotebooks(prefix: String = "nb") -> [String] {

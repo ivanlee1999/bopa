@@ -197,6 +197,7 @@ private final class ScenarioDevice {
             page.updatedBy = deviceID
             store.set(docID(op), .page(page))
             markDirty(docID(op))
+            bumpOwningNotebook(of: page, at: at)
 
         case "erase":
             var page = try page(op)
@@ -407,6 +408,26 @@ private final class ScenarioDevice {
 
     private func markDirty(_ documentID: String) {
         if !persisted.dirty.contains(documentID) { persisted.dirty.append(documentID) }
+    }
+
+    /// Saving ink also touches the notebook that owns the page, exactly as the real save paths do
+    /// (bopa `NotebookStore.savePage` writes the manifest; notable `PageDataManager` bumps the
+    /// same timestamps). Without this the runner's `draw` was a page-only write, which made it
+    /// impossible to express in a scenario the thing §5.5 warns about: a notebook's `updatedAt`
+    /// does double duty, and it is the ink bump that resurrects a notebook the peer deleted while
+    /// this device was drawing in it. A runner that models the save less faithfully than the app
+    /// cannot pin the app's behaviour, which is the gap `ink-only-edit-resurrects` closes.
+    ///
+    /// Only a notebook this device holds *live* is bumped. Drawing into one it has already applied
+    /// a deletion for would otherwise un-delete it locally with no peer involved at all.
+    private func bumpOwningNotebook(of page: CouchPage, at: String) {
+        guard let notebookID = page.notebookId else { return }
+        let notebookDocID = CouchDocID.notebook(notebookID)
+        guard case .notebook(var notebook)? = try? store.load(notebookDocID) else { return }
+        notebook.updatedAt = at
+        notebook.updatedBy = deviceID
+        store.set(notebookDocID, .notebook(notebook))
+        markDirty(notebookDocID)
     }
 
     private func save() {

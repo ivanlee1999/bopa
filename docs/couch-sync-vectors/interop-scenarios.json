@@ -521,6 +521,33 @@
           { "op": "expectImage", "doc": "pgI", "image": "im2",
             "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" } ] }
       ]
+    },
+    {
+      "name": "ink-only-edit-resurrects",
+      "why": "A notebook deleted on one device but only DRAWN IN on the other comes back, with the stroke — protocol 6.4, and the rule 5.5 exists to protect. Scenario 12 pins the same resurrection with a rename, which writes the notebook's own updatedAt and so would survive the tempting 'fix' of dropping the notebook timestamp bump on an ink-only save. This is the case that would not survive it: no rename, no metadata edit, just a stroke later than the deletion. Remove the bump and the drawing is destroyed by a deletion it outlived, with no error anywhere.",
+      "steps": [
+        { "device": "ipad", "do": [
+          { "op": "newNotebook", "doc": "nbW", "title": "W", "pages": ["pgW"], "at": 0 },
+          { "op": "draw", "doc": "pgW", "strokes": ["w1"], "at": 5 },
+          { "op": "push" } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectStrokes", "doc": "pgW", "ids": ["w1"] } ] },
+        { "device": "ipad", "do": [
+          { "op": "delete", "doc": "nbW", "at": 100 } ] },
+        { "device": "boox", "do": [
+          { "op": "draw", "doc": "pgW", "strokes": ["w2"], "at": 200 },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
+          { "op": "push" },
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbW", "title": "W" },
+          { "op": "expectStrokes", "doc": "pgW", "ids": ["w1", "w2"] } ] },
+        { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbW", "title": "W" },
+          { "op": "expectStrokes", "doc": "pgW", "ids": ["w1", "w2"] } ] }
+      ]
     }
   ]
 }
