@@ -215,6 +215,28 @@ final class CanvasContainerView: UIView {
         updateContentGeometry()
     }
 
+    /// Applies the sheet width of the page being shown, re-fitting when it actually changes.
+    ///
+    /// Needed as its own step because the editor loads a page *after* the canvas exists: the first
+    /// layout fits whatever width was known then (the fallback), and the page's real sheet arrives
+    /// a moment later. Without re-fitting, the page would sit at the previous sheet's zoom — very
+    /// slightly wrong for an A4 page opened at the 1404 fallback, and obviously wrong for A3.
+    ///
+    /// "Actual size" is left alone, and so is a page the user has pinched off the fit: the zoom is
+    /// theirs, and only the range is widened so the new fit stays reachable.
+    func setPageWidth(_ width: CGFloat) {
+        guard width > 0, width != pageWidth else { return }
+        let wasFitted = isFitToWidth
+        pageWidth = width
+        guard laidOutWidth > 0 else { return }
+        allowZoom(fitWidthZoom)
+        if keepsFitToWidth, wasFitted {
+            canvas.zoomScale = fitWidthZoom
+            isFitToWidth = true
+        }
+        updateContentGeometry()
+    }
+
     /// The scrollable area in page units. `contentSize` is in zoomed points — the same reading
     /// `setBackground` and `applyScroll` work from — so both directions go through the zoom.
     var contentExtent: CGSize {

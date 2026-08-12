@@ -87,6 +87,12 @@ e.g. `2026-08-02T10:00:00.123Z`). Notable skips (does not fail on) entries with 
 
 ### 3.1 Page size (page units)
 
+> **Not an upstream field.** Stock Ethran/notable has no page size: it lays every page out at the
+> device's own screen width. These fields are an addition shared by bopa and the BOOX fork in
+> `~/workspace/notable`. A stock install parses with `ignoreUnknownKeys` and so ignores them
+> harmlessly, but it will keep rendering such a page at its screen width — i.e. it does not honour
+> the declared sheet.
+
 `defaultPageWidth`/`defaultPageHeight` are the sheet **new pages in this notebook** are created
 with; the authoritative geometry for laying out a given page is that page's own `pageWidth`/
 `pageHeight` (§4). Same division of labour as `defaultBackground` and `background`.

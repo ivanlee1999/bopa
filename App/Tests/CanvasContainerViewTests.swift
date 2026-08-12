@@ -299,4 +299,47 @@ final class CanvasContainerViewTests: XCTestCase {
             container.contentExtent.height, CGFloat(PageSizePreset.a3.size.height * 2),
             accuracy: 1)
     }
+
+    // MARK: - The sheet arriving after the canvas
+
+    /// The editor loads its page asynchronously, so the canvas is laid out and fitted before the
+    /// page's declared sheet is known. The sheet has to re-fit when it lands, or an A4 page would
+    /// keep the fallback's zoom — barely visible at 1404 vs 1400, and plainly wrong for A3.
+    func testASheetArrivingAfterLayoutRefitsThePage() {
+        let container = makeContainer(portrait)
+        XCTAssertEqual(container.canvas.zoomScale, fit(portrait.width), accuracy: 0.001)
+
+        let a3 = PageSizePreset.a3.size
+        container.setPageWidth(CGFloat(a3.width))
+
+        XCTAssertEqual(container.pageWidth, CGFloat(a3.width))
+        XCTAssertEqual(
+            container.canvas.zoomScale, portrait.width / CGFloat(a3.width), accuracy: 0.001)
+    }
+
+    /// …but not over the user's own zoom: a page pinched off the fit keeps the zoom it was pinched
+    /// to, and only the reachable range grows.
+    func testASheetArrivingDoesNotOverrideAPinchedZoom() {
+        let container = makeContainer(portrait)
+        container.canvas.zoomScale = 2
+        container.canvasZoomDidChange()
+
+        container.setPageWidth(CGFloat(PageSizePreset.a3.size.width))
+
+        XCTAssertEqual(container.canvas.zoomScale, 2, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(
+            container.canvas.minimumZoomScale,
+            portrait.width / CGFloat(PageSizePreset.a3.size.width))
+    }
+
+    /// "Actual size" means the zoom is the user's business, sheet changes included.
+    func testASheetArrivingLeavesActualSizeAlone() {
+        let container = makeContainer()
+        container.keepsFitToWidth = false
+        rotate(container, to: portrait)
+        XCTAssertEqual(container.canvas.zoomScale, 1, accuracy: 0.001)
+
+        container.setPageWidth(CGFloat(PageSizePreset.a3.size.width))
+        XCTAssertEqual(container.canvas.zoomScale, 1, accuracy: 0.001)
+    }
 }
