@@ -10,6 +10,7 @@ final class NotebookStoreCouchTests: XCTestCase {
     private var rootURL: URL!
     private var store: NotebookStore!
     private var changed: [[String]] = []
+    private var deleted: [[String]] = []
 
     override func setUp() async throws {
         rootURL = FileManager.default.temporaryDirectory
@@ -17,7 +18,9 @@ final class NotebookStoreCouchTests: XCTestCase {
         store = NotebookStore(rootURL: rootURL)
         store.deviceID = "ipad"
         changed = []
+        deleted = []
         store.didChangeDocuments = { [weak self] ids in self?.changed.append(ids) }
+        store.didDeleteDocuments = { [weak self] ids in self?.deleted.append(ids) }
     }
 
     override func tearDown() async throws {
@@ -280,6 +283,73 @@ final class NotebookStoreCouchTests: XCTestCase {
     func testFolderChangesAreReported() throws {
         let folder = try store.createFolder(title: "school")
         XCTAssertEqual(changed.last, [CouchDocID.folder(folder.id)])
+    }
+
+    /// `folders.json` says which folders *survive*, so the one id that most needed syncing — the
+    /// deleted one — was the only id never reported. The folder stayed live on the server and came
+    /// back on the next pull, looking for all the world like the peer had just created it.
+    func testDeletingAFolderReportsItAndRecordsATombstone() throws {
+        let folder = try store.createFolder(title: "school")
+        changed = []
+        deleted = []
+
+        try store.deleteFolder(id: folder.id)
+
+        XCTAssertEqual(deleted, [[CouchDocID.folder(folder.id)]])
+        XCTAssertTrue(
+            (changed.last ?? []).contains(CouchDocID.folder(folder.id)),
+            "the queue has to hear about the folder that went, not only the ones that stayed")
+    }
+
+    /// Wired exactly as `SyncBackendHost` wires it. The tombstone is the whole point: without one
+    /// the engine loads nothing for the id, reads that as "never created", and drops it.
+    func testTheDeletionSignalGivesTheCouchStoreATombstoneToPush() throws {
+        let couch = FileCouchStore(rootURL: rootURL, deviceID: "ipad")
+        store.didDeleteDocuments = { ids in for id in ids { couch.recordDeletion(id) } }
+        let folder = try store.createFolder(title: "school")
+
+        try store.deleteFolder(id: folder.id)
+
+        XCTAssertEqual(couch.pendingDeletionIDs(), [CouchDocID.folder(folder.id)])
+        XCTAssertTrue(try couch.load(CouchDocID.folder(folder.id))?.isDeleted ?? false)
+    }
+
+    func testDeletingANotebookRecordsATombstone() throws {
+        let manifest = try store.createNotebook(title: "notes")
+        deleted = []
+
+        try store.deleteNotebook(id: manifest.notebookId)
+
+        XCTAssertEqual(deleted, [[CouchDocID.notebook(manifest.notebookId)]])
+    }
+
+    /// The tombstone has to land between the two: after the local deletion, because a tombstone is
+    /// authoritative the moment it is written and one recorded for a deletion that threw would
+    /// publish a deletion this device never made; before the change signal, because the push that
+    /// signal starts would otherwise find nothing on disk and drop the id from the outbox.
+    func testTheTombstoneIsRecordedBeforeTheChangeIsAnnounced() throws {
+        let folder = try store.createFolder(title: "school")
+        var order: [String] = []
+        store.didDeleteDocuments = { _ in order.append("deleted") }
+        store.didChangeDocuments = { _ in order.append("changed") }
+
+        try store.deleteFolder(id: folder.id)
+
+        XCTAssertEqual(order, ["deleted", "changed"])
+    }
+
+    /// A deletion the store refused never happened, so there is nothing to publish. `FileCouchStore`
+    /// hands a recorded tombstone back in place of the live document, so writing one here would
+    /// delete the peer's copy of a folder that is still sitting in this library.
+    func testARefusedFolderDeletionRecordsNoTombstone() throws {
+        let folder = try store.createFolder(title: "school")
+        _ = try store.createNotebook(title: "notes", parentFolderId: folder.id)
+        deleted = []
+
+        XCTAssertThrowsError(try store.deleteFolder(id: folder.id))
+
+        XCTAssertTrue(deleted.isEmpty, "a folder that is still here must not be tombstoned")
+        XCTAssertEqual(store.folders.map(\.id), [folder.id])
     }
 
     /// `refresh()` is what sync itself calls after applying a change; reporting from there would
