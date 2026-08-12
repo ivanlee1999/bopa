@@ -52,6 +52,7 @@
 		F6A26EF4A3D7C39C2ECB8579 /* BareCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D3EA159F6A8667952EEF771 /* BareCanvas.swift */; };
 		F87EA93E3A4FDFDD65331287 /* SyncProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF6E3D1C4AFC7669DC53F4AE /* SyncProvenance.swift */; };
 		F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */; };
+		FA0CD3225E87C852D0FA1FD3 /* CouchAppLayerEndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85494F72E1F1F68C7031176B /* CouchAppLayerEndToEndTests.swift */; };
 		FA21BDF779D2388F37EBC05D /* SyncBackendHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F8898B646F5E5EF3397B53 /* SyncBackendHost.swift */; };
 /* End PBXBuildFile section */
 
@@ -100,6 +101,7 @@
 		7346F25A719C7EB849AE025F /* Thumbnails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Thumbnails.swift; sourceTree = "<group>"; };
 		74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasContainerViewTests.swift; sourceTree = "<group>"; };
 		760C1A94995C19FE535F60AB /* LibrarySidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySidebar.swift; sourceTree = "<group>"; };
+		85494F72E1F1F68C7031176B /* CouchAppLayerEndToEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchAppLayerEndToEndTests.swift; sourceTree = "<group>"; };
 		895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreCouchTests.swift; sourceTree = "<group>"; };
 		97F9329828F4B8B59849650D /* testEachPenRendersItsOwnInk.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = testEachPenRendersItsOwnInk.1.png; sourceTree = "<group>"; };
 		99F8898B646F5E5EF3397B53 /* SyncBackendHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBackendHost.swift; sourceTree = "<group>"; };
@@ -239,6 +241,7 @@
 			children = (
 				74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */,
 				DF0DCF11DD97B800E68436AC /* CanvasSnapshotTests.swift */,
+				85494F72E1F1F68C7031176B /* CouchAppLayerEndToEndTests.swift */,
 				65F089A838509BF507244D0C /* CouchEndToEndTests.swift */,
 				C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */,
 				B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */,
@@ -397,6 +400,7 @@
 			files = (
 				9268909E990BFF4774CFA57A /* CanvasContainerViewTests.swift in Sources */,
 				4B7D4955A3CE1C1DE4D0BEB9 /* CanvasSnapshotTests.swift in Sources */,
+				FA0CD3225E87C852D0FA1FD3 /* CouchAppLayerEndToEndTests.swift in Sources */,
 				D8C4C444C3B3A5512C710E4D /* CouchEndToEndTests.swift in Sources */,
 				02EAE8E446983D5557B4FD8B /* CouchSyncControllerTests.swift in Sources */,
 				3BF381E0797979BCF00AEE38 /* HandwritingSettingsTests.swift in Sources */,

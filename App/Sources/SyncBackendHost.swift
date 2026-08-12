@@ -23,8 +23,28 @@ final class SyncBackendHost: ObservableObject {
     private var engine: CouchSyncEngine?
     private var couchStore: FileCouchStore?
 
-    init() {
-        self.backend = CouchSettings.backend
+    /// Where the CouchDB settings come from, injected the way `SyncCoordinator` takes
+    /// `loadSettings`. The password lives in the Keychain, and the Keychain is not available to a
+    /// test host — `SecItemAdd` fails and `load` reads back nil — so a test that drove this class
+    /// through `CouchSettings.load()` would build a stack with no password and see every request
+    /// refused. That would make the real wiring untestable, which is exactly the wiring the
+    /// app-layer end-to-end tests exist to check.
+    private let loadSettings: @MainActor () -> CouchSettings
+
+    /// Which backend is selected, read the same way. Injected for the same reason and one more: a
+    /// test that instead *wrote* the real setting would leave the simulator pointed at CouchDB, and
+    /// the write outlives the run — `UserDefaults` is flushed asynchronously, so even a careful
+    /// restore in `tearDown` can be overtaken by the flush of the value it was undoing. The symptom
+    /// is an unrelated WebDAV test failing on later runs for no visible reason.
+    private let loadBackend: @MainActor () -> SyncBackend
+
+    init(
+        loadSettings: @escaping @MainActor () -> CouchSettings = CouchSettings.load,
+        loadBackend: @escaping @MainActor () -> SyncBackend = { CouchSettings.backend }
+    ) {
+        self.loadSettings = loadSettings
+        self.loadBackend = loadBackend
+        self.backend = loadBackend()
     }
 
     /// Connects the app's store and coordinator. Split from `init` because SwiftUI creates the
@@ -44,7 +64,7 @@ final class SyncBackendHost: ObservableObject {
 
     /// Rebuilds the CouchDB stack from current settings. Safe to call repeatedly.
     func configure() {
-        backend = CouchSettings.backend
+        backend = loadBackend()
         webdavConfigured = SyncSettings.isServerConfigured
         guard let store else { return }
         couch?.stop()
@@ -64,7 +84,7 @@ final class SyncBackendHost: ObservableObject {
             return
         }
 
-        let settings = CouchSettings.load()
+        let settings = loadSettings()
         store.deviceID = settings.deviceID
         guard let stack = CouchSyncStack.make(
             settings: settings, rootURL: store.rootURL,

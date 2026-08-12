@@ -387,6 +387,20 @@ above can never fire and a bodyless tombstone silently destroys work done after 
 reason, merging two tombstones keeps a known `deletedAt` in preference to an unknown one rather
 than taking the "earlier" of the two.
 
+**A parent invented for an orphan page must not outrank a tombstone.** Pages carry no tombstone of
+their own (they live and die with their notebook), so a replay from a lost checkpoint meets
+`page:<id>` documents whose notebook has since been deleted. An implementation whose storage
+requires the parent to exist before the page can be written — notable's Room schema has that
+foreign key — creates a placeholder notebook, and that placeholder is a *live* notebook document at
+the deleted notebook's id. Applied naively it wins against the incoming tombstone and the notebook
+returns from the dead, untitled and empty. Such an implementation MUST apply the rule above when
+creating the placeholder, so a deletion newer than the resurrected parent still stands.
+
+This is a requirement only where a parent is fabricated. bopa's `FileCouchStore` writes the page
+file into the notebook's directory and creates no manifest, and both its library listing and its
+document enumeration ignore a directory that has no manifest — so an orphan page is inert there,
+nothing is resurrected, and the rule has nothing to apply to.
+
 A folder deletion takes **only the folder**. Notebooks and subfolders that named it keep the
 `parentFolderId` they have — the merge does not re-home them, because rewriting a document
 nobody edited would push a change back at a peer that may still hold the folder alive. What
