@@ -57,6 +57,7 @@ final class SyncBackendHost: ObservableObject {
 
         guard backend == .couchdb else {
             store.didChangeDocuments = nil
+            store.didDeleteDocuments = nil
             // Hand the library's badges back to the WebDAV index; under any other backend the
             // CouchDB rev map is either stale or about nothing.
             store.noteRemoteDocuments(nil)
@@ -93,6 +94,7 @@ final class SyncBackendHost: ObservableObject {
             })
         else {
             store.didChangeDocuments = nil
+            store.didDeleteDocuments = nil
             store.noteRemoteDocuments(nil)
             return
         }
@@ -100,6 +102,16 @@ final class SyncBackendHost: ObservableObject {
         couchStore = stack.store
         engine = stack.engine
         couch = stack.controller
+
+        // A local deletion, recorded durably so the tombstone is pushed even if it happened
+        // offline or the app dies before the next sync. Synchronous and ahead of the change
+        // signal below, because by the time the store says a folder or notebook is gone it really
+        // is gone from disk: a push that ran first would load nothing, read that as "never
+        // created", and drop the id from the outbox — leaving the document live on the server.
+        store.didDeleteDocuments = { [weak self] documentIDs in
+            guard let couchStore = self?.couchStore else { return }
+            for documentID in documentIDs { couchStore.recordDeletion(documentID) }
+        }
 
         // Every local mutation queues exactly the documents it touched, then starts the debounce.
         store.didChangeDocuments = { [weak self] documentIDs in
@@ -186,19 +198,6 @@ final class SyncBackendHost: ObservableObject {
         guard backend == .couchdb, let engine, let couchStore else { return }
         await engine.markDirty(couchStore.allDocumentIDs())
         await couch?.pushNow()
-    }
-
-    /// Records a local deletion so a tombstone is pushed, including if it happened offline.
-    func noteDeleted(notebookId: String) {
-        couchStore?.recordDeletion(CouchDocID.notebook(notebookId))
-    }
-
-    /// A folder's deletion needs recording for the same reason a notebook's does: rewriting
-    /// `folders.json` only says which folders remain, and "absent from a list" is not something the
-    /// peer can tell apart from "not arrived yet". Without a tombstone the folder document stays
-    /// live on the server and comes back the next time either device syncs.
-    func noteDeleted(folderId: String) {
-        couchStore?.recordDeletion(CouchDocID.folder(folderId))
     }
 
     var statusDetail: String? {

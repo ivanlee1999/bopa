@@ -71,6 +71,16 @@ final class NotebookStore: ObservableObject {
     /// those rather than re-sending the library.
     var didChangeDocuments: (([String]) -> Void)?
 
+    /// Called with the CouchDB document ids a local *deletion* removed, so sync can record the
+    /// durable tombstone that makes the deletion travel. Fired from the store rather than from the
+    /// menu item that asked for it: "absent from a list" is not something the peer can tell apart
+    /// from "not arrived yet", so a call site that forgot left the document live on the server and
+    /// it came back on the next pull — which is exactly what the sidebar's delete used to do.
+    ///
+    /// Deleting through the store is now the only way to reach it, so there is nothing left to
+    /// forget.
+    var didDeleteDocuments: (([String]) -> Void)?
+
     /// `refresh()` plus the local-change signal. Every mutating method ends here; `refresh()`
     /// alone is for readers (and for sync, which must not retrigger itself).
     private func refreshAfterLocalChange(documents: [String] = []) {
@@ -303,6 +313,11 @@ final class NotebookStore: ObservableObject {
         let pageIds = readManifestFromDisk(id)?.pageIds ?? []
         try FileManager.default.removeItem(at: notebookDir(id))
         PendingDeletions.add(id, root: rootURL)
+        // Only once the files are actually gone, and before the change signal: a tombstone is
+        // authoritative the moment it is written, so recording one for a removal that threw would
+        // publish a deletion this device never made — while a push that ran before it existed
+        // would load nothing, take that for "never created", and drop the id from the outbox.
+        didDeleteDocuments?([CouchDocID.notebook(id)])
         // The pages go with it, so name them too: the engine has to stop tracking them, and a
         // page left queued would be pushed back under a notebook that no longer exists.
         refreshAfterLocalChange(
@@ -334,16 +349,23 @@ final class NotebookStore: ObservableObject {
     /// Only empty folders (no subfolders, no notebooks) may be deleted.
     func deleteFolder(id: String) throws {
         guard isFolderEmpty(id) else { throw CocoaError(.fileWriteInvalidFileName) }
-        try writeFolders(folders.filter { $0.id != id })
+        try writeFolders(folders.filter { $0.id != id }, deleting: [CouchDocID.folder(id)])
     }
 
-    private func writeFolders(_ folders: [FolderDTO]) throws {
+    /// - Parameter deleting: ids this write *removes* from the file. They have to be named
+    ///   separately because the list itself only says which folders survive, and a deleted folder
+    ///   is by definition not in it — so the one id that most needs syncing was the one id never
+    ///   reported, and the folder simply stayed on the server.
+    private func writeFolders(_ folders: [FolderDTO], deleting: [String] = []) throws {
         let file = FoldersFile(
             folders: folders.sorted { $0.id < $1.id },
             serverTimestamp: NotableDate.format(Date()))
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try encoder.encode(file).write(to: foldersURL)
-        refreshAfterLocalChange(documents: folders.map { CouchDocID.folder($0.id) })
+        // Tombstones before the change signal, for the same reason as a notebook's: the folder is
+        // already out of the file, so a push that got there first would find nothing to send.
+        if !deleting.isEmpty { didDeleteDocuments?(deleting) }
+        refreshAfterLocalChange(documents: folders.map { CouchDocID.folder($0.id) } + deleting)
     }
 
     // MARK: - Folder queries
