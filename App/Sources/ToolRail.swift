@@ -9,7 +9,7 @@ import SwiftUI
 @MainActor
 final class ToolSelection: ObservableObject {
     enum Kind: String, CaseIterable, Identifiable {
-        case pen, fountain, pencil, eraser, lasso
+        case pen, fountain, pencil, marker, eraser, lasso
 
         var id: String { rawValue }
 
@@ -18,6 +18,7 @@ final class ToolSelection: ObservableObject {
             case .pen: "Pen"
             case .fountain: "Fountain pen"
             case .pencil: "Pencil"
+            case .marker: "Highlighter"
             case .eraser: "Eraser"
             case .lasso: "Select"
             }
@@ -30,6 +31,7 @@ final class ToolSelection: ObservableObject {
             case .pen: "pencil.tip"
             case .fountain: "paintbrush.pointed"
             case .pencil: "pencil"
+            case .marker: "highlighter"
             case .eraser: "eraser"
             case .lasso: "lasso"
             }
@@ -38,17 +40,83 @@ final class ToolSelection: ObservableObject {
         /// Whether the ink swatches apply. The eraser and the lasso have no colour.
         var takesInk: Bool {
             switch self {
-            case .pen, .fountain, .pencil: true
+            case .pen, .fountain, .pencil, .marker: true
             case .eraser, .lasso: false
             }
         }
 
-        var width: CGFloat {
+        /// The nib this tool writes with at [Width.medium]; the other two scale from it.
+        ///
+        /// Per tool because they are different implements: a highlighter that came out the width
+        /// of a pen would not highlight anything.
+        var baseWidth: CGFloat {
             switch self {
             case .pen: 5
             case .fountain: 6
             case .pencil: 4
+            case .marker: 24
             case .eraser, .lasso: 0
+            }
+        }
+    }
+
+    /// How broad the nib is.
+    ///
+    /// Three steps rather than a slider: on e-ink a slider is a drag that redraws the screen, and
+    /// on glass three named widths are what people actually reach for. The rail offered one fixed
+    /// width per tool and nothing else, so writing small was impossible.
+    enum Width: String, CaseIterable, Identifiable {
+        case fine, medium, broad
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .fine: "Fine"
+            case .medium: "Medium"
+            case .broad: "Broad"
+            }
+        }
+
+        /// Applied to the tool's own [Kind.baseWidth], so each implement keeps its character.
+        var scale: CGFloat {
+            switch self {
+            case .fine: 0.5
+            case .medium: 1
+            case .broad: 2
+            }
+        }
+
+        /// The dot the rail draws for it, in points.
+        var dotSize: CGFloat {
+            switch self {
+            case .fine: 6
+            case .medium: 11
+            case .broad: 17
+            }
+        }
+    }
+
+    /// How the eraser works.
+    ///
+    /// Notable has had both since it had an eraser: rubbing out part of a stroke and taking the
+    /// whole stroke away are different intentions, and a single mode makes one of them impossible.
+    enum EraserMode: String, CaseIterable, Identifiable {
+        case pixel, stroke
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .pixel: "Rub out"
+            case .stroke: "Whole strokes"
+            }
+        }
+
+        var pkEraser: PKEraserTool {
+            switch self {
+            case .pixel: PKEraserTool(.bitmap)
+            case .stroke: PKEraserTool(.vector)
             }
         }
     }
@@ -57,10 +125,54 @@ final class ToolSelection: ObservableObject {
     @Published private(set) var inkIndex = 0
     @Published private(set) var revision = 0
 
+    /// The chosen width per tool, so switching from a broad marker back to the pen returns to the
+    /// pen you were writing with rather than to a pen as broad as the marker.
+    @Published private(set) var widths: [Kind: Width] = [:]
+    @Published private(set) var eraserMode: EraserMode = .pixel
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        for kind in Kind.allCases {
+            if let raw = defaults.string(forKey: Self.widthKey(kind)),
+               let width = Width(rawValue: raw) {
+                widths[kind] = width
+            }
+        }
+        if let raw = defaults.string(forKey: Self.eraserKey),
+           let mode = EraserMode(rawValue: raw) {
+            eraserMode = mode
+        }
+    }
+
+    private static func widthKey(_ kind: Kind) -> String { "editor.width.\(kind.rawValue)" }
+    private static let eraserKey = "editor.eraserMode"
+
     var ink: Modernist.Ink { Modernist.inks[min(inkIndex, Modernist.inks.count - 1)] }
+
+    /// The width the current tool writes at.
+    var width: Width { widths[kind] ?? .medium }
 
     func select(_ kind: Kind) {
         self.kind = kind
+        revision += 1
+    }
+
+    /// Sets the width of whichever tool is selected. A no-op for the eraser and the lasso, which
+    /// have no nib — reaching for a width while erasing means nothing rather than something odd.
+    func select(width: Width) {
+        guard kind.takesInk else { return }
+        widths[kind] = width
+        defaults.set(width.rawValue, forKey: Self.widthKey(kind))
+        revision += 1
+    }
+
+    func select(eraserMode mode: EraserMode) {
+        eraserMode = mode
+        defaults.set(mode.rawValue, forKey: Self.eraserKey)
+        // Choosing how to erase means "erase", the same way choosing an ink means "write".
+        kind = .eraser
         revision += 1
     }
 
@@ -80,6 +192,7 @@ final class ToolSelection: ObservableObject {
             case .pen: kind = .pen
             case .fountainPen: kind = .fountain
             case .pencil: kind = .pencil
+            case .marker: kind = .marker
             default: break
             }
             if let index = Modernist.inkIndex(matching: inking.color) { inkIndex = index }
@@ -91,12 +204,16 @@ final class ToolSelection: ObservableObject {
     }
 
     var pkTool: PKTool {
+        let nib = kind.baseWidth * width.scale
         switch kind {
-        case .pen: PKInkingTool(.pen, color: ink.uiColor, width: kind.width)
-        case .fountain: PKInkingTool(.fountainPen, color: ink.uiColor, width: kind.width)
-        case .pencil: PKInkingTool(.pencil, color: ink.uiColor, width: kind.width)
-        case .eraser: PKEraserTool(.bitmap)
-        case .lasso: PKLassoTool()
+        case .pen: return PKInkingTool(.pen, color: ink.uiColor, width: nib)
+        case .fountain: return PKInkingTool(.fountainPen, color: ink.uiColor, width: nib)
+        case .pencil: return PKInkingTool(.pencil, color: ink.uiColor, width: nib)
+        // The marker's own translucency is what makes it a highlighter rather than a fat pen;
+        // PencilKit applies it from the ink type, so the colour is passed at full strength.
+        case .marker: return PKInkingTool(.marker, color: ink.uiColor, width: nib)
+        case .eraser: return eraserMode.pkEraser
+        case .lasso: return PKLassoTool()
         }
     }
 }
@@ -121,6 +238,9 @@ struct ToolRail: View {
                     tools
                     ModernistRule()
                         .frame(width: hit)
+                    widthPicker
+                    ModernistRule()
+                        .frame(width: hit)
                     history
                     Spacer(minLength: 0)
                     swatches
@@ -136,6 +256,7 @@ struct ToolRail: View {
             } else {
                 HStack(spacing: 0) {
                     tools
+                    widthPicker
                     history
                     Spacer(minLength: 0)
                     inkMenu
@@ -200,6 +321,48 @@ struct ToolRail: View {
             .disabled(!undo.canRedo)
             .accessibilityLabel("Redo")
             .accessibilityIdentifier("editor.redo")
+        }
+    }
+
+    /// Three widths, as the dots they draw.
+    ///
+    /// Shown as sizes rather than named, because the thing being chosen is a size — and while the
+    /// eraser is selected it becomes the eraser's two modes instead, which is the choice that
+    /// actually applies then. The rail used to offer one fixed width per tool and no way to erase
+    /// a whole stroke.
+    @ViewBuilder
+    private var widthPicker: some View {
+        let layout = vertical
+            ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+        layout {
+            if selection.kind == .eraser {
+                ForEach(ToolSelection.EraserMode.allCases) { mode in
+                    Button {
+                        selection.select(eraserMode: mode)
+                    } label: {
+                        Image(systemName: mode == .pixel ? "eraser.line.dashed" : "scribble")
+                            .font(.system(size: 17, weight: .medium))
+                    }
+                    .buttonStyle(
+                        RailButtonStyle(selected: selection.eraserMode == mode, size: hit))
+                    .accessibilityLabel(mode.label)
+                    .accessibilityIdentifier("editor.eraserMode.\(mode.rawValue)")
+                }
+            } else {
+                ForEach(ToolSelection.Width.allCases) { width in
+                    Button {
+                        selection.select(width: width)
+                    } label: {
+                        Circle()
+                            .fill(Modernist.ink)
+                            .frame(width: width.dotSize, height: width.dotSize)
+                    }
+                    .buttonStyle(RailButtonStyle(selected: selection.width == width, size: hit))
+                    .disabled(!selection.kind.takesInk)
+                    .accessibilityLabel(width.label)
+                    .accessibilityIdentifier("editor.width.\(width.rawValue)")
+                }
+            }
         }
     }
 

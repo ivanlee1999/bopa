@@ -25,6 +25,7 @@
 		498A8102F008B5009724766B /* TrashTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644E642232F1FF6B8C96F02D /* TrashTests.swift */; };
 		4B7D4955A3CE1C1DE4D0BEB9 /* CanvasSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF0DCF11DD97B800E68436AC /* CanvasSnapshotTests.swift */; };
 		502F56C0FD5818927AD81DC5 /* Modernist.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37599E4D83A385BCE5B8170D /* Modernist.swift */; };
+		51A4216ACBCFACE585AB9335 /* ToolSelectionWidthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51F1EB6848E29DD2054222A /* ToolSelectionWidthTests.swift */; };
 		5677850903A70C8887A2C384 /* NotableKit in Frameworks */ = {isa = PBXBuildFile; productRef = EAF3412FA66289006396A938 /* NotableKit */; };
 		59E5859F8BC88EE2DF317D0D /* PaperTemplateViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE23B8F7C0FE00322785A8F /* PaperTemplateViewTests.swift */; };
 		60342E48F65F91156D26D324 /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = CB5818C77C164A55D0817E13 /* SnapshotTesting */; };
@@ -124,6 +125,7 @@
 		B340F9F70E3CA45974E8C544 /* LibrarySearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySearchTests.swift; sourceTree = "<group>"; };
 		B37AA22765996393FB323A60 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
 		B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandwritingSettingsTests.swift; sourceTree = "<group>"; };
+		B51F1EB6848E29DD2054222A /* ToolSelectionWidthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolSelectionWidthTests.swift; sourceTree = "<group>"; };
 		B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
 		BE0FF747D670DE264447CF5D /* NotebookCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookCover.swift; sourceTree = "<group>"; };
 		BE21820564A6CE54CAC908C4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -274,6 +276,7 @@
 				3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */,
 				5C708E78695B6C125620979F /* RemoteFolderPickerTests.swift */,
 				4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */,
+				B51F1EB6848E29DD2054222A /* ToolSelectionWidthTests.swift */,
 				644E642232F1FF6B8C96F02D /* TrashTests.swift */,
 				40A279AF94C3FA8A5871B415 /* __Snapshots__ */,
 			);
@@ -437,6 +440,7 @@
 				29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */,
 				8AA222EE7E1E70A50620353E /* RemoteFolderPickerTests.swift in Sources */,
 				F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */,
+				51A4216ACBCFACE585AB9335 /* ToolSelectionWidthTests.swift in Sources */,
 				498A8102F008B5009724766B /* TrashTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
