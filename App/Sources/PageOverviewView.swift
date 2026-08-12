@@ -92,7 +92,7 @@ struct PageOverviewView: View {
             }
             Button("Cancel", role: .cancel) { deletingPageId = nil }
         } message: {
-            Text("The page and everything on it is deleted here and on every device you sync "
+            Text("The page and everything on it are deleted here and on every device you sync "
                 + "with. It cannot be undone.")
         }
         .libraryActionAlert($actionError)
