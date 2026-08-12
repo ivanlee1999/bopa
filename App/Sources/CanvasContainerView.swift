@@ -43,8 +43,14 @@ final class CanvasContainerView: UIView {
     /// against the edge of the scrollable area. Small on purpose: unlike the downward slack,
     /// which is room to keep writing, this only has to make the overflow legible.
     private static let horizontalInkSlack: CGFloat = 100
+    /// Room below the lowest thing on the page — space to keep writing, not just to see the edge.
+    private static let verticalInkSlack: CGFloat = 1000
     private(set) var backgroundImage: UIImage?
     private(set) var pageImages: [PageImage] = []
+    /// The union of the page image frames, in page units, and of the background's. Kept because
+    /// the extent has to cover them and they can be installed on either side of it being set.
+    private var imageBounds: CGRect = .null
+    private var backgroundBounds: CGRect = .null
 
     /// PKCanvasView looks up its UndoManager through the responder chain, and SwiftUI's
     /// hosting controller does not supply one — which leaves the tool picker's undo/redo
@@ -186,13 +192,17 @@ final class CanvasContainerView: UIView {
         guard image !== backgroundImage else { return }
         backgroundImage = image
         backgroundImageView.image = image
-        if let image {
-            // Make sure the page is scrollable to the bottom of the background.
-            let contentHeight = pageWidth * image.size.height / image.size.width
-            if contentHeight > canvas.contentSize.height / max(canvas.zoomScale, 0.01) {
-                canvas.contentSize.height = contentHeight * canvas.zoomScale
-            }
-        }
+        // Through the same rule as ink and images, so the page is scrollable to the bottom of the
+        // background however the extent is next recomputed — a page switch used to reset the
+        // extent from the sheet and the ink alone, with nothing left saying how tall the
+        // background was.
+        backgroundBounds =
+            image.map {
+                CGRect(
+                    x: 0, y: 0, width: pageWidth,
+                    height: pageWidth * $0.size.height / $0.size.width)
+            } ?? .null
+        growContent(toCover: backgroundBounds)
         updateContentGeometry()
     }
 
@@ -212,6 +222,13 @@ final class CanvasContainerView: UIView {
             insertSubview(view, belowSubview: canvas)
             return view
         }
+        // An image can sit anywhere on the page, including well below the sheet or past its right
+        // edge — dropped there by the user, or arriving there from the BOOX. Installing the view
+        // without growing the scrollable area did not merely park it off-page: there was nothing
+        // to scroll to and no zoom that brought it back, so the image existed, rendered, and could
+        // not be reached.
+        imageBounds = images.reduce(CGRect.null) { $0.union($1.frame) }
+        growContent(toCover: imageBounds)
         updateContentGeometry()
     }
 
@@ -253,36 +270,58 @@ final class CanvasContainerView: UIView {
         }
     }
 
-    /// Sizes the scrollable area to a page: the sheet, plus whatever the ink spans beyond it.
+    /// Whether a rect can be scrolled to at all.
     ///
-    /// The width matters as much as the height. Ink can sit to the *right* of the sheet — a page
-    /// written on a BOOX whose screen is wider than this page's sheet puts it there, and a page
-    /// from before page sizes existed has no agreed sheet at all — and an area that stops at the
-    /// sheet's edge does not merely park that ink off-page, it makes it unreachable: there is
-    /// nothing to scroll to and no zoom that brings it back. So the area covers the ink even when
-    /// the ink is out of bounds, and the paper stays sheet-sized underneath it.
-    func setContentExtent(pageSize: PageSize, ink: CGRect, minimumHeight: CGFloat) {
-        var extent = CGSize(width: CGFloat(pageSize.width), height: minimumHeight)
-        // An EMPTY drawing has a null bounds whose maxX/maxY are CGFLOAT_MAX; letting that
-        // through breaks the scroll view's gesture system and permanently disables inking
-        // (found by UI-test bisect).
-        if !ink.isNull, ink.maxX.isFinite, ink.maxY.isFinite {
-            extent.width = max(extent.width, ink.maxX + Self.horizontalInkSlack)
-            extent.height = max(extent.height, ink.maxY + 1000)
+    /// An EMPTY drawing has a null bounds whose maxX/maxY are CGFLOAT_MAX; letting that through
+    /// breaks the scroll view's gesture system and permanently disables inking (found by UI-test
+    /// bisect). Page images and backgrounds go through the same gate — an unreadable image and a
+    /// half-decoded frame can produce the same nonsense.
+    private static func isReachable(_ rect: CGRect) -> Bool {
+        !rect.isNull && rect.maxX.isFinite && rect.maxY.isFinite
+    }
+
+    /// The one rule for how big the scrollable area is: the sheet, and everything the page holds
+    /// beyond it.
+    ///
+    /// The width matters as much as the height. Content can sit to the *right* of the sheet — a
+    /// page written on a BOOX whose screen is wider than this page's sheet puts it there, a page
+    /// from before page sizes existed has no agreed sheet at all, and an image can simply be
+    /// dropped past the edge — and an area that stops at the sheet's edge does not merely park
+    /// that content off-page, it makes it unreachable: there is nothing to scroll to and no zoom
+    /// that brings it back. So the area covers everything the page holds, and the paper stays
+    /// sheet-sized underneath it.
+    ///
+    /// One function because the answer has to be the same however it is reached — opening a page,
+    /// drawing a stroke, installing an image, setting a background. Sizing the extent from the
+    /// ink alone is what left images unreachable.
+    private func contentSize(
+        floor: CGSize, covering rects: [CGRect]
+    ) -> CGSize {
+        var size = floor
+        for rect in rects where Self.isReachable(rect) {
+            size.width = max(size.width, rect.maxX + Self.horizontalInkSlack)
+            size.height = max(size.height, rect.maxY + Self.verticalInkSlack)
         }
-        contentExtent = extent
+        return size
+    }
+
+    /// Sizes the scrollable area to a page. Authoritative: pages in a notebook can declare
+    /// different sheets, so opening one resets the extent rather than growing into it — which is
+    /// why the images and the background have to be part of the rule and not grown in afterwards.
+    func setContentExtent(pageSize: PageSize, ink: CGRect, minimumHeight: CGFloat) {
+        contentExtent = contentSize(
+            floor: CGSize(width: CGFloat(pageSize.width), height: minimumHeight),
+            covering: [ink, imageBounds, backgroundBounds])
         updateContentGeometry()
     }
 
-    /// Grows the scrollable area to keep covering a drawing that is being added to. Grow-only:
-    /// the extent a page opened with is a floor, so writing near an edge never yanks the
-    /// scroll position around.
-    func growContent(toCover ink: CGRect) {
-        guard !ink.isNull, ink.maxX.isFinite, ink.maxY.isFinite else { return }
+    /// Grows the scrollable area to keep covering content that is being added to. Grow-only: the
+    /// extent a page opened with is a floor, so writing near an edge never yanks the scroll
+    /// position around.
+    func growContent(toCover rect: CGRect) {
+        guard Self.isReachable(rect) else { return }
         let current = contentExtent
-        let needed = CGSize(
-            width: max(current.width, ink.maxX + Self.horizontalInkSlack),
-            height: max(current.height, ink.maxY + 1000))
+        let needed = contentSize(floor: current, covering: [rect])
         guard needed != current else { return }
         contentExtent = needed
         updateContentGeometry()
