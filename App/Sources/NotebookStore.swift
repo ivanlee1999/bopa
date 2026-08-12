@@ -20,9 +20,16 @@ final class NotebookStore: ObservableObject {
 
     @Published private(set) var notebooks: [NotebookManifest] = []
     @Published private(set) var folders: [FolderDTO] = []
-    /// What the server held at the end of the last sync; nil until this library has
+    /// What the WebDAV server held at the end of the last sync; nil until this library has
     /// synced at least once. Read-only here — only the sync engine writes it.
     @Published private(set) var remoteIndex: RemoteIndex?
+
+    /// The same fact under CouchDB: the ids of the documents the server has a revision for. That
+    /// backend writes no `RemoteIndex` — its equivalent record is the rev map in the sync state —
+    /// so it is handed in here instead. Nil unless CouchDB is the selected backend, which is what
+    /// stops a `RemoteIndex` left behind by earlier WebDAV use from answering for a library that
+    /// no longer syncs that way, and vice versa.
+    @Published private(set) var remoteDocumentIDs: Set<String>?
 
     let rootURL: URL
 
@@ -433,18 +440,36 @@ final class NotebookStore: ObservableObject {
 
     // MARK: - Sync provenance
 
-    /// Whether a notebook exists on the WebDAV server as of the last completed sync.
+    /// Records what CouchDB holds, as of the last state the engine persisted — a flush that got a
+    /// revision back, or a pull that applied one. Nil turns the CouchDB answer off, for when that
+    /// backend is not the one running.
+    ///
+    /// Assigning only on a real change matters: the state is persisted on every local edit, and
+    /// republishing an identical set would redraw the whole library each time someone writes.
+    func noteRemoteDocuments(_ documentIDs: Set<String>?) {
+        guard remoteDocumentIDs != documentIDs else { return }
+        remoteDocumentIDs = documentIDs
+    }
+
+    /// Whether a notebook exists on the server as of the last completed sync.
     func provenance(ofNotebook id: String) -> SyncProvenance {
+        if let remoteDocumentIDs {
+            return remoteDocumentIDs.contains(CouchDocID.notebook(id)) ? .onServer : .localOnly
+        }
         guard let remoteIndex else { return .unknown }
         return remoteIndex.hasNotebook(id) ? .onServer : .localOnly
     }
 
-    /// Whether a folder appears in the server's `folders.json` as of the last sync.
+    /// Whether a folder is on the server — in its `folders.json` under WebDAV, or holding a
+    /// revision under CouchDB — as of the last sync.
     func provenance(ofFolder id: String) -> SyncProvenance {
+        if let remoteDocumentIDs {
+            return remoteDocumentIDs.contains(CouchDocID.folder(id)) ? .onServer : .localOnly
+        }
         guard let remoteIndex else { return .unknown }
         return remoteIndex.hasFolder(id) ? .onServer : .localOnly
     }
 
-    /// True once a sync has recorded a remote index — the cue for showing badges at all.
-    var hasSyncedAtLeastOnce: Bool { remoteIndex != nil }
+    /// True once a backend can say where things live — the cue for showing badges at all.
+    var hasSyncedAtLeastOnce: Bool { remoteDocumentIDs != nil || remoteIndex != nil }
 }

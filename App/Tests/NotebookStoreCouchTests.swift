@@ -290,4 +290,84 @@ final class NotebookStoreCouchTests: XCTestCase {
         store.refresh()
         XCTAssertTrue(changed.isEmpty)
     }
+
+    // MARK: Provenance under CouchDB
+
+    /// The bug: CouchDB writes no `RemoteIndex`, so every cover kept the "local only" arrow no
+    /// matter how many times the notebook had been pushed. The rev map is this backend's record
+    /// of what the server holds, and it has to outrank an index left over from WebDAV use.
+    func testProvenanceUnderCouchComesFromTheRevMap() throws {
+        let synced = try store.createNotebook(title: "synced")
+        let fresh = try store.createNotebook(title: "fresh")
+        let syncedFolder = try store.createFolder(title: "school")
+        let freshFolder = try store.createFolder(title: "new")
+
+        // An index from back when this library synced over WebDAV, naming none of them.
+        try RemoteIndex(
+            notebookIds: [], folderIds: [], syncedAt: NotableDate.format(Date()))
+            .save(root: rootURL)
+        store.refresh()
+
+        store.noteRemoteDocuments([
+            CouchDocID.notebook(synced.notebookId), CouchDocID.folder(syncedFolder.id),
+        ])
+
+        XCTAssertTrue(store.hasSyncedAtLeastOnce)
+        XCTAssertEqual(store.provenance(ofNotebook: synced.notebookId), .onServer)
+        XCTAssertEqual(store.provenance(ofNotebook: fresh.notebookId), .localOnly)
+        XCTAssertEqual(store.provenance(ofFolder: syncedFolder.id), .onServer)
+        XCTAssertEqual(store.provenance(ofFolder: freshFolder.id), .localOnly)
+
+        // `refresh()` reloads the WebDAV index; it must not take the answer back.
+        store.refresh()
+        XCTAssertEqual(store.provenance(ofNotebook: synced.notebookId), .onServer)
+    }
+
+    /// Switching off CouchDB hands the badges back to the WebDAV index rather than leaving them
+    /// on a rev map that no longer describes where anything is.
+    func testClearingTheRevMapReturnsTheAnswerToTheWebDAVIndex() throws {
+        let notebook = try store.createNotebook(title: "notes")
+        try RemoteIndex(
+            notebookIds: [notebook.notebookId], folderIds: [],
+            syncedAt: NotableDate.format(Date()))
+            .save(root: rootURL)
+        store.refresh()
+
+        store.noteRemoteDocuments([])
+        XCTAssertEqual(store.provenance(ofNotebook: notebook.notebookId), .localOnly)
+
+        store.noteRemoteDocuments(nil)
+        XCTAssertEqual(store.provenance(ofNotebook: notebook.notebookId), .onServer)
+    }
+
+    /// The stack reports the state it loaded, not only the ones it goes on to write — otherwise
+    /// every launch would show the whole library as local-only until the first sync landed.
+    func testTheStackReportsItsLoadedStateBeforeAnySync() throws {
+        let notebook = try store.createNotebook(title: "notes")
+        CouchSyncStack.save(
+            CouchSyncState(
+                lastSeq: "42",
+                revs: [CouchDocID.notebook(notebook.notebookId): "1-abc"]),
+            to: rootURL.appendingPathComponent(CouchSyncStack.stateFileName))
+
+        let settings = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+        let sink = StateSink()
+        let stack = CouchSyncStack.make(
+            settings: settings, rootURL: rootURL, onChange: {},
+            onState: { state in sink.reported.append(state) })
+
+        XCTAssertNotNil(stack)
+        XCTAssertEqual(sink.reported.count, 1)
+        XCTAssertEqual(sink.reported.first?.lastSeq, "42")
+        XCTAssertEqual(
+            sink.reported.first?.revs[CouchDocID.notebook(notebook.notebookId)], "1-abc")
+    }
+}
+
+/// Collects what the stack reports. A class because the callback is `@Sendable`, and the test
+/// only ever reads it after the synchronous call that filled it.
+private final class StateSink: @unchecked Sendable {
+    var reported: [CouchSyncState] = []
 }

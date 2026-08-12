@@ -57,6 +57,9 @@ final class SyncBackendHost: ObservableObject {
 
         guard backend == .couchdb else {
             store.didChangeDocuments = nil
+            // Hand the library's badges back to the WebDAV index; under any other backend the
+            // CouchDB rev map is either stale or about nothing.
+            store.noteRemoteDocuments(nil)
             return
         }
 
@@ -73,9 +76,20 @@ final class SyncBackendHost: ObservableObject {
                     NotificationCenter.default.post(
                         name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
                 }
+            },
+            onState: { [weak store] state in
+                // Only the two kinds a badge asks about. Keeping pages and assets out holds this
+                // to one entry per library item instead of one per drawn page.
+                let onServer = Set(
+                    state.revs.keys.filter { id in
+                        guard let type = CouchDocID.split(id)?.type else { return false }
+                        return type == CouchDocType.notebook || type == CouchDocType.folder
+                    })
+                Task { @MainActor in store?.noteRemoteDocuments(onServer) }
             })
         else {
             store.didChangeDocuments = nil
+            store.noteRemoteDocuments(nil)
             return
         }
 
