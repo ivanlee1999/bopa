@@ -80,11 +80,15 @@ final class SyncBackendHost: ObservableObject {
             onState: { [weak store] state in
                 // Only the two kinds a badge asks about. Keeping pages and assets out holds this
                 // to one entry per library item instead of one per drawn page.
+                //
+                // Matched on the prefix rather than by splitting each id: this runs over every
+                // revision the device knows, on every state the engine persists, and splitting
+                // would allocate two strings per page and per image to answer a question about
+                // the first word.
+                let notebooks = "\(CouchDocType.notebook):"
+                let folders = "\(CouchDocType.folder):"
                 let onServer = Set(
-                    state.revs.keys.filter { id in
-                        guard let type = CouchDocID.split(id)?.type else { return false }
-                        return type == CouchDocType.notebook || type == CouchDocType.folder
-                    })
+                    state.revs.keys.filter { $0.hasPrefix(notebooks) || $0.hasPrefix(folders) })
                 Task { @MainActor in store?.noteRemoteDocuments(onServer) }
             })
         else {
