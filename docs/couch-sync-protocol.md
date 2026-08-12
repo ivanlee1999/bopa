@@ -287,6 +287,44 @@ learned the field would otherwise un-declare the size by merely writing last, si
 every page it touched. The dimensions are also in `scalarKey` (§4): the merge picks them, so
 omitting them there would make both argument orders "win" and cost commutativity.
 
+### 5.5 Scalar metadata is last-writer-wins over the whole envelope
+
+Collections merge; independent scalar fields do not. `pick(a, b)` chooses **one complete scalar
+envelope** per document — every field listed in `scalarKey` (§4) travels together, decided by
+`(millis(updatedAt), updatedBy, scalarKey)`. The loser's scalar values are all discarded, including
+the ones the winner never touched. This is the normative behaviour, deliberately, and not an
+accident of the tiebreak.
+
+**The known consequence.** The BOOX renames a notebook while offline. The iPad, still carrying the
+old title, later draws in it; saving a page also bumps that notebook's `updatedAt`. The iPad's
+envelope is therefore newer, it wins, and the rename is lost — even though the ink merged
+perfectly, which is what makes it hard to notice. The same shape applies to a page's title against
+its background, and a folder's title against a move to a new parent.
+
+**Do not "fix" this by dropping the notebook `updatedAt` bump on an ink-only save.** That is the
+obvious mitigation — bopa bumps it in `NotebookStore.savePage`, notable in
+`PageDataManager.bumpEditTimestamps` — and it would indeed stop an ink save from beating a
+concurrent rename. It also breaks something worse, silently: a notebook's `updatedAt` does double
+duty. §6.4 reads it as *liveness* — "this notebook was alive more recently than your deletion" —
+so it is also what resurrects a notebook the peer deleted while this device was drawing in it.
+Remove the bump and an ink-only edit after a deletion no longer resurrects anything: the work is
+destroyed by a delete it outlived, with no error anywhere.
+
+Scenario 12 of §8.1, `delete-vs-later-edit-resurrects`, pins that rule — but it exercises it with
+a *rename*, whose own `updatedAt` write would survive the change. So the vectors as they stand
+would not catch this regression. That is precisely why it is recorded here rather than left to be
+rediscovered.
+
+Two future protocol changes could give independent scalar edits their own answer. Both are future
+work; neither is part of this version:
+
+- **(a) Split the two roles.** Add a separate liveness timestamp used only by §6.4, leaving
+  `updatedAt` to mean "when these scalars were written". Additive, but still a schema and protocol
+  change requiring both apps and the shared vectors to move together.
+- **(b) Per-field version information or operation records.** The only thing that genuinely
+  preserves independent concurrent scalar edits. Changing the total-order tiebreak does not:
+  whatever the tiebreak, one whole envelope still wins.
+
 ## 6. Conflict rules beyond field merging
 
 ### 6.1 Local-vs-remote on push (`409`)
