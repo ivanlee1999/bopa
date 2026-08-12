@@ -94,7 +94,11 @@ struct CouchSettings: Equatable {
                 baseURL: url,
                 username: username.isEmpty ? nil : username,
                 password: password.isEmpty ? nil : password),
-            database: database)
+            database: database,
+            // One monitor per client, so the observation is per server: pointing the app at a
+            // different CouchDB asks the question again rather than carrying an answer about
+            // someone else's clock.
+            clockSkew: ClockSkewMonitor())
     }
 }
 

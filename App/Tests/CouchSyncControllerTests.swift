@@ -218,6 +218,36 @@ final class CouchSyncControllerTests: XCTestCase {
         XCTAssertEqual(controller.pendingCount, 0)
     }
 
+    /// A wrong clock is not a sync failure — everything pushes as usual — but it changes which
+    /// version of a page wins a merge, so it has to be said out loud alongside whatever else the
+    /// status is reporting.
+    func testAClockSkewWarningRidesAlongsideTheStatusWithoutFailingTheSync() async {
+        let engine = EngineSpy()
+        var report = CouchSyncEngine.FlushReport()
+        report.pushed = ["page:a"]
+        report.clockSkew = ClockSkew(seconds: 3_600)
+        engine.setFlushReport(report)
+
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))
+        await controller.pushNow()
+
+        XCTAssertEqual(controller.status, .idle, "skew is advisory, not a failure")
+        XCTAssertEqual(controller.clockSkew?.seconds, 3_600)
+        guard let detail = controller.statusDetail else {
+            return XCTFail("the warning should reach the status line")
+        }
+        XCTAssertTrue(detail.contains("ahead of"), detail)
+
+        // And it clears when the clocks agree again, rather than sitting there until a restart.
+        engine.setFlushReport({
+            var healthy = CouchSyncEngine.FlushReport()
+            healthy.pushed = ["page:b"]
+            return healthy
+        }())
+        await controller.pushNow()
+        XCTAssertNil(controller.clockSkew)
+    }
+
     // MARK: Pull loop
 
     /// The first pull must not be a long poll: a long poll only reports what happens after it

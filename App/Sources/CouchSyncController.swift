@@ -1,6 +1,7 @@
 import Foundation
 import NotableKit
 import SwiftUI
+import os
 
 /// Drives CouchDB sync for the app: a debounced push after writing stops, and a change-feed
 /// loop that keeps the library current while bopa is in the foreground.
@@ -42,6 +43,10 @@ final class CouchSyncController: ObservableObject {
     @Published private(set) var lastSyncedAt: Date?
     /// Documents this build could not understand, materialized alongside the local copy.
     @Published private(set) var conflictCopies: [String] = []
+    /// The last significant disagreement between this iPad's clock and the server's (protocol §7),
+    /// or nil. A warning, never a failure: sync runs normally throughout, and the message exists
+    /// because a wrong clock changes *which version wins* a merge without anything looking broken.
+    @Published private(set) var clockSkew: ClockSkew?
     /// Notebook tombstones the mass-deletion guard is holding, by document id (protocol §6.7).
     /// Published as the ids rather than a count because the settings screen answers for exactly
     /// this set: whatever else reaches the outbox while the user is deciding is not covered.
@@ -65,6 +70,8 @@ final class CouchSyncController: ObservableObject {
 
     private var pullTask: Task<Void, Never>?
     private var pushTask: Task<Void, Never>?
+
+    private static let log = Logger(subsystem: "dev.ivan.bopa", category: "couch-sync")
 
     init(
         editQuietPeriod: TimeInterval = 3,
@@ -196,6 +203,7 @@ final class CouchSyncController: ObservableObject {
         status = .syncing
         let report = await flush()
         pendingCount = report.stillDirty.count
+        noteClockSkew(report.clockSkew)
         // Always assigned, never merged: the guard re-decides from scratch on every flush, so a
         // set that is no longer held has been resolved — by the user, or by the deletions ceasing
         // to be most of the library — and offering the choice again would be offering it about
@@ -257,6 +265,7 @@ final class CouchSyncController: ObservableObject {
     }
 
     private func apply(_ report: CouchSyncEngine.PullReport) {
+        noteClockSkew(report.clockSkew)
         if !report.applied.isEmpty { lastSyncedAt = now() }
         if !report.conflictCopies.isEmpty {
             conflictCopies.append(contentsOf: report.conflictCopies)
@@ -264,6 +273,22 @@ final class CouchSyncController: ObservableObject {
         // A pull that returned at all clears any previous failure: the server is demonstrably
         // reachable again, whether or not it had anything to say.
         status = .idle
+    }
+
+    /// Records a skew observation and logs the transitions.
+    ///
+    /// Only when it changes: the pull loop runs a request every few seconds, and a warning
+    /// repeated on every lap buries the one line that matters. Clearing is logged too — that is
+    /// the message saying the clock was fixed.
+    private func noteClockSkew(_ skew: ClockSkew?) {
+        guard skew != clockSkew else { return }
+        clockSkew = skew
+        if let skew {
+            Self.log.warning(
+                "Clock skew \(Int(skew.seconds))s vs server: \(skew.summary, privacy: .public)")
+        } else {
+            Self.log.notice("Clock skew back within tolerance")
+        }
     }
 
     private static func describe(_ error: Error) -> String {
@@ -280,7 +305,20 @@ final class CouchSyncController: ObservableObject {
     }
 
     /// One-line status for the settings footer and the capsule.
+    ///
+    /// A skew warning rides along with whatever else is being said rather than replacing it: the
+    /// sync is not failing, and the clock is not the reason anything is queued. It is the sentence
+    /// that explains why the wrong version of a page may have won.
     var statusDetail: String? {
+        switch (syncDetail, clockSkew?.summary) {
+        case (let detail?, let warning?): return "\(detail) \(warning)"
+        case (let detail?, nil): return detail
+        case (nil, let warning?): return warning
+        case (nil, nil): return nil
+        }
+    }
+
+    private var syncDetail: String? {
         switch status {
         case .syncing:
             return "Syncing…"

@@ -11,10 +11,17 @@ import Foundation
 public struct CouchDBClient: Sendable {
     public let transport: HTTPTransport
     public let database: String
+    /// Watches every response's `Date` header for a clock this device and the server disagree
+    /// about (§7). Optional because it is advisory: a client without one syncs identically.
+    public let clockSkew: ClockSkewMonitor?
 
-    public init(transport: HTTPTransport, database: String = "notes") {
+    public init(
+        transport: HTTPTransport, database: String = "notes",
+        clockSkew: ClockSkewMonitor? = nil
+    ) {
         self.transport = transport
         self.database = database
+        self.clockSkew = clockSkew
     }
 
     private func path(_ suffix: String) -> String { "/\(database)/\(suffix)" }
@@ -240,7 +247,16 @@ public struct CouchDBClient: Sendable {
 
     private func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         do {
-            return try await transport.send(request)
+            let response = try await transport.send(request)
+            // Read from every response that came back at all, whatever its status: a 404 or a 409
+            // is still the server telling this device what time it thinks it is. Measured here,
+            // the moment the response lands, because the interval being computed is exactly
+            // "local now minus the instant the server stamped".
+            //
+            // A request that *threw* is skipped: there is no response, and an offline device has
+            // nothing to compare against.
+            await clockSkew?.observe(response, receivedAt: Date())
+            return response
         } catch let error as CouchError {
             throw error
         } catch {
