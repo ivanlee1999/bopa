@@ -5,22 +5,28 @@ import XCTest
 
 /// The Trash: staging, restoring, and the one path that actually deletes.
 ///
-/// The behaviour under test is the two-step rule. Staging must publish nothing — a trashed
-/// notebook is still on the server and still on the BOOX, which is what makes restoring mean
-/// anything — and purging must never publish a deletion whose local half did not happen.
+/// The behaviour under test is the two-step rule. Staging destroys nothing — a trashed notebook's
+/// files stay, and it goes on syncing, which is what makes restoring mean anything — but it is
+/// *published*, because the Trash is a state of the notebook and deleting has to mean the same
+/// thing on the BOOX as here. Purging is the step that publishes a deletion, and it must never
+/// publish one whose local half did not happen.
 @MainActor
 final class TrashTests: XCTestCase {
     private var rootURL: URL!
     private var store: NotebookStore!
     /// Every document id the store asked to have tombstoned, in order.
     private var tombstoned: [String] = []
+    /// Every document id the store queued for push, in order.
+    private var changed: [String] = []
 
     override func setUp() async throws {
         rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("bopa-trash-test-\(UUID().uuidString)")
         store = NotebookStore(rootURL: rootURL)
         tombstoned = []
+        changed = []
         store.didDeleteDocuments = { [weak self] ids in self?.tombstoned.append(contentsOf: ids) }
+        store.didChangeDocuments = { [weak self] ids in self?.changed.append(contentsOf: ids) }
     }
 
     override func tearDown() async throws {
@@ -29,7 +35,7 @@ final class TrashTests: XCTestCase {
 
     // MARK: Staging
 
-    func testTrashingANotebookHidesItWithoutDeletingOrPublishing() throws {
+    func testTrashingANotebookHidesItWithoutDeletingIt() throws {
         let notebook = try store.createNotebook(title: "Draft")
 
         try store.trashNotebook(id: notebook.notebookId)
@@ -40,8 +46,46 @@ final class TrashTests: XCTestCase {
             FileManager.default.fileExists(
                 atPath: rootURL.appendingPathComponent("notebooks/\(notebook.notebookId)").path),
             "the files stay, so sync keeps holding the notebook up")
-        XCTAssertEqual(tombstoned, [], "nothing is published until it is purged")
+        XCTAssertEqual(tombstoned, [], "nothing is deleted until it is purged")
         XCTAssertEqual(PendingDeletions.load(root: rootURL), [])
+    }
+
+    /// Trashing has to reach the other device, and it travels as an ordinary edit to the notebook
+    /// document — so the document has to be queued, and it has to carry a timestamp newer than the
+    /// copy the peer still thinks is live, or §5.5 can decide the tie the wrong way.
+    func testTrashingANotebookPublishesItWithAFreshTimestamp() throws {
+        let notebook = try store.createNotebook(title: "Draft")
+        let before = store.manifest(id: notebook.notebookId)!.updatedAt
+        changed = []
+
+        try store.trashNotebook(id: notebook.notebookId)
+
+        XCTAssertEqual(changed, [CouchDocID.notebook(notebook.notebookId)])
+        let after = store.manifest(id: notebook.notebookId)!
+        XCTAssertGreaterThanOrEqual(after.updatedAt, before)
+        XCTAssertEqual(after.updatedBy, store.deviceID, "this device made the change")
+    }
+
+    func testTrashingAFolderPublishesTheFolder() throws {
+        let folder = try store.createFolder(title: "Term 1")
+        changed = []
+
+        try store.trashFolder(id: folder.id)
+
+        XCTAssertTrue(changed.contains(CouchDocID.folder(folder.id)))
+    }
+
+    /// A restore is a second published edit, not a local un-hiding: the peer is holding a trashed
+    /// copy and only a newer write takes it back out of its Trash too.
+    func testRestoringPublishesTheNotebookAgain() throws {
+        let notebook = try store.createNotebook(title: "Draft")
+        try store.trashNotebook(id: notebook.notebookId)
+        changed = []
+
+        try store.restoreNotebook(id: notebook.notebookId)
+
+        XCTAssertEqual(changed, [CouchDocID.notebook(notebook.notebookId)])
+        XCTAssertTrue(store.trashedNotebooks.isEmpty)
     }
 
     /// The notebooks inside a trashed folder must not pop up at the root. The root adopts

@@ -12,19 +12,22 @@ public struct TrashedItem: Codable, Equatable, Sendable {
     }
 }
 
-/// The notebooks and folders staged for deletion on this device, persisted at
-/// `<root>/.bopa-trash.json`.
+/// The notebooks and folders staged for deletion, persisted at `<root>/.bopa-trash.json`.
 ///
-/// A dotfile, like `.bopa-sync-state.json` and `.bopa-pending-deletions.json`, and for the same
-/// reason: it is this device's private bookkeeping and is never uploaded. That is the whole design
-/// of the Trash — a trashed notebook's directory stays exactly where it was and keeps syncing,
-/// because it has not been deleted anywhere yet. A peer that still holds it is not wrong, and
-/// restoring is one line leaving this file rather than a second set of files to move back.
+/// The file is local, but what it records is **not**: the Trash is a state of the document, and it
+/// travels as the `deletedAt` field of the `notebook`/`folder` document (protocol §3.1, §3.2). So
+/// throwing something away on the BOOX empties it out of the library here too, and restoring it
+/// from either device brings it back on both. `FileCouchStore` is what keeps this file and that
+/// field in step, in each direction.
+///
+/// It stays a dotfile beside `.bopa-sync-state.json` rather than a column in the manifest because
+/// the manifest is also the WebDAV wire format, which has no `deletedAt` and must not grow one.
 ///
 /// It is deliberately *not* a staging directory. Moving `notebooks/<id>/` aside would take the
 /// notebook out of what sync enumerates, which reads as "this device dropped it" — and the very
 /// next pull would download the server's copy straight back, out of the Trash and into the
-/// library. Deletion only becomes a fact for peers on purge, where a tombstone is written.
+/// library. A trashed notebook keeps syncing, ink and all; only emptying the Trash deletes it,
+/// which writes the tombstone §6.4 describes.
 ///
 /// The twin of Notable's `Folder.deletedAt` / `Notebook.deletedAt` columns.
 public enum LocalTrash {
@@ -95,6 +98,27 @@ public enum LocalTrash {
     public static func removeFolder(_ id: String, root: URL) throws {
         var contents = load(root: root)
         contents.folders.removeAll { $0.id == id }
+        try save(contents, root: root)
+    }
+
+    /// Put a notebook in the Trash, or take it out, at a stamp decided elsewhere — the merge,
+    /// rather than this device. Nil is "in the library".
+    ///
+    /// The stamp is written verbatim instead of being re-taken from the clock: it is the peer's
+    /// `deletedAt`, and re-stamping it here would make the two devices disagree about when the
+    /// notebook was thrown away — which is the value §5.5 compares to decide who wins next.
+    public static func setNotebook(_ id: String, deletedAt: String?, root: URL) throws {
+        var contents = load(root: root)
+        contents.notebooks.removeAll { $0.id == id }
+        if let deletedAt { contents.notebooks.append(TrashedItem(id: id, deletedAt: deletedAt)) }
+        try save(contents, root: root)
+    }
+
+    /// The folder twin of `setNotebook`.
+    public static func setFolder(_ id: String, deletedAt: String?, root: URL) throws {
+        var contents = load(root: root)
+        contents.folders.removeAll { $0.id == id }
+        if let deletedAt { contents.folders.append(TrashedItem(id: id, deletedAt: deletedAt)) }
         try save(contents, root: root)
     }
 

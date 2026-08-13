@@ -439,7 +439,8 @@ final class NotebookStore: ObservableObject {
 
     // MARK: - Trash
 
-    /// What is staged for deletion on this device. Local-only; see `LocalTrash`.
+    /// What is staged for deletion. Synced, not local: an item the BOOX throws away lands here
+    /// too, and one restored anywhere comes back everywhere. See `LocalTrash`.
     @Published private(set) var trash = LocalTrash.Contents()
 
     var trashedNotebooks: [NotebookManifest] {
@@ -461,30 +462,37 @@ final class NotebookStore: ObservableObject {
         trash.folders.first { $0.id == folderId }.flatMap { NotableDate.parse($0.deletedAt) }
     }
 
-    /// Stage a notebook for deletion. Nothing is removed and nothing is published: peers keep
-    /// their copy, which is what makes restoring mean anything.
+    /// Throw a notebook away. Its files stay and it goes on syncing — only emptying the Trash
+    /// deletes anything — but the Trash itself is published, so the notebook leaves the library on
+    /// every device and can be restored from any of them.
+    ///
+    /// The timestamp bump is not decoration: `deletedAt` travels in the scalar envelope, which
+    /// §5.5 decides by `updatedAt`. Without it this write would tie with the peer's live copy and
+    /// the notebook could come straight back out of the Trash.
     func trashNotebook(id: String) throws {
         try LocalTrash.addNotebook(id, at: Date(), root: rootURL)
-        refreshAfterLocalChange()
+        try touchNotebook(id)
     }
 
-    /// Stage a folder. Only the folder itself is marked — its contents become unreachable because
-    /// their container is no longer listed, so restoring the subtree is one line leaving the file
-    /// rather than a second cascade to get wrong.
+    /// Throw a folder away. Only the folder itself is marked — its contents become unreachable
+    /// because their container is no longer listed, so restoring the subtree is one line leaving
+    /// the file rather than a second cascade to get wrong. That holds on the peer too: it hides
+    /// the same subtree from the same one field.
     func trashFolder(id: String) throws {
         try LocalTrash.addFolder(id, at: Date(), root: rootURL)
-        refreshAfterLocalChange()
+        try touchFolder(id)
     }
 
-    /// Bring a notebook back. If the folder it was filed under has since been purged — or is
-    /// itself still in the Trash — it returns to the root, because restoring it into an invisible
-    /// folder would look exactly like the restore having quietly failed.
+    /// Bring a notebook back, here and everywhere. If the folder it was filed under has since been
+    /// purged — or is itself still in the Trash — it returns to the root, because restoring it into
+    /// an invisible folder would look exactly like the restore having quietly failed.
     func restoreNotebook(id: String) throws {
         try LocalTrash.removeNotebook(id, root: rootURL)
         if let manifest = manifest(id: id), !isReachable(manifest.parentFolderId) {
+            // Re-homing already stamps and queues the notebook, which is the whole of a restore.
             try moveNotebook(id: id, toFolder: nil)
         } else {
-            refreshAfterLocalChange()
+            try touchNotebook(id)
         }
     }
 
@@ -497,8 +505,35 @@ final class NotebookStore: ObservableObject {
             all[index].updatedAt = NotableDate.format(Date())
             try writeFolders(all)
         } else {
-            refreshAfterLocalChange()
+            try touchFolder(id)
         }
+    }
+
+    /// Stamp a notebook as written by this device now, and queue it. Called when what changed is
+    /// not in the manifest at all — the Trash — but still has to travel and still has to carry a
+    /// timestamp newer than the copy it is racing.
+    ///
+    /// A notebook with no manifest is not an error here: it can be trashed while its files are
+    /// still arriving. The Trash entry is written either way, and the next merge that brings the
+    /// manifest in will find it.
+    private func touchNotebook(_ id: String) throws {
+        if var manifest = manifest(id: id) {
+            manifest.updatedAt = NotableDate.format(Date())
+            manifest.updatedBy = deviceID
+            try writeManifest(manifest)
+        }
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
+    }
+
+    /// The folder twin of `touchNotebook`.
+    private func touchFolder(_ id: String) throws {
+        var all = folders
+        guard let index = all.firstIndex(where: { $0.id == id }) else {
+            refreshAfterLocalChange(documents: [CouchDocID.folder(id)])
+            return
+        }
+        all[index].updatedAt = NotableDate.format(Date())
+        try writeFolders(all)
     }
 
     /// The root is always there; a folder is only a place to put something if it is neither gone

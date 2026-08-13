@@ -73,7 +73,9 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         switch type {
         case CouchDocType.notebook:
             guard let manifest = readManifest(id) else { return nil }
-            return .notebook(CouchMapping.couchNotebook(from: manifest, deviceID: deviceID))
+            return .notebook(CouchMapping.couchNotebook(
+                from: manifest, deviceID: deviceID, deletedAt: trash().notebooks
+                    .first { $0.id == id }?.deletedAt))
 
         case CouchDocType.page:
             guard let notebookId = notebookID(forPage: id),
@@ -85,7 +87,9 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
 
         case CouchDocType.folder:
             guard let folder = readFolders().first(where: { $0.id == id }) else { return nil }
-            return .folder(CouchMapping.couchFolder(from: folder, deviceID: deviceID))
+            return .folder(CouchMapping.couchFolder(
+                from: folder, deviceID: deviceID, deletedAt: trash().folders
+                    .first { $0.id == id }?.deletedAt))
 
         case CouchDocType.asset:
             guard let url = assetURL(documentID), let data = try? Data(contentsOf: url) else {
@@ -131,6 +135,12 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             let existing = readManifest(id)
             let manifest = CouchMapping.manifest(from: notebook, id: id, existing: existing)
             try write(encoder.encode(manifest), to: manifestURL(id))
+            // The merge decided where this notebook lives — the library or the Trash — so the
+            // Trash file follows it in both directions. Without the `nil` case a notebook restored
+            // on the BOOX would stay buried here, and the two Trashes would drift apart.
+            try lock.withLock {
+                try LocalTrash.setNotebook(id, deletedAt: notebook.deletedAt, root: rootURL)
+            }
             // A notebook arriving from the server un-deletes it here — that decision was already
             // made by the merge, which resurrects only when the edit is newer than the deletion.
             clearDeletion(documentID)
@@ -139,9 +149,17 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             var folders = readFolders().filter { $0.id != id }
             folders.append(CouchMapping.folderDTO(from: folder, id: id))
             try writeFolders(folders)
+            try lock.withLock {
+                try LocalTrash.setFolder(id, deletedAt: folder.deletedAt, root: rootURL)
+            }
             clearDeletion(documentID)
 
         case .deleted:
+            // Emptied from the Trash somewhere, so it leaves this device's Trash too — the entry
+            // would otherwise name a notebook that no longer exists anywhere.
+            lock.withLock {
+                try? LocalTrash.remove(notebookIDs: [id], folderIDs: [id], root: rootURL)
+            }
             switch type {
             case CouchDocType.notebook:
                 try? FileManager.default.removeItem(at: notebookDir(id))
@@ -387,6 +405,13 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         var all = deletions()
         guard all.removeValue(forKey: documentID) != nil else { return }
         writeDeletions(all)
+    }
+
+    /// This device's copy of the Trash. Read per call rather than cached: the app writes the same
+    /// file when the user throws something away, and a stale copy here would publish a notebook as
+    /// live moments after it was binned.
+    private func trash() -> LocalTrash.Contents {
+        lock.withLock { LocalTrash.load(root: rootURL) }
     }
 
     private func deletions() -> [String: String] {

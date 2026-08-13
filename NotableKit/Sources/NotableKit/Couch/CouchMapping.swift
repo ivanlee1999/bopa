@@ -148,8 +148,11 @@ public enum CouchMapping {
 
     // MARK: Notebook
 
+    /// `deletedAt` is passed in rather than read from the manifest: on this side the Trash lives in
+    /// `.bopa-trash.json` (see `LocalTrash`), because the manifest doubles as the WebDAV wire
+    /// format and must not grow a field that protocol has no room for.
     public static func couchNotebook(
-        from manifest: NotebookManifest, deviceID: String
+        from manifest: NotebookManifest, deviceID: String, deletedAt: String? = nil
     ) -> CouchNotebook {
         CouchNotebook(
             title: manifest.title,
@@ -160,6 +163,7 @@ public enum CouchMapping {
             defaultBackgroundType: manifest.defaultBackgroundType,
             defaultPageWidth: manifest.defaultPageWidth,
             defaultPageHeight: manifest.defaultPageHeight,
+            deletedAt: deletedAt,
             createdAt: manifest.createdAt,
             updatedAt: manifest.updatedAt,
             updatedBy: manifest.updatedBy.isEmpty ? deviceID : manifest.updatedBy)
@@ -192,9 +196,12 @@ public enum CouchMapping {
 
     // MARK: Folder
 
-    public static func couchFolder(from dto: FolderDTO, deviceID: String) -> CouchFolder {
+    /// `deletedAt` is passed in for the same reason as `couchNotebook`'s.
+    public static func couchFolder(
+        from dto: FolderDTO, deviceID: String, deletedAt: String? = nil
+    ) -> CouchFolder {
         CouchFolder(
-            title: dto.title, parentFolderId: dto.parentFolderId,
+            title: dto.title, parentFolderId: dto.parentFolderId, deletedAt: deletedAt,
             createdAt: dto.createdAt, updatedAt: dto.updatedAt, updatedBy: deviceID)
     }
 
