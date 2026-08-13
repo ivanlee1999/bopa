@@ -27,6 +27,9 @@ import XCTest
 /// the whole feed — which means the suite's cost grows with everything every previous run left
 /// behind, and a long-lived development database will eventually make it slow and then flaky.
 /// Recreating that database is the remedy, and it is safe: nothing here depends on prior contents.
+/// `./scripts/couch-reset.sh` does it — and refuses to touch a database that does not look like a
+/// test one, because the address the tests use is *not* the server a developer's own devices sync
+/// to, and the two are one typo apart.
 /// Prefer `pushNow()` over `sync()` in a new test unless the pull is the thing being tested.
 @MainActor
 final class CouchAppLayerEndToEndTests: XCTestCase {
