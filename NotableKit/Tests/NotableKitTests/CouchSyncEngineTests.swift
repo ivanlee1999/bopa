@@ -64,6 +64,51 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertEqual(booxStore.page(pageID)?.strokes.map(\.id), ["s1"])
     }
 
+    /// A PUT carries a snapshot, not a live view of the page. Saving the same page while that PUT
+    /// is in flight must leave the new generation in the outbox; otherwise the old response clears
+    /// the shared Set entry and the edit stays iPad-only until a BOOX change happens to force a
+    /// conflict merge.
+    func testEditSavedDuringSuccessfulPutRemainsQueuedAndReachesServer() async throws {
+        let pausing = PauseFirstPutTransport(base: server)
+        let engine = CouchSyncEngine(
+            client: CouchDBClient(transport: pausing, database: "notes"),
+            store: ipadStore,
+            deviceID: "ipad")
+
+        let firstStroke = stroke("s1", at: 1, device: "ipad")
+        ipadStore.set(
+            pageID,
+            .page(page(strokes: [firstStroke], updatedAt: 1, by: "ipad")))
+        await engine.markDirty([pageID])
+
+        let firstFlush = Task { await engine.flush() }
+        await pausing.waitUntilPutIsPaused()
+
+        var editedAgain = ipadStore.page(pageID)!
+        editedAgain.strokes.append(stroke("s2", at: 2, device: "ipad"))
+        editedAgain.updatedAt = stamp(2)
+        ipadStore.set(pageID, .page(editedAgain))
+        await engine.markDirty([pageID])
+
+        pausing.releasePut()
+        let firstReport = await firstFlush.value
+
+        XCTAssertEqual(firstReport.pushed, [pageID])
+        XCTAssertEqual(firstReport.stillDirty, [pageID])
+        let pendingAfterFirst = await engine.pendingCount
+        XCTAssertEqual(pendingAfterFirst, 1,
+                       "the newer edit must survive completion of the older PUT")
+
+        let secondReport = await engine.flush()
+        XCTAssertEqual(secondReport.pushed, [pageID])
+        XCTAssertTrue(secondReport.stillDirty.isEmpty)
+        let pendingAfterSecond = await engine.pendingCount
+        XCTAssertEqual(pendingAfterSecond, 0)
+
+        let serverStrokes = try XCTUnwrap(server.rawDocument(pageID)?["strokes"] as? [[String: Any]])
+        XCTAssertEqual(Set(serverStrokes.compactMap { $0["id"] as? String }), ["s1", "s2"])
+    }
+
     func testOwnWriteComingBackOnTheFeedIsNotReapplied() async throws {
         ipadStore.set(pageID, .page(page(strokes: [stroke("s1", at: 1, device: "ipad")],
                                         updatedAt: 5, by: "ipad")))

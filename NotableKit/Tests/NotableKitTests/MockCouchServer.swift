@@ -1,4 +1,5 @@
 import Foundation
+import os
 @testable import NotableKit
 
 /// In-memory CouchDB implementing the subset the engine speaks, with real revision checking and a
@@ -264,6 +265,50 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
             seqCounter += 1
             docs[documentID] = Doc(rev: "1-r\(revCounter)", deleted: false, json: json, seq: seqCounter)
         }
+    }
+}
+
+/// Wraps a transport and parks its first PUT until a test releases it. The two streams make the
+/// interleaving deterministic without blocking a cooperative-concurrency thread.
+final class PauseFirstPutTransport: HTTPTransport, @unchecked Sendable {
+    private let base: any HTTPTransport
+    private let shouldPause = OSAllocatedUnfairLock(initialState: true)
+    private let started: AsyncStream<Void>
+    private let startedContinuation: AsyncStream<Void>.Continuation
+    private let releases: AsyncStream<Void>
+    private let releaseContinuation: AsyncStream<Void>.Continuation
+
+    init(base: any HTTPTransport) {
+        self.base = base
+
+        var startedContinuation: AsyncStream<Void>.Continuation!
+        started = AsyncStream { startedContinuation = $0 }
+        self.startedContinuation = startedContinuation
+
+        var releaseContinuation: AsyncStream<Void>.Continuation!
+        releases = AsyncStream { releaseContinuation = $0 }
+        self.releaseContinuation = releaseContinuation
+    }
+
+    func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        let pause = request.method == "PUT" && shouldPause.withLock { shouldPause in
+            guard shouldPause else { return false }
+            shouldPause = false
+            return true
+        }
+        if pause {
+            startedContinuation.yield()
+            for await _ in releases { break }
+        }
+        return try await base.send(request)
+    }
+
+    func waitUntilPutIsPaused() async {
+        for await _ in started { break }
+    }
+
+    func releasePut() {
+        releaseContinuation.yield()
     }
 }
 
