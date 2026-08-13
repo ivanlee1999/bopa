@@ -105,6 +105,79 @@ final class FileCouchStoreTests: XCTestCase {
         XCTAssertEqual(loaded.title, "study")
     }
 
+    // MARK: The Trash rides on the document
+
+    /// An incoming trashing has to land in this device's Trash, or "delete" would mean one thing
+    /// on the BOOX and another here — the notebook would sit in the library with a `deletedAt` the
+    /// app never reads.
+    func testAnIncomingTrashingLandsInTheLocalTrash() throws {
+        let id = CouchDocID.notebook("nb1")
+        let notebook = CouchNotebook(
+            title: "notes", pageIds: ["p1"], deletedAt: stamp(9),
+            createdAt: stamp(0), updatedAt: stamp(9), updatedBy: "boox")
+
+        try store.apply(id, .notebook(notebook))
+
+        XCTAssertEqual(
+            LocalTrash.load(root: root).notebooks.map(\.deletedAt), [stamp(9)],
+            "the peer's stamp is kept verbatim — re-taking it here would make the two disagree")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("notebooks/nb1/manifest.json").path),
+            "trashed is not deleted: the files stay and keep syncing")
+
+        guard case .notebook(let loaded)? = try store.load(id) else {
+            return XCTFail("notebook did not load back")
+        }
+        XCTAssertEqual(loaded.deletedAt, stamp(9), "and it is published as trashed from here on")
+    }
+
+    /// The other direction, which is what makes a restore on the BOOX mean anything here: the
+    /// document says the notebook is live again, so it has to leave this device's Trash.
+    func testAnIncomingRestoreEmptiesItOutOfTheLocalTrash() throws {
+        let id = CouchDocID.notebook("nb1")
+        try store.apply(id, .notebook(CouchNotebook(
+            title: "notes", deletedAt: stamp(9),
+            createdAt: stamp(0), updatedAt: stamp(9), updatedBy: "boox")))
+
+        try store.apply(id, .notebook(CouchNotebook(
+            title: "notes", createdAt: stamp(0), updatedAt: stamp(12), updatedBy: "boox")))
+
+        XCTAssertTrue(LocalTrash.load(root: root).notebooks.isEmpty)
+        guard case .notebook(let loaded)? = try store.load(id) else {
+            return XCTFail("notebook did not load back")
+        }
+        XCTAssertNil(loaded.deletedAt)
+    }
+
+    func testAFolderTrashingTravelsTheSameWay() throws {
+        let id = CouchDocID.folder("f1")
+        try store.apply(id, .folder(CouchFolder(
+            title: "study", deletedAt: stamp(4),
+            createdAt: stamp(0), updatedAt: stamp(4), updatedBy: "boox")))
+
+        XCTAssertEqual(LocalTrash.load(root: root).folders.map(\.id), ["f1"])
+        guard case .folder(let loaded)? = try store.load(id) else {
+            return XCTFail("folder did not load back")
+        }
+        XCTAssertEqual(loaded.deletedAt, stamp(4))
+    }
+
+    /// Emptying the Trash somewhere else deletes the notebook outright. The Trash entry has to go
+    /// with it — an entry naming a notebook that exists nowhere would sit in the Trash screen
+    /// forever, offering to restore something that is gone.
+    func testAPurgeElsewhereAlsoClearsTheLocalTrashEntry() throws {
+        let id = CouchDocID.notebook("nb1")
+        try store.apply(id, .notebook(CouchNotebook(
+            title: "notes", deletedAt: stamp(9),
+            createdAt: stamp(0), updatedAt: stamp(9), updatedBy: "boox")))
+
+        try store.apply(id, .deleted(CouchDeletedDoc(
+            type: CouchDocType.notebook, deletedAt: stamp(20), updatedBy: "boox")))
+
+        XCTAssertTrue(LocalTrash.load(root: root).notebooks.isEmpty)
+        XCTAssertNil(try store.load(id))
+    }
+
     func testAbsentDocumentsLoadAsNil() throws {
         XCTAssertNil(try store.load(CouchDocID.notebook("missing")))
         XCTAssertNil(try store.load(CouchDocID.page("missing")))

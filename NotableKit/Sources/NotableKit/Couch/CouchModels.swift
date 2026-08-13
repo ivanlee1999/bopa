@@ -284,6 +284,7 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         case type, schema, title, pageIds, deletedPageIds, parentFolderId
         case defaultBackground, defaultBackgroundType
         case defaultPageWidth, defaultPageHeight
+        case deletedAt
         case createdAt, updatedAt, updatedBy
     }
 
@@ -299,6 +300,12 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
     /// sizes existed. Mirrors `NotebookManifest.defaultPageWidth`/`defaultPageHeight`.
     public var defaultPageWidth: Int?
     public var defaultPageHeight: Int?
+    /// In the Trash since — protocol §3.2. Nil is a notebook in the library.
+    ///
+    /// The Trash is a *state of the notebook*, not a fact about one device: it is staged deletion,
+    /// so it hides the notebook everywhere and can be undone from anywhere. Only emptying the Trash
+    /// deletes for good, and that is a `_deleted` tombstone (§6.4), not this.
+    public var deletedAt: String?
     public var createdAt: String
     public var updatedAt: String
     public var updatedBy: String
@@ -309,6 +316,7 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         parentFolderId: String? = nil,
         defaultBackground: String = "blank", defaultBackgroundType: String = "native",
         defaultPageWidth: Int? = nil, defaultPageHeight: Int? = nil,
+        deletedAt: String? = nil,
         createdAt: String, updatedAt: String, updatedBy: String
     ) {
         self.type = type
@@ -321,6 +329,7 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         self.defaultBackgroundType = defaultBackgroundType
         self.defaultPageWidth = defaultPageWidth
         self.defaultPageHeight = defaultPageHeight
+        self.deletedAt = deletedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.updatedBy = updatedBy
@@ -341,6 +350,10 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
             .flatMap { $0 > 0 ? $0 : nil }
         defaultPageHeight = try c.decodeIfPresent(Int.self, forKey: .defaultPageHeight)
             .flatMap { $0 > 0 ? $0 : nil }
+        // Empty reads as absent: a peer that writes "" means "not in the Trash", and letting the
+        // empty string through would make `deletedAt != nil` — trashed with no date — everywhere.
+        deletedAt = try c.decodeIfPresent(String.self, forKey: .deletedAt)
+            .flatMap { $0.isEmpty ? nil : $0 }
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
         updatedBy = try c.decodeIfPresent(String.self, forKey: .updatedBy) ?? ""
@@ -358,6 +371,7 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         try c.encode(defaultBackgroundType, forKey: .defaultBackgroundType)
         try c.encode(defaultPageWidth, forKey: .defaultPageWidth)
         try c.encode(defaultPageHeight, forKey: .defaultPageHeight)
+        try c.encode(deletedAt, forKey: .deletedAt)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(updatedBy, forKey: .updatedBy)
@@ -366,26 +380,30 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
 
 public struct CouchFolder: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
-        case type, schema, title, parentFolderId, createdAt, updatedAt, updatedBy
+        case type, schema, title, parentFolderId, deletedAt, createdAt, updatedAt, updatedBy
     }
 
     public var type: String
     public var schema: Int
     public var title: String
     public var parentFolderId: String?
+    /// In the Trash since; see `CouchNotebook.deletedAt`. A trashed folder hides its whole subtree
+    /// without touching it, so only this document carries the state.
+    public var deletedAt: String?
     public var createdAt: String
     public var updatedAt: String
     public var updatedBy: String
 
     public init(
         type: String = CouchDocType.folder, schema: Int = couchSchemaVersion,
-        title: String, parentFolderId: String? = nil,
+        title: String, parentFolderId: String? = nil, deletedAt: String? = nil,
         createdAt: String, updatedAt: String, updatedBy: String
     ) {
         self.type = type
         self.schema = schema
         self.title = title
         self.parentFolderId = parentFolderId
+        self.deletedAt = deletedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.updatedBy = updatedBy
@@ -397,6 +415,8 @@ public struct CouchFolder: Codable, Equatable, Sendable {
         schema = try c.decodeIfPresent(Int.self, forKey: .schema) ?? couchSchemaVersion
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         parentFolderId = try c.decodeIfPresent(String.self, forKey: .parentFolderId)
+        deletedAt = try c.decodeIfPresent(String.self, forKey: .deletedAt)
+            .flatMap { $0.isEmpty ? nil : $0 }
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
         updatedBy = try c.decodeIfPresent(String.self, forKey: .updatedBy) ?? ""
@@ -408,6 +428,7 @@ public struct CouchFolder: Codable, Equatable, Sendable {
         try c.encode(schema, forKey: .schema)
         try c.encode(title, forKey: .title)
         try c.encode(parentFolderId, forKey: .parentFolderId)
+        try c.encode(deletedAt, forKey: .deletedAt)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(updatedBy, forKey: .updatedBy)

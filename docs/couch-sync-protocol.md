@@ -53,8 +53,14 @@ fractional seconds present only when non-zero (`2026-08-10T06:12:33.871Z`,
 ```json
 { "_id": "folder:<uuid>", "type": "folder", "schema": 1,
   "title": "study", "parentFolderId": null,
+  "deletedAt": null,
   "createdAt": "…", "updatedAt": "…", "updatedBy": "boox" }
 ```
+
+`deletedAt` is the Trash — see §3.2. A trashed folder hides its whole subtree without any
+descendant being written: the descendants stay filed where they are and go on syncing, and the
+library simply stops listing anything whose ancestor is trashed. Restoring is therefore one field
+changing back, on every device at once.
 
 Deletion: `PUT` the document with `"_deleted": true` while retaining `type`, `deletedAt`,
 `updatedAt`, `updatedBy` in the body, so the peer can apply §6.4.
@@ -69,6 +75,7 @@ Deletion: `PUT` the document with `"_deleted": true` while retaining `type`, `de
   "parentFolderId": null,
   "defaultBackground": "blank", "defaultBackgroundType": "native",
   "defaultPageWidth": 1400, "defaultPageHeight": 1980,
+  "deletedAt": null,
   "createdAt": "…", "updatedAt": "…", "updatedBy": "ipad" }
 ```
 
@@ -77,6 +84,19 @@ units; a page's own `pageWidth`/`pageHeight` (§3.3) is what lays that page out.
 undeclared — written before page sizes existed. The unit, the preset table and the layout rules
 are normative in [notable-sync-protocol.md](notable-sync-protocol.md) §3.1; the merge rule is
 §6.7 below.
+
+`deletedAt` is **the Trash**: an ISO-8601 stamp means "thrown away, then"; null or absent means
+"in the library". It is deliberately part of the document rather than local bookkeeping, because
+deleting has to mean the same thing on every device — throwing a notebook away on the BOOX takes
+it out of the iPad's library too, and restoring it on either brings it back on both. A trashed
+notebook is **not** deleted: its pages, strokes and assets are untouched and go on merging
+normally, so a peer that is still editing it loses nothing. Only emptying the Trash deletes,
+and that is the `_deleted` tombstone of §6.4 — not this field.
+
+Writers **MUST** stamp `updatedAt`/`updatedBy` when they set or clear `deletedAt`. It merges as
+an ordinary scalar (§5.5), so an unstamped trashing ties with the peer's live copy and can lose.
+A reader that does not know the field treats the notebook as live, which is the safe direction:
+the item stays visible on an old build rather than vanishing with no way to get it back.
 
 `openPageId`, scroll position and `linkedExternalUri` are device-local and **never** written.
 
@@ -149,8 +169,8 @@ scalarKey(doc)     = the doc's scalar fields only, rendered as key-sorted minima
                      page:     notebookId, title, background, backgroundType,
                                pageWidth, pageHeight
                      notebook: title, parentFolderId, defaultBackground, defaultBackgroundType,
-                               defaultPageWidth, defaultPageHeight
-                     folder:   title, parentFolderId
+                               defaultPageWidth, defaultPageHeight, deletedAt
+                     folder:   title, parentFolderId, deletedAt
                      Absent/null values render as `null`.
 ```
 
@@ -301,6 +321,16 @@ envelope is therefore newer, it wins, and the rename is lost — even though the
 perfectly, which is what makes it hard to notice. The same shape applies to a page's title against
 its background, and a folder's title against a move to a new parent.
 
+**`deletedAt` travels in that envelope too**, and inherits the same consequence: a notebook trashed
+on the BOOX comes back out of the Trash if the iPad writes the notebook afterwards — including an
+ink-only save, which bumps `updatedAt` (see below). That is deliberate and is the same answer §6.4
+gives a permanent deletion: work done after a deletion outlives it. Vector
+`notebook-later-edit-outlives-trash` pins it, so an implementation that "fixes" it by treating
+`deletedAt` as sticky fails the shared suite rather than diverging quietly. What must **not** be
+done is merging `deletedAt` like a tombstone (earliest-wins union, §4): that makes a restore
+inexpressible, because the peer still holding the trashed copy re-buries the item on the next
+merge, forever.
+
 **Do not "fix" this by dropping the notebook `updatedAt` bump on an ink-only save.** That is the
 obvious mitigation — bopa bumps it in `NotebookStore.savePage`, notable in
 `PageDataManager.bumpEditTimestamps` — and it would indeed stop an ink save from beating a
@@ -369,6 +399,11 @@ A change whose `rev` equals the locally recorded `rev` for that document is this
 own write coming back and is skipped.
 
 ### 6.4 Delete vs edit (notebook, folder)
+
+This section is about **permanent** deletion — the `_deleted` tombstone written when the Trash is
+emptied. Throwing something away is not that: it sets `deletedAt` (§3.2) on a document that stays
+live, merges under §5.5 like any other scalar, and needs none of the rules below. The two are
+sequential, not alternatives — an object is trashed, and later purged.
 
 When one side holds a live document and the other a tombstone:
 

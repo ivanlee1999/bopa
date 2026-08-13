@@ -254,10 +254,11 @@ private struct FolderContentsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            // Nothing is published here, so this is honest about the other device: peers keep
-            // their copy until the Trash is emptied, which is what makes restoring mean anything.
-            Text("The notebook stays in the Trash until you empty it. Nothing is deleted from "
-                + "the server or your BOOX until then.")
+            // Says what the other device will do, because it will do it immediately: the Trash is
+            // synced. Nothing is destroyed until the Trash is emptied, which is what makes
+            // restoring mean anything, and a restore travels the same way.
+            Text("The notebook leaves the library on your BOOX too, and stays in the Trash until "
+                + "you empty it. Nothing is deleted until then.")
         }
         .confirmationDialog(
             "Move to Trash?", isPresented: $showingDeleteFolder, titleVisibility: .visible
@@ -301,8 +302,8 @@ private struct FolderContentsView: View {
             ].compactMap { $0 }
             contents = "It holds \(parts.formatted(.list(type: .and)))."
         }
-        return "\(contents) Everything inside goes with it, and stays in the Trash until you "
-            + "empty it."
+        return "\(contents) Everything inside goes with it — on your BOOX as well — and stays in "
+            + "the Trash until you empty it."
     }
 
     // MARK: Header

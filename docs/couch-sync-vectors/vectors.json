@@ -1172,6 +1172,165 @@
       }
     },
     {
+      "name": "notebook-trash-travels",
+      "kind": "notebook",
+      "why": "The Trash is a state of the notebook, not of one device: the later write is a trashing, so the notebook leaves the library on both.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": null,
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": "2026-08-10T06:07:00Z",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": "2026-08-10T06:07:00Z",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-restore-beats-earlier-trash",
+      "kind": "notebook",
+      "why": "Restoring is an ordinary later write, so it wins the scalar envelope and clears deletedAt. Merging deletedAt as a tombstone-style earliest-wins union instead would make a restore impossible to express: the peer still holding the trashed copy would re-bury it.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": "2026-08-10T06:07:00Z",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": null,
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:09:00Z",
+        "updatedBy": "ipad"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": null,
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:09:00Z",
+        "updatedBy": "ipad"
+      }
+    },
+    {
+      "name": "notebook-later-edit-outlives-trash",
+      "kind": "notebook",
+      "why": "deletedAt travels in the scalar envelope (§5.5), so an edit written after the trashing carries deletedAt=null with it and the notebook returns to the library — the same rule §6.4 applies to a real deletion, and the same known consequence.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": "2026-08-10T06:07:00Z",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "term planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": null,
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:08:00Z",
+        "updatedBy": "ipad"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "term planner",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "deletedAt": null,
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:08:00Z",
+        "updatedBy": "ipad"
+      }
+    },
+    {
       "name": "folder-rename-lww",
       "kind": "folder",
       "why": "Folders carry nothing that can conflict internally.",
@@ -1198,6 +1357,41 @@
         "schema": 1,
         "title": "Study Notes",
         "parentFolderId": null,
+        "createdAt": "2026-06-06T22:30:07.555Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "folder-trash-travels",
+      "kind": "folder",
+      "why": "A trashed folder hides its whole subtree from this one field, so the subtree is hidden on both devices without either touching a descendant.",
+      "a": {
+        "type": "folder",
+        "schema": 1,
+        "title": "study",
+        "parentFolderId": null,
+        "deletedAt": null,
+        "createdAt": "2026-06-06T22:30:07.555Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "folder",
+        "schema": 1,
+        "title": "study",
+        "parentFolderId": null,
+        "deletedAt": "2026-08-10T06:07:00Z",
+        "createdAt": "2026-06-06T22:30:07.555Z",
+        "updatedAt": "2026-08-10T06:07:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "folder",
+        "schema": 1,
+        "title": "study",
+        "parentFolderId": null,
+        "deletedAt": "2026-08-10T06:07:00Z",
         "createdAt": "2026-06-06T22:30:07.555Z",
         "updatedAt": "2026-08-10T06:07:00Z",
         "updatedBy": "boox"

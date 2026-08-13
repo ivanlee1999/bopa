@@ -246,6 +246,10 @@ public enum CouchMerge {
             defaultBackgroundType: winner.defaultBackgroundType,
             defaultPageWidth: winner.defaultPageWidth ?? loser.defaultPageWidth,
             defaultPageHeight: winner.defaultPageHeight ?? loser.defaultPageHeight,
+            // The winner's, not a union: unlike a tombstone, the Trash is a state that can be left.
+            // Taking the earlier of the two would make a restore impossible to express — the peer
+            // still holding the trashed copy would put it straight back on the next merge.
+            deletedAt: winner.deletedAt,
             createdAt: earlier(a.createdAt, b.createdAt),
             updatedAt: later(a.updatedAt, b.updatedAt),
             updatedBy: winner.updatedBy)
@@ -266,6 +270,7 @@ public enum CouchMerge {
             ("defaultBackgroundType", notebook.defaultBackgroundType),
             ("defaultPageWidth", notebook.defaultPageWidth.map(String.init)),
             ("defaultPageHeight", notebook.defaultPageHeight.map(String.init)),
+            ("deletedAt", notebook.deletedAt),
         ])
     }
 
@@ -278,6 +283,7 @@ public enum CouchMerge {
             schema: Swift.max(a.schema, b.schema),
             title: winner.title,
             parentFolderId: winner.parentFolderId,
+            deletedAt: winner.deletedAt,
             createdAt: earlier(a.createdAt, b.createdAt),
             updatedAt: later(a.updatedAt, b.updatedAt),
             updatedBy: winner.updatedBy)
@@ -294,6 +300,7 @@ public enum CouchMerge {
             ("createdAt", folder.createdAt), ("updatedAt", folder.updatedAt),
             ("updatedBy", folder.updatedBy), ("title", folder.title),
             ("parentFolderId", folder.parentFolderId),
+            ("deletedAt", folder.deletedAt),
         ])
     }
 
