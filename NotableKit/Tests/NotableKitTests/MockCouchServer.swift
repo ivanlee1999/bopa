@@ -239,8 +239,16 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         lock.withLock { docs[documentID]?.deleted ?? false }
     }
 
-    func documentIDs() -> [String] {
-        lock.withLock { docs.keys.sorted() }
+    /// The *library* documents the server holds.
+    ///
+    /// Reserved ids are excluded by default because the protocol says they are not library items
+    /// (§1.1): `sync-meta:database` appears the moment any engine touches a fresh database, and a
+    /// test asking "did this notebook reach the server" is not asking about bookkeeping. The
+    /// identity tests pass `includeReserved` to see it.
+    func documentIDs(includeReserved: Bool = false) -> [String] {
+        lock.withLock {
+            docs.keys.filter { includeReserved || !CouchMetaDocID.isReserved($0) }.sorted()
+        }
     }
 
     /// Writes a document as if another device had pushed it.
@@ -304,7 +312,12 @@ final class PauseFirstPutTransport: HTTPTransport, @unchecked Sendable {
     }
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
-        let pause = request.method == "PUT" && shouldPause.withLock { shouldPause in
+        // Reserved ids are stepped over: `sync-meta:database` is written the first time an engine
+        // meets an empty database (§1.2), and it arriving first would make this fixture park the
+        // bookkeeping write rather than the document write every one of its tests is about.
+        let isDocumentWrite = request.method == "PUT"
+            && !request.path.contains("\(CouchDocType.syncMeta):")
+        let pause = isDocumentWrite && shouldPause.withLock { shouldPause in
             guard shouldPause else { return false }
             shouldPause = false
             return true

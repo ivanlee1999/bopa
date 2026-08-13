@@ -392,6 +392,9 @@ public enum CouchError: Error, Equatable {
     /// Offline, DNS failure, timeout: keep the work queued and back off.
     case transport(String)
     case malformedResponse(String)
+    /// The database is not the one this device has been syncing with, requires a newer client, or
+    /// is locked for a rebuild (§1.2). Never retried: the answer is a human's, not a delay's.
+    case databaseIdentity(CouchSyncEngine.DatabaseIdentity)
 
     /// Whether waiting and trying again could plausibly succeed.
     ///
@@ -414,9 +417,10 @@ public enum CouchError: Error, Equatable {
             default: return false                    // 400, 403, 405, 413, … will not improve
             }
         // 404 and 409 are inputs to the caller's own logic rather than failures to retry blindly,
-        // and no amount of waiting fixes a rejected credential or a response this build cannot
-        // parse.
-        case .conflict, .notFound, .unauthorized, .malformedResponse: return false
+        // and no amount of waiting fixes a rejected credential, a response this build cannot parse,
+        // or a database whose identity the user has to rule on.
+        case .conflict, .notFound, .unauthorized, .malformedResponse, .databaseIdentity:
+            return false
         }
     }
 

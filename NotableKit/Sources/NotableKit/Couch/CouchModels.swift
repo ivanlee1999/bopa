@@ -29,7 +29,63 @@ public enum CouchDocType {
     public static let notebook = "notebook"
     public static let page = "page"
     public static let asset = "asset"
+    /// Protocol bookkeeping, never a library item (§1.1). Reserved as a *prefix* so a client that
+    /// meets a `sync-meta:` id it does not know still recognises it as ours and steps past it,
+    /// rather than filing it as a document from a future schema.
+    public static let syncMeta = "sync-meta"
 }
+
+/// Documents the protocol reserves for itself. None of them carry user content, so none of them are
+/// enumerated, merged, conflict-copied, or shown.
+public enum CouchMetaDocID {
+    /// §1.2 — which database this is, and whether this client may sync it.
+    public static let database = "sync-meta:database"
+
+    /// Whether an id belongs to the reserved namespace.
+    public static func isReserved(_ documentID: String) -> Bool {
+        documentID.hasPrefix("\(CouchDocType.syncMeta):")
+    }
+}
+
+/// §1.2. The identity of the database itself, so a device can tell "the library I have been syncing"
+/// from "a new database that happens to have the same name at the same address".
+public struct CouchDatabaseMetadata: Codable, Equatable, Sendable {
+    public var type: String
+    public var protocolVersion: Int
+    /// The lowest protocol version allowed to sync this database. A client below it must refuse
+    /// rather than guess at documents written by a newer one.
+    public var minimumClientProtocol: Int
+    /// Minted with the database. Its only job is to be different when the database is not the same.
+    public var generation: String
+    /// Set while a rebuild is in progress; no client may pull or push ordinary documents.
+    public var locked: Bool
+    public var lockReason: String?
+    public var updatedAt: String
+
+    public init(
+        type: String = CouchDatabaseMetadata.documentType,
+        protocolVersion: Int = couchProtocolVersion,
+        minimumClientProtocol: Int = couchProtocolVersion,
+        generation: String,
+        locked: Bool = false,
+        lockReason: String? = nil,
+        updatedAt: String
+    ) {
+        self.type = type
+        self.protocolVersion = protocolVersion
+        self.minimumClientProtocol = minimumClientProtocol
+        self.generation = generation
+        self.locked = locked
+        self.lockReason = lockReason
+        self.updatedAt = updatedAt
+    }
+
+    public static let documentType = "sync-database-metadata"
+}
+
+/// The protocol version this build speaks (§1.2). Distinct from `couchSchemaVersion`, which
+/// describes one document's shape: this describes the conversation.
+public let couchProtocolVersion = 1
 
 /// The schema version this build writes and can merge. A document carrying a higher value is
 /// handled by the conflict-copy path (protocol §6.5) rather than merged on guesswork.

@@ -25,6 +25,75 @@ UUIDs are lowercase and stable for the lifetime of the object. Titles never appe
 `deviceId` is a short stable string identifying the writing device: `"ipad"` for bopa,
 `"boox"` for notable. It participates in tiebreaks, so the two values must differ.
 
+### 1.1 Reserved identifiers
+
+The `sync-meta:` prefix is reserved for protocol bookkeeping and carries no user content. A client
+**must not** enumerate, merge, conflict-copy, or present these documents as library items, and
+**must not** treat one arriving on the change feed as an unknown schema. Only `sync-meta:database`
+(§1.2) is defined; a client encountering another `sync-meta:` id records its revision, ignores it,
+and checkpoints past it.
+
+### 1.2 `sync-meta:database` — database identity
+
+Local sync state — the change-feed checkpoint and the per-document revision cache — is scoped by
+endpoint and database name. That pair does not distinguish the original database from a new one
+created later under the same name. A checkpoint from the old database either fails against the new
+one or, worse, succeeds while describing unrelated history; stale revision entries then suppress
+genuine changes as if they were this device's own echoes.
+
+The identity document makes the difference observable:
+
+```json
+{
+  "_id": "sync-meta:database",
+  "type": "sync-database-metadata",
+  "protocolVersion": 1,
+  "minimumClientProtocol": 1,
+  "generation": "3f1a…",
+  "locked": false,
+  "lockReason": null,
+  "updatedAt": "2026-08-13T00:00:00Z"
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `protocolVersion` | int | The protocol the writer speaks. |
+| `minimumClientProtocol` | int | The lowest protocol this database may be synced by. A client whose own version is lower must refuse. |
+| `generation` | string | A UUID minted **with the database**. Its only job is to be different when the database is not the same one. |
+| `locked` | bool | When true, no client may pull or push ordinary documents. Set for the duration of a rebuild. |
+| `lockReason` | string \| null | Shown to the user while locked. |
+
+**Client behaviour.** Before using a stored non-zero checkpoint, read the document and compare
+`generation` with the one persisted locally.
+
+| Observation | Required behaviour |
+|---|---|
+| Generations match | Proceed. |
+| Absent, and the database is empty | Create it with `_rev` protection (`PUT` with no revision). A racing device loses with a `409`, re-reads, and adopts the winner's generation — but only if it has no prior identity of its own. |
+| Absent, and the database is **not** empty | Adopt and record the observed state without resetting anything. A pre-existing database predates this document; missing metadata is never permission to rebuild. |
+| Generation differs from the stored one | Stop automatic sync. Do **not** reset the checkpoint and do **not** upload the local library. |
+| `minimumClientProtocol` exceeds this client's version | Refuse before applying or uploading anything. |
+| `locked` is true | Refuse pull and push, and say why. |
+
+**Recovery from a generation mismatch is always explicit**, because the two databases may each hold
+work the other does not:
+
+- **Use the server copy** — clear local CouchDB sync state and replay from zero. Back up first.
+- **Rebuild the server from this device** — confirm, lock the remote, mint a new generation, upload,
+  unlock.
+- **Merge** — back up both sides, reset the local checkpoint and revision cache, replay from zero,
+  then push the deterministic merge results.
+
+**Rollout.** This document is introduced in stages, and a client must not require what a peer of the
+previous release cannot provide:
+
+1. Understand and ignore the document during normal processing.
+2. Create it for new databases, and record the generation of existing ones.
+3. Only once both apps have shipped stages 1–2 may a mismatch or a protocol floor block sync.
+
+Stages 1 and 2 are implemented; stage 3 is gated behind a client-side switch that is off by default.
+
 ## 2. Common fields
 
 Every document carries:
