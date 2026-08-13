@@ -846,6 +846,33 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertTrue(again.applied.isEmpty)
     }
 
+    /// The same bound applies to a long poll, which used to be sent with no limit at all.
+    ///
+    /// The reasoning was that a long poll is one wait for one notification — but what it returns is
+    /// everything that changed *while* it waited, which after a reconnection is the whole backlog.
+    /// And once a full batch comes back there is nothing left to wait for, so the loop drops to
+    /// normal requests and drains at full speed: parking a fresh long poll would sit waiting for a
+    /// *new* change while the ones already queued went uncollected.
+    func testALongpollBacklogArrivesInBoundedBatchesAndIsDrained() async throws {
+        let total = CouchSyncEngine.catchUpBatchSize * 2 + 25
+        for index in 0..<total {
+            let id = CouchDocID.page("p\(index)")
+            booxStore.set(id, .page(page(strokes: [stroke("s\(index)", at: index, device: "boox")],
+                                         updatedAt: 5, by: "boox")))
+            await boox.markDirty([id])
+        }
+        _ = await boox.flush()
+
+        let report = try await ipad.pull(longpoll: true)
+
+        XCTAssertEqual(report.applied.count, total, "the backlog should be drained, not sampled")
+        XCTAssertLessThanOrEqual(
+            server.largestChangeBatch(), CouchSyncEngine.catchUpBatchSize,
+            "no single long-poll response should have carried the whole backlog")
+        let again = try await ipad.pull(longpoll: true)
+        XCTAssertTrue(again.applied.isEmpty, "and the checkpoint moved past all of it")
+    }
+
     /// Stopping at the first dead connection is right; describing the run as though only that one
     /// document were left is not. The rest of the queue was never attempted and is still in the
     /// outbox, so a report that omits it drives the pending badge — and the peer's "is there more

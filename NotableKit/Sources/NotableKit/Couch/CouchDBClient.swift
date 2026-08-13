@@ -148,7 +148,13 @@ public struct CouchDBClient: Sendable {
         public var rev: String
         public var deleted: Bool
         /// The document body as raw JSON (`include_docs=true`), decoded by the caller once its
-        /// type prefix is known. Absent for rows the server elided.
+        /// type prefix is known.
+        ///
+        /// Only ever nil for a tombstone. CouchDB answers `"doc": null` for a row whose document
+        /// was deleted between the feed reading the sequence and `include_docs` fetching the body,
+        /// and the engine already synthesizes what a stripped tombstone needs. A *live* row without
+        /// a body is malformed transport data and is rejected at the parser instead — see
+        /// `parseChanges`.
         public var json: Data?
     }
 
@@ -207,13 +213,57 @@ public struct CouchDBClient: Sendable {
             throw CouchError.malformedResponse("_changes carried no last_seq")
         }
 
-        let results = root["results"] as? [[String: Any]] ?? []
-        let rows: [ChangeRow] = results.compactMap { row in
-            guard let id = row["id"] as? String else { return nil }
-            let rev = (row["changes"] as? [[String: Any]])?.first?["rev"] as? String ?? ""
-            let deleted = row["deleted"] as? Bool ?? false
-            let json = (row["doc"] as? [String: Any]).flatMap {
-                try? JSONSerialization.data(withJSONObject: $0)
+        // Strict, because `last_seq` is checkpointed the moment this batch applies. A row dropped
+        // here — a proxy that truncated the response, a server answering a shape this client does
+        // not know — is a remote change skipped *permanently*: the checkpoint moves past it and
+        // CouchDB never offers it again. Refusing the whole response costs one retry; accepting a
+        // partial one costs the change.
+        //
+        // A document this build cannot *merge* is a different thing and is not rejected here: it is
+        // valid transport carrying an unknown schema, and the engine preserves it as a conflict
+        // copy and checkpoints it.
+        guard let results = root["results"] as? [Any] else {
+            throw CouchError.malformedResponse("_changes carried no results array")
+        }
+        let rows: [ChangeRow] = try results.enumerated().map { index, element in
+            guard let row = element as? [String: Any] else {
+                throw CouchError.malformedResponse("_changes result \(index) is not an object")
+            }
+            guard let id = row["id"] as? String, !id.isEmpty else {
+                throw CouchError.malformedResponse("_changes result \(index) carried no id")
+            }
+            guard let rev = (row["changes"] as? [[String: Any]])?.first?["rev"] as? String,
+                  !rev.isEmpty
+            else {
+                throw CouchError.malformedResponse("_changes result \(index) carried no revision")
+            }
+            // `NSNumber` and not `Bool`: JSONSerialization renders every JSON scalar as NSNumber,
+            // so `as? Bool` also accepts `"deleted": 1`. Checking the ObjC type tag is what tells a
+            // real Boolean from a number that happens to be castable to one.
+            let rawDeleted = row["deleted"]
+            let deleted: Bool
+            if rawDeleted == nil || rawDeleted is NSNull {
+                deleted = false
+            } else if let flag = rawDeleted as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID() {
+                deleted = flag.boolValue
+            } else {
+                throw CouchError.malformedResponse(
+                    "_changes result \(index) carried a non-Boolean deleted")
+            }
+
+            let rawDocument = row["doc"]
+            let json: Data?
+            if let document = rawDocument as? [String: Any] {
+                json = try JSONSerialization.data(withJSONObject: document)
+            } else if deleted, rawDocument == nil || rawDocument is NSNull {
+                // The one body CouchDB legitimately omits: `include_docs` found the document
+                // already deleted. The engine synthesizes the tombstone the merge needs from
+                // `deleted` and the revision alone, so there is nothing to fetch and nothing to
+                // lose.
+                json = nil
+            } else {
+                throw CouchError.malformedResponse(
+                    "_changes result \(index) (\(id)) carried no document")
             }
             return ChangeRow(id: id, rev: rev, deleted: deleted, json: json)
         }

@@ -244,6 +244,10 @@ public actor CouchSyncEngine {
         /// Image blobs downloaded for pages that reference them (protocol §3.4).
         public var fetchedAssets: [String] = []
         public var lastSeq: String = "0"
+        /// Feed batches dropped because an overlapping pull had already moved the checkpoint past
+        /// them. Diagnostic only — never surfaced as a failure. A foreground catch-up racing the
+        /// long poll is normal, and the batch is refetched from the winner's checkpoint.
+        public var discardedStaleBatches = 0
         /// A significant disagreement between this device's clock and the server's, or nil (§7).
         public var clockSkew: ClockSkew?
 
@@ -625,17 +629,36 @@ public actor CouchSyncEngine {
         // applying any of it. Checkpointing each batch also means a crash halfway through resumes
         // where it stopped instead of replaying the whole thing.
         //
-        // A longpoll is never paged: it is one wait for one notification, and the batch that
-        // follows is whatever changed while it waited.
+        // A longpoll is bounded the same way. It used to be sent with no limit at all, on the
+        // reasoning that it is one wait for one notification — but the batch that follows a wait is
+        // whatever changed *while* it waited, and after a device or proxy has been disconnected for
+        // a day that is the same unbounded response the paging above exists to prevent, ink and
+        // inline base64 and all.
+        //
+        // Once a long poll comes back full, the backlog is already on the server and there is
+        // nothing left to wait for, so the loop drops to normal requests and drains at full speed
+        // until a short batch says the server is caught up. Parking a fresh long poll instead would
+        // wait for a *new* change before collecting the ones already queued.
+        var longpollThisPass = longpoll
         repeat {
             let asked = state.lastSeq
             let changes = try await client.changes(
-                since: asked, longpoll: longpoll, timeoutMs: timeoutMs,
-                limit: longpoll ? nil : Self.catchUpBatchSize)
-            try await apply(changes, fetchedFrom: asked, into: &report)
+                since: asked, longpoll: longpollThisPass, timeoutMs: timeoutMs,
+                limit: Self.catchUpBatchSize)
+            let applied = try await apply(changes, fetchedFrom: asked, into: &report)
+            // A batch another pull already superseded says nothing about how far behind the server
+            // is — its row count describes a window that has since moved. Go back for the current
+            // checkpoint's view instead of deciding anything from it.
+            if !applied {
+                // Except on a longpoll: the caller asked to wait for one notification, and the
+                // overlapping pull that won has already delivered what this one was waiting for.
+                if longpoll { break }
+                continue
+            }
             // The server is caught up when it returns a short batch; a full one may have more
             // behind it. `lastSeq` moved, so the next request asks for what follows.
-            guard !longpoll, changes.rows.count >= Self.catchUpBatchSize else { break }
+            guard changes.rows.count >= Self.catchUpBatchSize else { break }
+            longpollThisPass = false
             // A full batch that did not move the checkpoint would ask the same question forever.
             // No CouchDB does that, which is exactly why it is worth refusing to loop on it here
             // rather than finding out on a device.
@@ -648,16 +671,33 @@ public actor CouchSyncEngine {
         return report
     }
 
-    /// Applies one batch of feed rows and advances the checkpoint past it.
+    /// Applies one batch of feed rows and advances the checkpoint past it. Returns whether the
+    /// batch was applied at all; `false` means it was discarded as stale.
     ///
     /// `fetchedFrom` is the checkpoint this batch was asked for. This actor suspends at the feed
     /// request, and actors are reentrant, so a second `pull` — a foreground catch-up while the
     /// longpoll waits — can run to completion in that gap. Its checkpoint is then newer than the
-    /// one this batch describes, and assigning ours over it would send the feed backwards and
-    /// replay everything in between on every pull from then on.
+    /// one this batch describes.
+    ///
+    /// The whole batch is dropped in that case, not merely its checkpoint. Keeping the rows was
+    /// defensible while the argument was about content — merges are idempotent, so re-applying what
+    /// the winner already applied lands on the identical document — but `state.revs` is not part of
+    /// that argument. It is a cache of "the revision the next push must build on", and writing an
+    /// older revision into it moves it *backwards*: the next push then quotes a stale `_rev` and
+    /// takes a 409 it did not need, and the echo check stops recognising this device's own writes,
+    /// which is a push ping-pong rather than a merge.
+    ///
+    /// Dropping the batch costs nothing. The next request starts from the winner's checkpoint, so
+    /// anything this batch carried that the winner did not is returned again immediately.
+    @discardableResult
     private func apply(
         _ changes: CouchDBClient.Changes, fetchedFrom: String, into report: inout PullReport
-    ) async throws {
+    ) async throws -> Bool {
+        guard state.lastSeq == fetchedFrom else {
+            report.discardedStaleBatches += 1
+            return false
+        }
+
         for row in changes.rows {
             // Our own write coming back. Applying it would be harmless (merges are idempotent) but
             // it would also mark the document dirty and start a push ping-pong.
@@ -673,23 +713,45 @@ public actor CouchSyncEngine {
                 state.revs[row.id] = row.rev
                 continue
             }
-            guard let json = row.json,
-                  let incoming = decode(documentID: row.id, json: json, deleted: row.deleted)
-            else {
-                if let json = row.json {
+            // A live row without a body cannot be applied and must not be checkpointed past. The
+            // parser rejects such a response before it reaches here, so this is defence rather than
+            // a path — but it throws instead of skipping, because skipping is exactly the silent
+            // loss the strict parser exists to prevent: a pull that fails is retried, a change the
+            // checkpoint stepped over is gone.
+            let incoming: CouchDocBody
+            if let json = row.json {
+                guard let decoded = decode(documentID: row.id, json: json, deleted: row.deleted)
+                else {
+                    // Valid transport, unmergeable content — a future schema, most often. Preserved
+                    // beside the local copy and checkpointed: unlike a missing body, nothing is lost
+                    // by moving past it.
                     try store.applyConflictCopy(row.id, json: json)
                     report.conflictCopies.append(row.id)
+                    state.revs[row.id] = row.rev
+                    continue
                 }
-                state.revs[row.id] = row.rev
-                continue
+                incoming = decoded
+            } else {
+                guard row.deleted, let type = CouchDocID.split(row.id)?.type else {
+                    throw CouchError.malformedResponse("_changes row \(row.id) carried no document")
+                }
+                // A tombstone CouchDB answered without a body, because `include_docs` found the
+                // document already deleted. `deletedAt` is left empty for the reason `decode` gives:
+                // stamping "now" would outrank every local edit and destroy work done after the
+                // deletion.
+                incoming = .deleted(CouchDeletedDoc(type: type, updatedBy: deviceID))
             }
 
             let local = try store.load(row.id)
             let merged: CouchDocBody
             if let local {
                 guard let result = CouchMerge.merge(local, incoming) else {
-                    try store.applyConflictCopy(row.id, json: json)
-                    report.conflictCopies.append(row.id)
+                    // Nothing to preserve when the body never arrived; the tombstone is the fact,
+                    // and the revision still has to be recorded so the next push builds on it.
+                    if let json = row.json {
+                        try store.applyConflictCopy(row.id, json: json)
+                        report.conflictCopies.append(row.id)
+                    }
                     state.revs[row.id] = row.rev
                     continue
                 }
@@ -709,13 +771,15 @@ public actor CouchSyncEngine {
             }
         }
 
-        // The rows themselves are applied either way: applying is idempotent, so a batch another
-        // pull already covered merges to the identical document or is skipped as our own echo.
-        // Only the checkpoint has to refuse to move backwards.
-        if state.lastSeq == fetchedFrom { state.lastSeq = changes.lastSeq }
+        // Unconditional now, unlike the guarded assignment this replaces: the batch was checked
+        // against `fetchedFrom` before any row was touched, and this actor does not suspend between
+        // there and here — `store` and the merge are synchronous — so no overlapping pull can have
+        // moved the checkpoint in between.
+        state.lastSeq = changes.lastSeq
         report.lastSeq = changes.lastSeq
         // Persisted per batch, not once at the end: an interrupted catch-up keeps what it applied.
         persist()
+        return true
     }
 
     /// Downloads the blobs local pages reference and this device does not hold yet.
