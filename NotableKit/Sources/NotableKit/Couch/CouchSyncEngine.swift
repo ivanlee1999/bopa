@@ -261,6 +261,25 @@ public actor CouchSyncEngine {
     private var state: CouchSyncState
     private let onStateChange: (@Sendable (CouchSyncState) -> Void)?
 
+    /// Monotonic local-edit generation per document. `dirty` alone cannot distinguish an edit
+    /// already represented by an in-flight PUT from another edit to the same document that lands
+    /// while that request is away at the server: inserting the id into a Set a second time changes
+    /// nothing, and the old request would remove it when it returned. The generation lets a request
+    /// clear only the exact edit it read.
+    ///
+    /// This does not need to be persisted. `dirty` is persisted before the request starts, so a
+    /// crash conservatively retries the document; generations only arbitrate two events within one
+    /// running process.
+    private var dirtyGenerations: [String: UInt64]
+
+    /// Actor methods are re-entrant at network awaits. Chaining concurrent flush callers prevents
+    /// two PUT loops from racing their revision updates while still allowing `markDirty` to enter
+    /// the actor and advance a generation during a request. Each caller keeps its own turn: a
+    /// `pushNow` that arrived during an older request must get a second pass over edits that request
+    /// could not have carried.
+    private var flushTail: Task<FlushReport, Never>?
+    private var flushSequence: UInt64 = 0
+
     /// Deletions the user has explicitly approved, waiting for the flush that will act on them.
     ///
     /// Deliberately not part of `CouchSyncState`, so it is neither persisted nor a setting: it is
@@ -282,6 +301,8 @@ public actor CouchSyncEngine {
         self.store = store
         self.deviceID = deviceID
         self.state = state
+        self.dirtyGenerations = Dictionary(
+            uniqueKeysWithValues: state.dirty.map { ($0, UInt64(0)) })
         self.maxPushAttempts = maxPushAttempts
         self.onStateChange = onStateChange
     }
@@ -292,8 +313,18 @@ public actor CouchSyncEngine {
     /// Queues documents for the next flush. Called from every local mutation; safe to call
     /// repeatedly and while offline, which is what makes the outbox the offline story.
     public func markDirty(_ documentIDs: [String]) {
-        for id in documentIDs { state.dirty.insert(id) }
+        queueDirty(documentIDs)
         persist()
+    }
+
+    /// Adds a new mutation generation without persisting yet. Pull uses the same path when a merge
+    /// discovers local content the server lacks; that push-back must not be cleared by an older PUT
+    /// any more than a pen edit may be.
+    private func queueDirty(_ documentIDs: [String]) {
+        for id in documentIDs {
+            state.dirty.insert(id)
+            dirtyGenerations[id, default: 0] &+= 1
+        }
     }
 
     // MARK: Resolving a held deletion
@@ -354,6 +385,20 @@ public actor CouchSyncEngine {
     // MARK: Push
 
     public func flush() async -> FlushReport {
+        let preceding = flushTail
+        flushSequence &+= 1
+        let sequence = flushSequence
+        let task = Task {
+            if let preceding { _ = await preceding.value }
+            return await self.performFlush()
+        }
+        flushTail = task
+        let report = await task.value
+        if flushSequence == sequence { flushTail = nil }
+        return report
+    }
+
+    private func performFlush() async -> FlushReport {
         var report = FlushReport()
         var queue = orderedDirty()
 
@@ -411,6 +456,10 @@ public actor CouchSyncEngine {
             }
         }
         persist()
+        // A successful request can still leave the same id queued when the editor saved a newer
+        // version during that request. Report the actual outbox after all actor re-entrancy, not
+        // merely the failures observed by the original queue walk.
+        report.stillDirty = state.dirty.sorted()
         // Read after the requests, so a flush that just spoke to the server reports what those
         // responses said rather than what the last sync happened to see.
         report.clockSkew = await client.clockSkew?.significantSkew
@@ -422,6 +471,7 @@ public actor CouchSyncEngine {
     private func push(_ documentID: String) async throws -> PushOutcome {
         var didMerge = false
         for _ in 0..<maxPushAttempts {
+            let dirtyGeneration = dirtyGenerations[documentID, default: 0]
             guard let local = try store.load(documentID) else {
                 // Nothing locally: the document was never created, or was cleaned up after being
                 // queued. Dropping it from the outbox is right — there is nothing to send.
@@ -432,7 +482,7 @@ public actor CouchSyncEngine {
             do {
                 let rev = try await putBody(documentID, local)
                 state.revs[documentID] = rev
-                state.dirty.remove(documentID)
+                clearDirty(documentID, ifUnchangedSince: dirtyGeneration)
                 return didMerge ? .mergedThenPushed : .pushed
             } catch CouchError.conflict where CouchDocID.split(documentID)?.type == CouchDocType.asset {
                 // Protocol §3.4: an asset id is the hash of its bytes, so a document already at
@@ -443,7 +493,7 @@ public actor CouchSyncEngine {
                 // tells "already uploaded" from "never sent" — without it every flush would
                 // re-offer the whole image just to be told again that it is there.
                 state.revs[documentID] = try? await client.getRaw(documentID)?.rev
-                state.dirty.remove(documentID)
+                clearDirty(documentID, ifUnchangedSince: dirtyGeneration)
                 return .pushed
             } catch CouchError.conflict {
                 didMerge = true
@@ -473,12 +523,20 @@ public actor CouchSyncEngine {
                 // and `updatedBy` differ from the stored one — equal deletions, unequal documents.
                 // There is nothing to send either way; the deletion is already recorded.
                 if merged == remote.body || (merged.isDeleted && remote.body.isDeleted) {
-                    state.dirty.remove(documentID)
+                    clearDirty(documentID, ifUnchangedSince: dirtyGeneration)
                     return .nothingToPush
                 }
             }
         }
         throw CouchError.conflict(documentID: documentID)
+    }
+
+    /// Removes only the mutation whose body the completed request actually carried. If another
+    /// save marked this id while the request was suspended, its higher generation remains queued
+    /// for the next flush.
+    private func clearDirty(_ documentID: String, ifUnchangedSince generation: UInt64) {
+        guard dirtyGenerations[documentID, default: 0] == generation else { return }
+        state.dirty.remove(documentID)
     }
 
     private func putBody(_ documentID: String, _ body: CouchDocBody) async throws -> String {
@@ -646,7 +704,7 @@ public actor CouchSyncEngine {
             state.revs[row.id] = row.rev
             if merged != incoming {
                 // The local copy carried content the server has not seen — push it back.
-                state.dirty.insert(row.id)
+                queueDirty([row.id])
                 report.pushBack.append(row.id)
             }
         }
