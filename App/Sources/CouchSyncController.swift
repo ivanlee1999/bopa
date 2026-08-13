@@ -71,6 +71,20 @@ final class CouchSyncController: ObservableObject {
     private var pullTask: Task<Void, Never>?
     private var pushTask: Task<Void, Never>?
 
+    /// The push loop's own backoff, deliberately separate from the feed loop's.
+    ///
+    /// The two fail independently, and the feed is the one that recovers first: a pull succeeds as
+    /// soon as the network is back, while an outbox can keep failing for its own reasons — a
+    /// document the server keeps rejecting, a rate limit that applies to writes. Sharing one
+    /// counter meant every successful pull reset the push delay to a second, so a persistently
+    /// failing outbox retried at full speed forever, which is precisely the request flood the
+    /// backoff exists to prevent.
+    private var pushBackoff: TimeInterval
+    /// Whether the current `pushTask` is a scheduled retry rather than an edit timer. Only a retry
+    /// may schedule another one, so an edit arriving mid-backoff replaces it with a normal push
+    /// instead of adding a second timer.
+    private var isRetryingPush = false
+
     private static let log = Logger(subsystem: "dev.ivan.bopa", category: "couch-sync")
 
     init(
@@ -89,6 +103,7 @@ final class CouchSyncController: ObservableObject {
         self.editQuietPeriod = editQuietPeriod
         self.retryFloor = retryFloor
         self.retryCeiling = retryCeiling
+        self.pushBackoff = retryFloor
         self.idleFloor = idleFloor
         self.now = now
         self.sleeper = sleeper
@@ -174,6 +189,10 @@ final class CouchSyncController: ObservableObject {
         pullTask = nil
         pushTask?.cancel()
         pushTask = nil
+        isRetryingPush = false
+        // The backoff is deliberately *not* reset here. Stopping is what happens when sync is
+        // switched off or the app backgrounds, and a device that comes straight back to a server
+        // that is still rate-limiting it should not arrive at full speed.
         if status == .syncing { status = .idle }
     }
 
@@ -183,6 +202,7 @@ final class CouchSyncController: ObservableObject {
     /// autosaves while someone is writing costs one push once they stop.
     func noteEdited() {
         pushTask?.cancel()
+        isRetryingPush = false
         let quiet = editQuietPeriod
         pushTask = Task { [weak self] in
             do {
@@ -196,13 +216,56 @@ final class CouchSyncController: ObservableObject {
         }
     }
 
+    /// Waits out the push backoff and tries the outbox again.
+    ///
+    /// Scheduled only after a flush that failed in a way waiting could fix. A terminal failure — a
+    /// page the server will not accept at any size, a malformed request — leaves the documents
+    /// queued and the message standing, but does not put the device in a retry loop that cannot
+    /// end: the next edit, foreground, or manual "Sync now" tries again, by which point something
+    /// may have changed.
+    private func schedulePushRetry(after delay: TimeInterval) {
+        pushTask?.cancel()
+        isRetryingPush = true
+        // Jitter so a household of devices that all lost the same Wi-Fi does not come back in
+        // lockstep and rebuild the thundering herd the backoff exists to break up.
+        let wait = delay * Double.random(in: 0.85...1.15)
+        pushTask = Task { [weak self] in
+            do {
+                guard let sleeper = self?.sleeper else { return }
+                try await sleeper(wait)
+            } catch {
+                return  // superseded by an edit, or cancelled by stop()
+            }
+            guard let self, !Task.isCancelled else { return }
+            await self.pushNow()
+        }
+    }
+
     /// Pushes immediately — leaving the editor, backgrounding, reconnecting, or "Sync now".
     func pushNow() async {
         pushTask?.cancel()
         pushTask = nil
+        let wasRetry = isRetryingPush
+        isRetryingPush = false
         status = .syncing
         let report = await flush()
         pendingCount = report.stillDirty.count
+
+        if report.failures.isEmpty {
+            // Reset on a push that actually succeeded, and on nothing else. A successful *pull*
+            // used to do it, which is how an outbox that had been failing for ten minutes went back
+            // to retrying every second.
+            pushBackoff = retryFloor
+        } else if report.hasRetriableFailure {
+            // The server's own answer wins when it gave one; §5 of the hardening plan, RFC 9110
+            // §10.2.3. `CouchDBClient` has already clamped it to something sane.
+            schedulePushRetry(after: report.retryAfter ?? pushBackoff)
+            pushBackoff = min(pushBackoff * 2, retryCeiling)
+        } else if wasRetry {
+            // A retry that came back terminal: stop climbing, and let the next edit or foreground
+            // start from the floor rather than from wherever this sequence had reached.
+            pushBackoff = retryFloor
+        }
         noteClockSkew(report.clockSkew)
         // Always assigned, never merged: the guard re-decides from scratch on every flush, so a
         // set that is no longer held has been resolved — by the user, or by the deletions ceasing
@@ -297,8 +360,14 @@ final class CouchSyncController: ObservableObject {
             return "Sync rejected the username or password."
         case CouchError.transport:
             return "Offline — changes are saved and will sync when you reconnect."
-        case CouchError.server(let status, _):
-            return "The sync server returned an error (\(status))."
+        case CouchError.server(let status, _, _) where status == 413:
+            // The one terminal status with an answer the user can act on. Everything else in this
+            // class is a server or configuration fault they can only report.
+            return "A page is too large for the sync server to accept."
+        case CouchError.server(let status, _, _):
+            return status < 500
+                ? "The sync server refused the request (\(status)). Check the sync settings."
+                : "The sync server returned an error (\(status))."
         default:
             return String(describing: error)
         }

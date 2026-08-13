@@ -217,6 +217,13 @@ public actor CouchSyncEngine {
         public var merged: [String] = []
         public var stillDirty: [String] = []
         public var failures: [String: String] = [:]
+        /// Whether any failure above could plausibly succeed on a later attempt — offline, a 5xx,
+        /// a 429. False when the only failures were ones the server will keep refusing, which is
+        /// what tells the controller to stop rescheduling and leave the message standing.
+        public var hasRetriableFailure = false
+        /// The longest `Retry-After` any server sent during this flush, in seconds. The controller
+        /// waits at least this long instead of its own backoff.
+        public var retryAfter: TimeInterval?
         /// Set when the mass-deletion guard refused the run (protocol §6.7).
         public var blockedByDeletionGuard = false
         /// *Which* notebook tombstones the guard held back — not the size of the whole queue,
@@ -439,6 +446,12 @@ public actor CouchSyncEngine {
             } catch let error as CouchError {
                 report.failures[documentID] = String(describing: error)
                 report.stillDirty.append(documentID)
+                if error.isRetriable {
+                    report.hasRetriableFailure = true
+                    if let asked = error.retryAfter {
+                        report.retryAfter = max(report.retryAfter ?? 0, asked)
+                    }
+                }
                 // Offline or a server fault applies to every remaining document too, and so do
                 // rejected credentials — which no amount of retrying will fix. Stopping keeps one
                 // dead connection, or one wrong password, from turning into a burst of doomed
@@ -457,6 +470,10 @@ public actor CouchSyncEngine {
             } catch {
                 report.failures[documentID] = String(describing: error)
                 report.stillDirty.append(documentID)
+                // Not a `CouchError` at all — a store read that failed, most likely. Local faults
+                // are usually transient (a file busy, a device briefly out of space), and the
+                // document stays in the durable outbox either way.
+                report.hasRetriableFailure = true
             }
         }
         persist()
@@ -695,6 +712,9 @@ public actor CouchSyncEngine {
     ) async throws -> Bool {
         guard state.lastSeq == fetchedFrom else {
             report.discardedStaleBatches += 1
+            // The winner's checkpoint, not this batch's: leaving the default "0" in the report
+            // would read as a checkpoint reset rather than as a batch that never applied.
+            report.lastSeq = state.lastSeq
             return false
         }
 

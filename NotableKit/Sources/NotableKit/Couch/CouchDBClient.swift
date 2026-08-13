@@ -338,10 +338,47 @@ public struct CouchDBClient: Sendable {
         case 401, 403: return .unauthorized
         case 404: return .notFound(path: path)
         case 409: return .conflict(documentID: path)
-        default: return .server(status: response.status, path: path)
+        default:
+            return .server(
+                status: response.status, path: path,
+                retryAfter: Self.retryAfter(response.header("Retry-After")))
         }
     }
+
+    /// `Retry-After` in either shape RFC 9110 allows: a delay in seconds, or an HTTP date.
+    ///
+    /// Clamped rather than trusted. A misconfigured proxy answering `Retry-After: 86400` would
+    /// otherwise park sync for a day — the server gets to slow this device down, not to switch it
+    /// off — and a date already in the past means "now", not a negative sleep.
+    static func retryAfter(_ header: String?) -> TimeInterval? {
+        guard let header = header?.trimmingCharacters(in: .whitespaces), !header.isEmpty else {
+            return nil
+        }
+        let seconds: TimeInterval
+        if let delay = TimeInterval(header) {
+            seconds = delay
+        } else if let date = httpDateFormatter.date(from: header) {
+            seconds = date.timeIntervalSinceNow
+        } else {
+            return nil
+        }
+        return min(max(seconds, 0), maxRetryAfter)
+    }
+
+    /// The longest a server may push this device out. Matches the retry ceiling the controllers
+    /// back off to on their own.
+    static let maxRetryAfter: TimeInterval = 60
 }
+
+/// RFC 9110 §5.6.7 preferred form, in the fixed locale the spec requires — a device set to a
+/// non-Gregorian calendar or a non-English locale would otherwise fail to parse a valid header.
+private let httpDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+    return formatter
+}()
 
 public enum CouchError: Error, Equatable {
     /// The stored revision was stale. The caller re-reads, merges, and writes again.
@@ -349,16 +386,44 @@ public enum CouchError: Error, Equatable {
     case notFound(path: String)
     /// Credentials rejected — worth surfacing immediately, since retrying cannot fix it.
     case unauthorized
-    case server(status: Int, path: String)
+    /// Any other status the client does not handle specially. `retryAfter` carries the server's
+    /// own answer to "when should I come back", in seconds, when it sent one.
+    case server(status: Int, path: String, retryAfter: TimeInterval? = nil)
     /// Offline, DNS failure, timeout: keep the work queued and back off.
     case transport(String)
     case malformedResponse(String)
 
     /// Whether waiting and trying again could plausibly succeed.
+    ///
+    /// Every `server` status used to answer yes, which meant a request the server had already
+    /// refused on its merits — a document larger than the configured maximum, a malformed request,
+    /// a database name this account may not touch — was retried on the same escalating schedule as
+    /// a dropped connection, forever, and the one message that would tell the user what to fix
+    /// scrolled past between attempts.
+    ///
+    /// The line is whether *waiting* is plausibly part of the answer. 5xx says the server failed at
+    /// something it agreed to do; 408, 425 and 429 say "not now, ask again". Every other 4xx is
+    /// this device having asked something the server will keep declining.
     public var isRetriable: Bool {
         switch self {
-        case .transport, .server: return true
+        case .transport: return true
+        case let .server(status, _, _):
+            switch status {
+            case 408, 425, 429: return true          // timeout, too early, rate limited
+            case 500...599: return true              // the server's own fault, possibly transient
+            default: return false                    // 400, 403, 405, 413, … will not improve
+            }
+        // 404 and 409 are inputs to the caller's own logic rather than failures to retry blindly,
+        // and no amount of waiting fixes a rejected credential or a response this build cannot
+        // parse.
         case .conflict, .notFound, .unauthorized, .malformedResponse: return false
         }
+    }
+
+    /// How long the server asked this device to wait, if it said. Only meaningful when
+    /// `isRetriable`.
+    public var retryAfter: TimeInterval? {
+        if case let .server(_, _, retryAfter) = self { return retryAfter }
+        return nil
     }
 }
