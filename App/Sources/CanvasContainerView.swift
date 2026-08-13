@@ -70,6 +70,13 @@ final class CanvasContainerView: UIView {
         // Desk and page: a flat ground with the sheet edged rather than floated, so the
         // page reads as drawn on the surface instead of hovering over it.
         backgroundColor = UIColor(hex: 0xEEECE9)
+        // The container is the viewport, and everything below is positioned by scroll offset:
+        // the sheet starts at `-contentOffset.y` and is at least two screens tall, so any scroll
+        // or zoom puts part of it outside these bounds. The canvas clips itself (it is a scroll
+        // view), but the sheet, the background and the page images are plain sibling views, and
+        // unclipped they painted white over the chrome around the canvas — scroll down far enough
+        // and the page covered the top bar and the tool rail entirely.
+        clipsToBounds = true
         pageSheet.backgroundColor = .white
         pageSheet.layer.borderColor = UIColor(hex: 0x7D7979).cgColor
         pageSheet.layer.borderWidth = 1

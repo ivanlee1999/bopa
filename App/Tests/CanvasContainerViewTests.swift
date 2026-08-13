@@ -219,6 +219,22 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertEqual(container.canvas.contentOffset.x, -expected, accuracy: 1)
     }
 
+    /// The page layer is positioned from the scroll offset, so scrolling down lifts the sheet
+    /// above the top of the viewport and zooming in pushes it past every edge. Those views are
+    /// plain siblings of the canvas (which clips itself), so unclipped they painted white over
+    /// the chrome around the canvas: scroll a page or pinch it and the top bar and the tool rail
+    /// disappeared behind the paper.
+    func testScrolledPageDoesNotPaintOverTheChrome() {
+        let container = makeContainer(portrait)
+        container.canvas.contentOffset.y = 600
+        container.updateContentGeometry()
+
+        XCTAssertTrue(
+            container.subviews.contains { !container.bounds.contains($0.frame) },
+            "the page layer should extend past the viewport here, or this pins nothing")
+        XCTAssertTrue(container.clipsToBounds)
+    }
+
     // MARK: - Reaching the ink
 
     /// The bug this was written for: ink written near the right edge of a BOOX whose screen is
