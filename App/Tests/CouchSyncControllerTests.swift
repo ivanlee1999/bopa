@@ -337,6 +337,76 @@ final class CouchSyncControllerTests: XCTestCase {
         XCTAssertTrue(message.lowercased().contains("offline"), message)
     }
 
+    // MARK: Image warnings
+
+    /// Images that have not arrived are a note, not a failure. Reporting them as a failed sync
+    /// would have people waiting for a state that has already arrived — the notes and the ink are
+    /// synced — or deleting a library over a picture that is still uploading from the other device.
+    func testWaitingImagesAreReportedBesideTheStatusRatherThanAsAFailure() async throws {
+        let engine = EngineSpy()
+        var report = CouchSyncEngine.PullReport()
+        report.applied = ["page:p1"]
+        report.missingAssets = ["asset:a1", "asset:a2"]
+        engine.setPullReport(report)
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 4))
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(80))
+        controller.stop()
+
+        XCTAssertEqual(controller.status, .idle, "images are not a sync failure")
+        let warning = try XCTUnwrap(controller.assetWarning)
+        XCTAssertTrue(warning.contains("2 images"), warning)
+        XCTAssertTrue(warning.lowercased().contains("ink are synced"), warning)
+        XCTAssertTrue(
+            controller.statusDetail?.contains("2 images") == true,
+            "the note should ride along with the status: \(controller.statusDetail ?? "nil")")
+    }
+
+    /// Distinct wording, because this one does not fix itself by waiting.
+    func testCorruptImagesAreDescribedAsUnverifiedRatherThanAsStillDownloading() async throws {
+        let engine = EngineSpy()
+        var report = CouchSyncEngine.PullReport()
+        report.corruptAssets = ["asset:a1"]
+        report.assetFailures = ["asset:a1": "downloaded bytes did not match the asset digest"]
+        engine.setPullReport(report)
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 4))
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(80))
+        controller.stop()
+
+        let warning = try XCTUnwrap(controller.assetWarning)
+        XCTAssertTrue(warning.contains("could not be verified"), warning)
+        XCTAssertEqual(controller.status, .idle)
+    }
+
+    /// The note is assigned from each report, never accumulated, so it clears itself when the
+    /// blobs land — nothing has to remember it was ever set.
+    func testTheImageNoteClearsOnceTheBlobsArrive() async throws {
+        let engine = EngineSpy()
+        var report = CouchSyncEngine.PullReport()
+        // `applied` is non-empty so the loop keeps pulling rather than parking on the idle floor
+        // and spending its sleeper budget before the second report is in place.
+        report.applied = ["page:p1"]
+        report.missingAssets = ["asset:a1"]
+        engine.setPullReport(report)
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertNotNil(controller.assetWarning)
+
+        var resolved = CouchSyncEngine.PullReport()
+        resolved.applied = ["page:p1"]
+        resolved.fetchedAssets = ["asset:a1"]
+        engine.setPullReport(resolved)
+        try await Task.sleep(for: .milliseconds(80))
+        controller.stop()
+
+        XCTAssertNil(controller.assetWarning, "a pull with nothing owed should clear the note")
+    }
+
     // MARK: Push backoff
 
     private func failingFlush(

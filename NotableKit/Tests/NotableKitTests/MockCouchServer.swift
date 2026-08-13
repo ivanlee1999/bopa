@@ -258,6 +258,19 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         }
     }
 
+    /// Serves different bytes under a content-addressed id than the ones that named it — a
+    /// truncating proxy, a mis-served range, a corrupted store on the far side. Nothing a
+    /// well-behaved CouchDB does, and exactly what the digest check exists to catch.
+    func replaceAttachment(_ documentID: String, with data: Data) {
+        lock.withLock {
+            guard var doc = docs[documentID] else { return }
+            let contentType = doc.attachments[CouchAssetID.blobName]?.contentType
+                ?? "application/octet-stream"
+            doc.attachments[CouchAssetID.blobName] = (contentType: contentType, data: data)
+            docs[documentID] = doc
+        }
+    }
+
     /// Writes arbitrary JSON, for documents the engine is meant to fail to understand.
     func seedRaw(_ documentID: String, _ json: [String: Any]) {
         lock.withLock {
@@ -321,6 +334,15 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
     /// Runs on the next `load`, to model the editor writing while a merge is in flight.
     var onLoad: (@Sendable () -> Void)?
 
+    /// Ids whose writes throw — a device out of space, a file the OS will not open.
+    private var unwritable: Set<String> = []
+
+    func failWrites(for documentID: String) {
+        lock.withLock { _ = unwritable.insert(documentID) }
+    }
+
+    struct WriteRefused: Error {}
+
     func load(_ documentID: String) throws -> CouchDocBody? {
         // The snapshot is taken first, *then* the hook runs: the engine is modelled as having read
         // the document and gone off to the network, with the editor saving while it is away.
@@ -334,6 +356,7 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
     /// cannot have decided against it. A double that simply overwrote with the merged body would
     /// silently drop ink saved during the round trip — and would hide that bug from these tests.
     func apply(_ documentID: String, _ body: CouchDocBody, basedOn: CouchDocBody?) throws {
+        if lock.withLock({ unwritable.contains(documentID) }) { throw WriteRefused() }
         lock.withLock {
             if case .page(let merged) = body, case .page(let current) = documents[documentID],
                case .page(let snapshot)? = basedOn {

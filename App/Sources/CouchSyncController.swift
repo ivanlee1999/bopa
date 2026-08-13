@@ -51,6 +51,10 @@ final class CouchSyncController: ObservableObject {
     /// Published as the ids rather than a count because the settings screen answers for exactly
     /// this set: whatever else reaches the outbox while the user is deciding is not covered.
     @Published private(set) var heldDeletions: [String] = []
+    /// Images referenced by synced pages that have not arrived, phrased for the settings footer, or
+    /// nil. A note, never a failure: the notes and the ink are already here, and the store retries
+    /// the blobs on every pull.
+    @Published private(set) var assetWarning: String?
 
     /// How long after the last edit to push. Short because a flush sends only the documents that
     /// changed — unlike the WebDAV engine, which re-sent a whole notebook and so needed 20s.
@@ -333,9 +337,40 @@ final class CouchSyncController: ObservableObject {
         if !report.conflictCopies.isEmpty {
             conflictCopies.append(contentsOf: report.conflictCopies)
         }
+        noteAssetProblems(report)
         // A pull that returned at all clears any previous failure: the server is demonstrably
         // reachable again, whether or not it had anything to say.
         status = .idle
+    }
+
+    /// Images that have not arrived, as a note beside the status rather than as a failure.
+    ///
+    /// Deliberately not `.failed`: the notes and the ink are synced, and calling that a sync
+    /// failure would have people waiting for a state that has already arrived — or worse, deleting
+    /// and re-downloading a library over a picture that is still uploading from the other device.
+    ///
+    /// Assigned from each report rather than accumulated, and derived from the store's own list of
+    /// what is missing, so a blob that lands on a later pull clears the message without anything
+    /// having to remember it was set.
+    private func noteAssetProblems(_ report: CouchSyncEngine.PullReport) {
+        let waiting = report.missingAssets.count
+        let corrupt = report.corruptAssets.count
+        for (assetID, reason) in report.assetFailures {
+            Self.log.warning("asset \(assetID, privacy: .public) unavailable: \(reason, privacy: .public)")
+        }
+
+        switch (waiting, corrupt) {
+        case (0, 0):
+            assetWarning = nil
+        case (let waiting, 0):
+            assetWarning = "\(waiting) image\(waiting == 1 ? "" : "s") still downloading. "
+                + "Notes and ink are synced."
+        case (_, let corrupt):
+            // Distinct wording because this one does not fix itself by waiting: the bytes the
+            // server holds do not match the name they are filed under.
+            assetWarning = "\(corrupt) image\(corrupt == 1 ? "" : "s") could not be verified and "
+                + "will be retried. Notes and ink are synced."
+        }
     }
 
     /// Records a skew observation and logs the transitions.
@@ -378,13 +413,12 @@ final class CouchSyncController: ObservableObject {
     /// A skew warning rides along with whatever else is being said rather than replacing it: the
     /// sync is not failing, and the clock is not the reason anything is queued. It is the sentence
     /// that explains why the wrong version of a page may have won.
+    ///
+    /// The image note rides along on the same terms, and for the same reason — the ink is synced,
+    /// so it must not replace a status that says so, and it must not read as a failure.
     var statusDetail: String? {
-        switch (syncDetail, clockSkew?.summary) {
-        case (let detail?, let warning?): return "\(detail) \(warning)"
-        case (let detail?, nil): return detail
-        case (nil, let warning?): return warning
-        case (nil, nil): return nil
-        }
+        let parts = [syncDetail, assetWarning, clockSkew?.summary].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     private var syncDetail: String? {

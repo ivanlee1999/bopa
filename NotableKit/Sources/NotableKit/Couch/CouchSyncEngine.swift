@@ -250,6 +250,21 @@ public actor CouchSyncEngine {
         public var conflictCopies: [String] = []
         /// Image blobs downloaded for pages that reference them (protocol §3.4).
         public var fetchedAssets: [String] = []
+        /// Referenced images the server does not hold yet — a peer wrote the page before its
+        /// bytes finished uploading. Retried on every pull, and the commonest reason a page shows
+        /// a gap where a picture belongs.
+        public var missingAssets: [String] = []
+        /// Blobs whose bytes did not hash to the id that named them. Never stored, never
+        /// re-uploaded: the id is a promise about the content, and writing these would break it.
+        public var corruptAssets: [String] = []
+        /// Why each asset above did not arrive, by asset id. Safe to show: no paths, no
+        /// credentials.
+        public var assetFailures: [String: String] = [:]
+        /// Whether anything about the images is worth telling the user. The page and its ink are
+        /// applied either way — this never means the sync failed.
+        public var hasAssetProblems: Bool {
+            !missingAssets.isEmpty || !corruptAssets.isEmpty || !assetFailures.isEmpty
+        }
         public var lastSeq: String = "0"
         /// Feed batches dropped because an overlapping pull had already moved the checkpoint past
         /// them. Diagnostic only — never surfaced as a failure. A foreground catch-up racing the
@@ -682,7 +697,7 @@ public actor CouchSyncEngine {
             guard state.lastSeq != asked else { break }
         } while !Task.isCancelled
 
-        report.fetchedAssets = await fetchMissingAssets()
+        await fetchMissingAssets(into: &report)
         persist()
         report.clockSkew = await client.clockSkew?.significantSkew
         return report
@@ -810,24 +825,70 @@ public actor CouchSyncEngine {
     ///
     /// A failure here never fails the pull: the page and its ink are already applied, and an image
     /// that is still on its way is a picture that has not appeared yet, not lost work.
-    private func fetchMissingAssets() async -> [String] {
-        guard let wanted = try? store.missingAssetIDs(), !wanted.isEmpty else { return [] }
-        var fetched: [String] = []
+    /// Every branch below used to be a bare `continue`, so five different failures — an unreadable
+    /// id, a transport error, a peer that has not uploaded the bytes, a digest mismatch, a store
+    /// that would not write — all looked identical from outside: the pull reported success and the
+    /// image simply was not there. The status said idle while the page had a hole in it.
+    ///
+    /// They are still non-fatal, and for the same reason: the page and its ink are already applied,
+    /// and an image on its way is a picture that has not appeared yet, not lost work. What changes
+    /// is that the pull now says so.
+    private func fetchMissingAssets(into report: inout PullReport) async {
+        guard let wanted = try? store.missingAssetIDs(), !wanted.isEmpty else { return }
         for assetID in wanted {
-            guard let sha = CouchAssetID.sha256Hex(ofAssetID: assetID) else { continue }
-            guard let blob = try? await client.getAttachment(assetID) else { continue }
-            // The id is a promise about the bytes. Checking it costs one hash and turns a
-            // truncated or mis-served download into a retry rather than into a corrupt image that
-            // would then be re-uploaded under a name that does not describe it.
-            guard CouchAssetID.sha256Hex(blob.data) == sha else { continue }
+            guard let sha = CouchAssetID.sha256Hex(ofAssetID: assetID) else {
+                // Not a content-addressed id at all — nothing to fetch and nothing to verify
+                // against, so this one will never resolve by retrying.
+                report.assetFailures[assetID] = "not a content-addressed asset id"
+                continue
+            }
+
+            let blob: (data: Data, contentType: String)?
+            do {
+                blob = try await client.getAttachment(assetID)
+            } catch {
+                report.assetFailures[assetID] = Self.describe(error)
+                continue
+            }
+            guard let blob else {
+                // A 404: the peer that referenced this image has not uploaded the bytes yet. The
+                // commonest case by far, and the one that resolves itself.
+                report.missingAssets.append(assetID)
+                continue
+            }
+
+            // The id is a promise about the bytes. Checking it costs one hash and turns a truncated
+            // or mis-served download into a retry rather than into a corrupt image that would then
+            // be re-uploaded under a name that does not describe it.
+            guard CouchAssetID.sha256Hex(blob.data) == sha else {
+                // Logged apart from the rest and never stored: writing it would put bytes under an
+                // id that does not describe them, and the next push would upload them.
+                report.corruptAssets.append(assetID)
+                report.assetFailures[assetID] = "downloaded bytes did not match the asset digest"
+                continue
+            }
+
             let now = NotableDate.format(Date())
             let asset = CouchAsset(
                 contentType: blob.contentType, createdAt: now, updatedAt: now,
                 updatedBy: deviceID, data: blob.data)
-            guard (try? store.apply(assetID, .asset(asset), basedOn: nil)) != nil else { continue }
-            fetched.append(assetID)
+            do {
+                try store.apply(assetID, .asset(asset), basedOn: nil)
+            } catch {
+                // Out of space, a permission problem: local, usually transient, and retried on the
+                // next pull because the store still lists the asset as missing.
+                report.assetFailures[assetID] = Self.describe(error)
+                continue
+            }
+            report.fetchedAssets.append(assetID)
         }
-        return fetched
+    }
+
+    /// Short and stable, for a report that reaches a UI. `String(describing:)` on an arbitrary
+    /// error renders type metadata that varies with the build.
+    private static func describe(_ error: Error) -> String {
+        if let couch = error as? CouchError { return String(describing: couch) }
+        return (error as NSError).localizedDescription
     }
 
     // MARK: Plumbing
