@@ -89,7 +89,8 @@ final class CouchAppLayerEndToEndTests: XCTestCase {
     }
 
     private func makeDevice(
-        _ name: String, serverURL: String? = nil, database: String? = nil, password: String? = nil
+        _ name: String, serverURL: String? = nil, database: String? = nil,
+        username: String? = nil, password: String? = nil
     ) throws -> Device {
         let deviceID = "\(name)-\(namespace)"
         // Both the settings and the backend selection are handed to the host rather than written
@@ -100,7 +101,8 @@ final class CouchAppLayerEndToEndTests: XCTestCase {
         // which is a change to a real user-facing setting that no test should be making.
         let settings = CouchSettings(
             serverURL: serverURL ?? self.serverURL, database: database ?? self.database,
-            username: username, password: password ?? self.password, deviceID: deviceID)
+            username: username ?? self.username, password: password ?? self.password,
+            deviceID: deviceID)
 
         let deviceRoot = rootURL.appendingPathComponent(deviceID, isDirectory: true)
         try FileManager.default.createDirectory(at: deviceRoot, withIntermediateDirectories: true)
@@ -283,10 +285,17 @@ final class CouchAppLayerEndToEndTests: XCTestCase {
     /// and it used to report only the document it had actually attempted — so the badge read "1"
     /// while the outbox held a dozen.
     ///
-    /// Staged with a password the server will refuse, which is a real early break against a real
+    /// Staged with credentials the server will refuse, which is a real early break against a real
     /// server rather than a simulated one.
+    ///
+    /// The rejected *account* is a name nothing else uses, not the real one with a wrong password.
+    /// CouchDB 3.5 locks an account after a few failed authentications, and this test makes four —
+    /// so refusing `sync` here locked the account every run, and the next run inside that window
+    /// found the server "unreachable" and skipped every test in this file. Silently, and green: the
+    /// coverage that matters most disappeared exactly when someone ran the suite twice in a row.
+    /// An unknown user is refused identically and takes the lockout with it.
     func testAFlushThatStopsEarlyReportsEverythingStillWaiting() async throws {
-        let ipad = try makeDevice("earlybreak", password: "definitely-not-the-password")
+        let ipad = try makeDevice("earlybreak", username: "no-such-account-\(namespace)")
         for index in 0..<4 {
             _ = try ipad.store.createNotebook(title: "queued \(index) \(namespace)")
         }
