@@ -353,8 +353,11 @@ final class CouchSyncController: ObservableObject {
     /// what is missing, so a blob that lands on a later pull clears the message without anything
     /// having to remember it was set.
     private func noteAssetProblems(_ report: CouchSyncEngine.PullReport) {
-        let waiting = report.missingAssets.count
         let corrupt = report.corruptAssets.count
+        // A corrupt asset is recorded in both `corruptAssets` and `assetFailures`, so it is
+        // subtracted back out rather than counted twice. A 404 is only in `missingAssets` — it is
+        // not a failure, it is a peer that has not finished uploading.
+        let waiting = report.missingAssets.count + max(0, report.assetFailures.count - corrupt)
         for (assetID, reason) in report.assetFailures {
             Self.log.warning("asset \(assetID, privacy: .public) unavailable: \(reason, privacy: .public)")
         }
