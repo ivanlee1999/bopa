@@ -51,6 +51,10 @@ final class CouchSyncController: ObservableObject {
     /// Published as the ids rather than a count because the settings screen answers for exactly
     /// this set: whatever else reaches the outbox while the user is deciding is not covered.
     @Published private(set) var heldDeletions: [String] = []
+    /// Images referenced by synced pages that have not arrived, phrased for the settings footer, or
+    /// nil. A note, never a failure: the notes and the ink are already here, and the store retries
+    /// the blobs on every pull.
+    @Published private(set) var assetWarning: String?
 
     /// How long after the last edit to push. Short because a flush sends only the documents that
     /// changed — unlike the WebDAV engine, which re-sent a whole notebook and so needed 20s.
@@ -71,6 +75,20 @@ final class CouchSyncController: ObservableObject {
     private var pullTask: Task<Void, Never>?
     private var pushTask: Task<Void, Never>?
 
+    /// The push loop's own backoff, deliberately separate from the feed loop's.
+    ///
+    /// The two fail independently, and the feed is the one that recovers first: a pull succeeds as
+    /// soon as the network is back, while an outbox can keep failing for its own reasons — a
+    /// document the server keeps rejecting, a rate limit that applies to writes. Sharing one
+    /// counter meant every successful pull reset the push delay to a second, so a persistently
+    /// failing outbox retried at full speed forever, which is precisely the request flood the
+    /// backoff exists to prevent.
+    private var pushBackoff: TimeInterval
+    /// Whether the current `pushTask` is a scheduled retry rather than an edit timer. Only a retry
+    /// may schedule another one, so an edit arriving mid-backoff replaces it with a normal push
+    /// instead of adding a second timer.
+    private var isRetryingPush = false
+
     private static let log = Logger(subsystem: "dev.ivan.bopa", category: "couch-sync")
 
     init(
@@ -89,6 +107,7 @@ final class CouchSyncController: ObservableObject {
         self.editQuietPeriod = editQuietPeriod
         self.retryFloor = retryFloor
         self.retryCeiling = retryCeiling
+        self.pushBackoff = retryFloor
         self.idleFloor = idleFloor
         self.now = now
         self.sleeper = sleeper
@@ -174,6 +193,10 @@ final class CouchSyncController: ObservableObject {
         pullTask = nil
         pushTask?.cancel()
         pushTask = nil
+        isRetryingPush = false
+        // The backoff is deliberately *not* reset here. Stopping is what happens when sync is
+        // switched off or the app backgrounds, and a device that comes straight back to a server
+        // that is still rate-limiting it should not arrive at full speed.
         if status == .syncing { status = .idle }
     }
 
@@ -183,6 +206,7 @@ final class CouchSyncController: ObservableObject {
     /// autosaves while someone is writing costs one push once they stop.
     func noteEdited() {
         pushTask?.cancel()
+        isRetryingPush = false
         let quiet = editQuietPeriod
         pushTask = Task { [weak self] in
             do {
@@ -196,13 +220,56 @@ final class CouchSyncController: ObservableObject {
         }
     }
 
+    /// Waits out the push backoff and tries the outbox again.
+    ///
+    /// Scheduled only after a flush that failed in a way waiting could fix. A terminal failure — a
+    /// page the server will not accept at any size, a malformed request — leaves the documents
+    /// queued and the message standing, but does not put the device in a retry loop that cannot
+    /// end: the next edit, foreground, or manual "Sync now" tries again, by which point something
+    /// may have changed.
+    private func schedulePushRetry(after delay: TimeInterval) {
+        pushTask?.cancel()
+        isRetryingPush = true
+        // Jitter so a household of devices that all lost the same Wi-Fi does not come back in
+        // lockstep and rebuild the thundering herd the backoff exists to break up.
+        let wait = delay * Double.random(in: 0.85...1.15)
+        pushTask = Task { [weak self] in
+            do {
+                guard let sleeper = self?.sleeper else { return }
+                try await sleeper(wait)
+            } catch {
+                return  // superseded by an edit, or cancelled by stop()
+            }
+            guard let self, !Task.isCancelled else { return }
+            await self.pushNow()
+        }
+    }
+
     /// Pushes immediately — leaving the editor, backgrounding, reconnecting, or "Sync now".
     func pushNow() async {
         pushTask?.cancel()
         pushTask = nil
+        let wasRetry = isRetryingPush
+        isRetryingPush = false
         status = .syncing
         let report = await flush()
         pendingCount = report.stillDirty.count
+
+        if report.failures.isEmpty {
+            // Reset on a push that actually succeeded, and on nothing else. A successful *pull*
+            // used to do it, which is how an outbox that had been failing for ten minutes went back
+            // to retrying every second.
+            pushBackoff = retryFloor
+        } else if report.hasRetriableFailure {
+            // The server's own answer wins when it gave one; §5 of the hardening plan, RFC 9110
+            // §10.2.3. `CouchDBClient` has already clamped it to something sane.
+            schedulePushRetry(after: report.retryAfter ?? pushBackoff)
+            pushBackoff = min(pushBackoff * 2, retryCeiling)
+        } else if wasRetry {
+            // A retry that came back terminal: stop climbing, and let the next edit or foreground
+            // start from the floor rather than from wherever this sequence had reached.
+            pushBackoff = retryFloor
+        }
         noteClockSkew(report.clockSkew)
         // Always assigned, never merged: the guard re-decides from scratch on every flush, so a
         // set that is no longer held has been resolved — by the user, or by the deletions ceasing
@@ -270,9 +337,43 @@ final class CouchSyncController: ObservableObject {
         if !report.conflictCopies.isEmpty {
             conflictCopies.append(contentsOf: report.conflictCopies)
         }
+        noteAssetProblems(report)
         // A pull that returned at all clears any previous failure: the server is demonstrably
         // reachable again, whether or not it had anything to say.
         status = .idle
+    }
+
+    /// Images that have not arrived, as a note beside the status rather than as a failure.
+    ///
+    /// Deliberately not `.failed`: the notes and the ink are synced, and calling that a sync
+    /// failure would have people waiting for a state that has already arrived — or worse, deleting
+    /// and re-downloading a library over a picture that is still uploading from the other device.
+    ///
+    /// Assigned from each report rather than accumulated, and derived from the store's own list of
+    /// what is missing, so a blob that lands on a later pull clears the message without anything
+    /// having to remember it was set.
+    private func noteAssetProblems(_ report: CouchSyncEngine.PullReport) {
+        let corrupt = report.corruptAssets.count
+        // A corrupt asset is recorded in both `corruptAssets` and `assetFailures`, so it is
+        // subtracted back out rather than counted twice. A 404 is only in `missingAssets` — it is
+        // not a failure, it is a peer that has not finished uploading.
+        let waiting = report.missingAssets.count + max(0, report.assetFailures.count - corrupt)
+        for (assetID, reason) in report.assetFailures {
+            Self.log.warning("asset \(assetID, privacy: .public) unavailable: \(reason, privacy: .public)")
+        }
+
+        switch (waiting, corrupt) {
+        case (0, 0):
+            assetWarning = nil
+        case (let waiting, 0):
+            assetWarning = "\(waiting) image\(waiting == 1 ? "" : "s") still downloading. "
+                + "Notes and ink are synced."
+        case (_, let corrupt):
+            // Distinct wording because this one does not fix itself by waiting: the bytes the
+            // server holds do not match the name they are filed under.
+            assetWarning = "\(corrupt) image\(corrupt == 1 ? "" : "s") could not be verified and "
+                + "will be retried. Notes and ink are synced."
+        }
     }
 
     /// Records a skew observation and logs the transitions.
@@ -297,8 +398,14 @@ final class CouchSyncController: ObservableObject {
             return "Sync rejected the username or password."
         case CouchError.transport:
             return "Offline — changes are saved and will sync when you reconnect."
-        case CouchError.server(let status, _):
-            return "The sync server returned an error (\(status))."
+        case CouchError.server(let status, _, _) where status == 413:
+            // The one terminal status with an answer the user can act on. Everything else in this
+            // class is a server or configuration fault they can only report.
+            return "A page is too large for the sync server to accept."
+        case CouchError.server(let status, _, _):
+            return status < 500
+                ? "The sync server refused the request (\(status)). Check the sync settings."
+                : "The sync server returned an error (\(status))."
         default:
             return String(describing: error)
         }
@@ -309,13 +416,12 @@ final class CouchSyncController: ObservableObject {
     /// A skew warning rides along with whatever else is being said rather than replacing it: the
     /// sync is not failing, and the clock is not the reason anything is queued. It is the sentence
     /// that explains why the wrong version of a page may have won.
+    ///
+    /// The image note rides along on the same terms, and for the same reason — the ink is synced,
+    /// so it must not replace a status that says so, and it must not read as a failure.
     var statusDetail: String? {
-        switch (syncDetail, clockSkew?.summary) {
-        case (let detail?, let warning?): return "\(detail) \(warning)"
-        case (let detail?, nil): return detail
-        case (nil, let warning?): return warning
-        case (nil, nil): return nil
-        }
+        let parts = [syncDetail, assetWarning, clockSkew?.summary].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     private var syncDetail: String? {

@@ -13,11 +13,23 @@ public struct CouchSyncState: Codable, Equatable, Sendable {
     public var revs: [String: String]
     /// The outbox: documents changed locally and not yet accepted by the server.
     public var dirty: Set<String>
+    /// Which database the state above describes (protocol §1.2), or nil for state written before
+    /// this field existed — or by a device that has not yet met a server carrying the metadata.
+    ///
+    /// The checkpoint and revision cache are only meaningful against the database they were built
+    /// from, and "same address, same name" does not establish that: a database dropped and
+    /// recreated answers to both. Nil is treated as "not yet known", never as "any database will
+    /// do".
+    public var databaseGeneration: String?
 
-    public init(lastSeq: String = "0", revs: [String: String] = [:], dirty: Set<String> = []) {
+    public init(
+        lastSeq: String = "0", revs: [String: String] = [:], dirty: Set<String> = [],
+        databaseGeneration: String? = nil
+    ) {
         self.lastSeq = lastSeq
         self.revs = revs
         self.dirty = dirty
+        self.databaseGeneration = databaseGeneration
     }
 
     public init(from decoder: Decoder) throws {
@@ -25,6 +37,7 @@ public struct CouchSyncState: Codable, Equatable, Sendable {
         lastSeq = try c.decodeIfPresent(String.self, forKey: .lastSeq) ?? "0"
         revs = try c.decodeIfPresent([String: String].self, forKey: .revs) ?? [:]
         dirty = try c.decodeIfPresent(Set<String>.self, forKey: .dirty) ?? []
+        databaseGeneration = try c.decodeIfPresent(String.self, forKey: .databaseGeneration)
     }
 }
 
@@ -217,6 +230,13 @@ public actor CouchSyncEngine {
         public var merged: [String] = []
         public var stillDirty: [String] = []
         public var failures: [String: String] = [:]
+        /// Whether any failure above could plausibly succeed on a later attempt — offline, a 5xx,
+        /// a 429. False when the only failures were ones the server will keep refusing, which is
+        /// what tells the controller to stop rescheduling and leave the message standing.
+        public var hasRetriableFailure = false
+        /// The longest `Retry-After` any server sent during this flush, in seconds. The controller
+        /// waits at least this long instead of its own backoff.
+        public var retryAfter: TimeInterval?
         /// Set when the mass-deletion guard refused the run (protocol §6.7).
         public var blockedByDeletionGuard = false
         /// *Which* notebook tombstones the guard held back — not the size of the whole queue,
@@ -231,6 +251,9 @@ public actor CouchSyncEngine {
         /// Advisory: it never fails or holds back a push, it only explains why a merge might
         /// resolve the wrong way.
         public var clockSkew: ClockSkew?
+        /// What the database said about itself this pass (§1.2). Reported even when it is not
+        /// enforced, which is what makes the staged rollout observable before it is enabled.
+        public var databaseIdentity: DatabaseIdentity?
 
         public init() {}
     }
@@ -243,7 +266,29 @@ public actor CouchSyncEngine {
         public var conflictCopies: [String] = []
         /// Image blobs downloaded for pages that reference them (protocol §3.4).
         public var fetchedAssets: [String] = []
+        /// Referenced images the server does not hold yet — a peer wrote the page before its
+        /// bytes finished uploading. Retried on every pull, and the commonest reason a page shows
+        /// a gap where a picture belongs.
+        public var missingAssets: [String] = []
+        /// Blobs whose bytes did not hash to the id that named them. Never stored, never
+        /// re-uploaded: the id is a promise about the content, and writing these would break it.
+        public var corruptAssets: [String] = []
+        /// Why each asset above did not arrive, by asset id. Safe to show: no paths, no
+        /// credentials.
+        public var assetFailures: [String: String] = [:]
+        /// Whether anything about the images is worth telling the user. The page and its ink are
+        /// applied either way — this never means the sync failed.
+        public var hasAssetProblems: Bool {
+            !missingAssets.isEmpty || !corruptAssets.isEmpty || !assetFailures.isEmpty
+        }
         public var lastSeq: String = "0"
+        /// Feed batches dropped because an overlapping pull had already moved the checkpoint past
+        /// them. Diagnostic only — never surfaced as a failure. A foreground catch-up racing the
+        /// long poll is normal, and the batch is refetched from the winner's checkpoint.
+        public var discardedStaleBatches = 0
+        /// What the database said about itself this pass (§1.2). Reported even when it is not
+        /// enforced, which is what makes the staged rollout observable before it is enabled.
+        public var databaseIdentity: DatabaseIdentity?
         /// A significant disagreement between this device's clock and the server's, or nil (§7).
         public var clockSkew: ClockSkew?
 
@@ -260,6 +305,19 @@ public actor CouchSyncEngine {
     static let catchUpBatchSize = 100
     private var state: CouchSyncState
     private let onStateChange: (@Sendable (CouchSyncState) -> Void)?
+
+    /// Whether a database-identity problem stops sync (§1.2 stage 3) or is merely reported.
+    ///
+    /// Off by default, and that is the whole point of the staged rollout: a client that *required*
+    /// the metadata would refuse to sync with a peer of the previous release, which has never
+    /// written it. Reading, creating and recording run unconditionally; only blocking waits.
+    private let enforceDatabaseIdentity: Bool
+    private let now: @Sendable () -> Date
+    private let newGeneration: @Sendable () -> String
+
+    /// What the last identity check saw, or nil before the first one. Cached so pull and flush do
+    /// not each re-read the document on every pass.
+    private var identity: DatabaseIdentity?
 
     /// Monotonic local-edit generation per document. `dirty` alone cannot distinguish an edit
     /// already represented by an in-flight PUT from another edit to the same document that lands
@@ -295,6 +353,9 @@ public actor CouchSyncEngine {
         deviceID: String,
         state: CouchSyncState = CouchSyncState(),
         maxPushAttempts: Int = 5,
+        enforceDatabaseIdentity: Bool = false,
+        now: @escaping @Sendable () -> Date = Date.init,
+        newGeneration: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
         onStateChange: (@Sendable (CouchSyncState) -> Void)? = nil
     ) {
         self.client = client
@@ -304,6 +365,9 @@ public actor CouchSyncEngine {
         self.dirtyGenerations = Dictionary(
             uniqueKeysWithValues: state.dirty.map { ($0, UInt64(0)) })
         self.maxPushAttempts = maxPushAttempts
+        self.enforceDatabaseIdentity = enforceDatabaseIdentity
+        self.now = now
+        self.newGeneration = newGeneration
         self.onStateChange = onStateChange
     }
 
@@ -400,6 +464,26 @@ public actor CouchSyncEngine {
 
     private func performFlush() async -> FlushReport {
         var report = FlushReport()
+
+        // Checked before a single document goes out. Uploading a library into a database that is
+        // not the one this device has been syncing with is the one mistake here that cannot be
+        // undone from the other side.
+        //
+        // A check that could not complete is *not* evidence about identity — offline is the usual
+        // reason — so it is swallowed and the flush proceeds exactly as it did before this existed.
+        // The pushes will discover the same network for themselves, and report it per document the
+        // way every other caller expects.
+        report.databaseIdentity = try? await verifyDatabaseIdentity()
+        if enforceDatabaseIdentity, let identity = report.databaseIdentity, !identity.isUsable {
+            report.failures[CouchMetaDocID.database] =
+                String(describing: CouchError.databaseIdentity(identity))
+            // Terminal on purpose: no amount of retrying resolves whose library this is. The outbox
+            // keeps everything, and the user's answer is what releases it.
+            report.hasRetriableFailure = false
+            report.stillDirty = state.dirty.sorted()
+            return report
+        }
+
         var queue = orderedDirty()
 
         // The approval is consumed here, before anything is sent, whether or not the guard turns
@@ -435,6 +519,12 @@ public actor CouchSyncEngine {
             } catch let error as CouchError {
                 report.failures[documentID] = String(describing: error)
                 report.stillDirty.append(documentID)
+                if error.isRetriable {
+                    report.hasRetriableFailure = true
+                    if let asked = error.retryAfter {
+                        report.retryAfter = max(report.retryAfter ?? 0, asked)
+                    }
+                }
                 // Offline or a server fault applies to every remaining document too, and so do
                 // rejected credentials — which no amount of retrying will fix. Stopping keeps one
                 // dead connection, or one wrong password, from turning into a burst of doomed
@@ -453,6 +543,10 @@ public actor CouchSyncEngine {
             } catch {
                 report.failures[documentID] = String(describing: error)
                 report.stillDirty.append(documentID)
+                // Not a `CouchError` at all — a store read that failed, most likely. Local faults
+                // are usually transient (a file busy, a device briefly out of space), and the
+                // document stays in the durable outbox either way.
+                report.hasRetriableFailure = true
             }
         }
         persist()
@@ -609,6 +703,135 @@ public actor CouchSyncEngine {
         return tombstones.count * 2 > known.count
     }
 
+    // MARK: Database identity (§1.2)
+
+    /// What the last check made of the database this device is pointed at.
+    public enum DatabaseIdentity: Equatable, Sendable {
+        /// The database this state was built against, or one that has just adopted this device's
+        /// first sight of it.
+        case matched(generation: String)
+        /// A database with the same address and name, but not the same database. Nothing is applied
+        /// or uploaded until a human chooses what should happen to the two libraries.
+        case generationChanged(stored: String, found: String)
+        /// The server requires a newer client than this one.
+        case clientTooOld(minimum: Int)
+        /// A rebuild is in progress on another device.
+        case locked(reason: String?)
+        /// The server holds no metadata: a database created before this document existed, or a
+        /// peer that has not shipped it yet. Explicitly *not* a mismatch — see below.
+        case unknown
+
+        public var isUsable: Bool {
+            switch self {
+            case .matched, .unknown: return true
+            case .generationChanged, .clientTooOld, .locked: return false
+            }
+        }
+    }
+
+    /// The last identity observation, for a UI that wants to explain a refusal.
+    public var databaseIdentity: DatabaseIdentity? { identity }
+
+    /// Reads — and on an empty database, creates — the identity document, and reconciles it with
+    /// what this device believes.
+    ///
+    /// Called before the feed is read and before the outbox is sent. Cheap after the first pass:
+    /// the result is cached for the life of the engine, which is the life of one configuration.
+    @discardableResult
+    func verifyDatabaseIdentity() async throws -> DatabaseIdentity {
+        if let identity { return identity }
+
+        let stored = state.databaseGeneration
+        let remote: CouchDBClient.Stored<CouchDatabaseMetadata>?
+        do {
+            remote = try await client.get(CouchMetaDocID.database, as: CouchDatabaseMetadata.self)
+        } catch CouchError.notFound {
+            remote = nil
+        }
+
+        guard let metadata = remote?.body else {
+            // No metadata. On a database that already holds documents this means "created before
+            // this document existed", and the only safe reading is to leave it alone: treating a
+            // missing identity as permission to mint one — and therefore as permission to decide
+            // this is a *new* database — is how a client would come to rebuild a library it should
+            // have been syncing with.
+            //
+            // On an empty database there is nothing to be wrong about, so this device names it.
+            let identity = try await claimEmptyDatabase() ?? .unknown
+            self.identity = identity
+            return identity
+        }
+
+        if metadata.minimumClientProtocol > couchProtocolVersion {
+            identity = .clientTooOld(minimum: metadata.minimumClientProtocol)
+            return identity!
+        }
+        if metadata.locked {
+            identity = .locked(reason: metadata.lockReason)
+            return identity!
+        }
+
+        switch stored {
+        case nil:
+            // First sight of a database that already has an identity. Adopt it — this device has
+            // no prior claim to contradict it with.
+            state.databaseGeneration = metadata.generation
+            persist()
+            identity = .matched(generation: metadata.generation)
+        case let stored? where stored == metadata.generation:
+            identity = .matched(generation: metadata.generation)
+        case let stored?:
+            // The name and address are the same; the database is not. The checkpoint describes
+            // history this server never had, and the revision cache would suppress genuine changes
+            // as though they were this device's own echoes.
+            identity = .generationChanged(stored: stored, found: metadata.generation)
+        }
+        return identity!
+    }
+
+    /// Names an empty database, or returns nil when it turns out not to be empty.
+    ///
+    /// `PUT` with no `_rev` is the whole concurrency story: two devices reaching a fresh database
+    /// together both try to create the document, and CouchDB gives exactly one of them the write.
+    /// The loser re-reads and adopts the winner's generation rather than retrying, because the
+    /// question "which of us names it" has already been answered.
+    private func claimEmptyDatabase() async throws -> DatabaseIdentity? {
+        guard try await isDatabaseEmpty() else {
+            // Pre-existing library, no metadata: record nothing and block nothing.
+            return nil
+        }
+
+        let metadata = CouchDatabaseMetadata(
+            generation: state.databaseGeneration ?? newGeneration(),
+            updatedAt: NotableDate.format(now()))
+        do {
+            _ = try await client.put(CouchMetaDocID.database, rev: nil, body: metadata)
+            state.databaseGeneration = metadata.generation
+            persist()
+            return .matched(generation: metadata.generation)
+        } catch CouchError.conflict {
+            // Another device got there first in the moment between the read and the write.
+            guard let winner = try await client.get(
+                CouchMetaDocID.database, as: CouchDatabaseMetadata.self)?.body
+            else { return nil }
+            state.databaseGeneration = winner.generation
+            persist()
+            return .matched(generation: winner.generation)
+        }
+    }
+
+    /// Whether the server holds any document this protocol cares about. Reserved ids do not count:
+    /// a database holding nothing but protocol bookkeeping is still an empty library.
+    ///
+    /// A page of rows rather than one, because a single row could be a reserved id and say nothing
+    /// about what follows it. One page is enough: the answer only has to be right about a database
+    /// small enough to be plausibly new, and anything with a hundred documents is not.
+    private func isDatabaseEmpty() async throws -> Bool {
+        let probe = try await client.changes(
+            since: "0", longpoll: false, limit: Self.catchUpBatchSize)
+        return probe.rows.allSatisfy { CouchMetaDocID.isReserved($0.id) }
+    }
+
     // MARK: Pull
 
     /// Applies everything the server has seen since the last checkpoint.
@@ -618,6 +841,12 @@ public actor CouchSyncEngine {
     @discardableResult
     public func pull(longpoll: Bool = false, timeoutMs: Int = 55_000) async throws -> PullReport {
         var report = PullReport()
+        report.databaseIdentity = try await verifyDatabaseIdentity()
+        if enforceDatabaseIdentity, !report.databaseIdentity!.isUsable {
+            // Nothing is applied and the checkpoint does not move. A device that cannot tell whose
+            // history it is reading must not act on it.
+            throw CouchError.databaseIdentity(report.databaseIdentity!)
+        }
 
         // Read the feed in batches rather than in one response. A catch-up from `0` — a fresh
         // install, or any device whose checkpoint was lost — otherwise asks for the entire library
@@ -625,40 +854,90 @@ public actor CouchSyncEngine {
         // applying any of it. Checkpointing each batch also means a crash halfway through resumes
         // where it stopped instead of replaying the whole thing.
         //
-        // A longpoll is never paged: it is one wait for one notification, and the batch that
-        // follows is whatever changed while it waited.
+        // A longpoll is bounded the same way. It used to be sent with no limit at all, on the
+        // reasoning that it is one wait for one notification — but the batch that follows a wait is
+        // whatever changed *while* it waited, and after a device or proxy has been disconnected for
+        // a day that is the same unbounded response the paging above exists to prevent, ink and
+        // inline base64 and all.
+        //
+        // Once a long poll comes back full, the backlog is already on the server and there is
+        // nothing left to wait for, so the loop drops to normal requests and drains at full speed
+        // until a short batch says the server is caught up. Parking a fresh long poll instead would
+        // wait for a *new* change before collecting the ones already queued.
+        var longpollThisPass = longpoll
         repeat {
             let asked = state.lastSeq
             let changes = try await client.changes(
-                since: asked, longpoll: longpoll, timeoutMs: timeoutMs,
-                limit: longpoll ? nil : Self.catchUpBatchSize)
-            try await apply(changes, fetchedFrom: asked, into: &report)
+                since: asked, longpoll: longpollThisPass, timeoutMs: timeoutMs,
+                limit: Self.catchUpBatchSize)
+            let applied = try await apply(changes, fetchedFrom: asked, into: &report)
+            // A batch another pull already superseded says nothing about how far behind the server
+            // is — its row count describes a window that has since moved. Go back for the current
+            // checkpoint's view instead of deciding anything from it.
+            if !applied {
+                // Except on a longpoll: the caller asked to wait for one notification, and the
+                // overlapping pull that won has already delivered what this one was waiting for.
+                if longpoll { break }
+                continue
+            }
             // The server is caught up when it returns a short batch; a full one may have more
             // behind it. `lastSeq` moved, so the next request asks for what follows.
-            guard !longpoll, changes.rows.count >= Self.catchUpBatchSize else { break }
+            guard changes.rows.count >= Self.catchUpBatchSize else { break }
+            longpollThisPass = false
             // A full batch that did not move the checkpoint would ask the same question forever.
             // No CouchDB does that, which is exactly why it is worth refusing to loop on it here
             // rather than finding out on a device.
             guard state.lastSeq != asked else { break }
         } while !Task.isCancelled
 
-        report.fetchedAssets = await fetchMissingAssets()
+        await fetchMissingAssets(into: &report)
         persist()
         report.clockSkew = await client.clockSkew?.significantSkew
         return report
     }
 
-    /// Applies one batch of feed rows and advances the checkpoint past it.
+    /// Applies one batch of feed rows and advances the checkpoint past it. Returns whether the
+    /// batch was applied at all; `false` means it was discarded as stale.
     ///
     /// `fetchedFrom` is the checkpoint this batch was asked for. This actor suspends at the feed
     /// request, and actors are reentrant, so a second `pull` — a foreground catch-up while the
     /// longpoll waits — can run to completion in that gap. Its checkpoint is then newer than the
-    /// one this batch describes, and assigning ours over it would send the feed backwards and
-    /// replay everything in between on every pull from then on.
+    /// one this batch describes.
+    ///
+    /// The whole batch is dropped in that case, not merely its checkpoint. Keeping the rows was
+    /// defensible while the argument was about content — merges are idempotent, so re-applying what
+    /// the winner already applied lands on the identical document — but `state.revs` is not part of
+    /// that argument. It is a cache of "the revision the next push must build on", and writing an
+    /// older revision into it moves it *backwards*: the next push then quotes a stale `_rev` and
+    /// takes a 409 it did not need, and the echo check stops recognising this device's own writes,
+    /// which is a push ping-pong rather than a merge.
+    ///
+    /// Dropping the batch costs nothing. The next request starts from the winner's checkpoint, so
+    /// anything this batch carried that the winner did not is returned again immediately.
+    @discardableResult
     private func apply(
         _ changes: CouchDBClient.Changes, fetchedFrom: String, into report: inout PullReport
-    ) async throws {
+    ) async throws -> Bool {
+        guard state.lastSeq == fetchedFrom else {
+            report.discardedStaleBatches += 1
+            // The winner's checkpoint, not this batch's: leaving the default "0" in the report
+            // would read as a checkpoint reset rather than as a batch that never applied.
+            report.lastSeq = state.lastSeq
+            return false
+        }
+
         for row in changes.rows {
+            // Protocol bookkeeping, not a library item (§1.1). Recorded and stepped past: it is
+            // neither merged nor conflict-copied, and a `sync-meta:` id this build does not know is
+            // still recognisably ours rather than a document from a future schema.
+            //
+            // Ahead of the echo check, so it never reaches any of the report's lists. A caller
+            // counting what a pull brought down is asking about the library, and bookkeeping
+            // turning up as a "skipped echo" is noise in every report that mentions it.
+            if CouchMetaDocID.isReserved(row.id) {
+                state.revs[row.id] = row.rev
+                continue
+            }
             // Our own write coming back. Applying it would be harmless (merges are idempotent) but
             // it would also mark the document dirty and start a push ping-pong.
             if let known = state.revs[row.id], known == row.rev {
@@ -673,23 +952,45 @@ public actor CouchSyncEngine {
                 state.revs[row.id] = row.rev
                 continue
             }
-            guard let json = row.json,
-                  let incoming = decode(documentID: row.id, json: json, deleted: row.deleted)
-            else {
-                if let json = row.json {
+            // A live row without a body cannot be applied and must not be checkpointed past. The
+            // parser rejects such a response before it reaches here, so this is defence rather than
+            // a path — but it throws instead of skipping, because skipping is exactly the silent
+            // loss the strict parser exists to prevent: a pull that fails is retried, a change the
+            // checkpoint stepped over is gone.
+            let incoming: CouchDocBody
+            if let json = row.json {
+                guard let decoded = decode(documentID: row.id, json: json, deleted: row.deleted)
+                else {
+                    // Valid transport, unmergeable content — a future schema, most often. Preserved
+                    // beside the local copy and checkpointed: unlike a missing body, nothing is lost
+                    // by moving past it.
                     try store.applyConflictCopy(row.id, json: json)
                     report.conflictCopies.append(row.id)
+                    state.revs[row.id] = row.rev
+                    continue
                 }
-                state.revs[row.id] = row.rev
-                continue
+                incoming = decoded
+            } else {
+                guard row.deleted, let type = CouchDocID.split(row.id)?.type else {
+                    throw CouchError.malformedResponse("_changes row \(row.id) carried no document")
+                }
+                // A tombstone CouchDB answered without a body, because `include_docs` found the
+                // document already deleted. `deletedAt` is left empty for the reason `decode` gives:
+                // stamping "now" would outrank every local edit and destroy work done after the
+                // deletion.
+                incoming = .deleted(CouchDeletedDoc(type: type, updatedBy: deviceID))
             }
 
             let local = try store.load(row.id)
             let merged: CouchDocBody
             if let local {
                 guard let result = CouchMerge.merge(local, incoming) else {
-                    try store.applyConflictCopy(row.id, json: json)
-                    report.conflictCopies.append(row.id)
+                    // Nothing to preserve when the body never arrived; the tombstone is the fact,
+                    // and the revision still has to be recorded so the next push builds on it.
+                    if let json = row.json {
+                        try store.applyConflictCopy(row.id, json: json)
+                        report.conflictCopies.append(row.id)
+                    }
                     state.revs[row.id] = row.rev
                     continue
                 }
@@ -709,13 +1010,15 @@ public actor CouchSyncEngine {
             }
         }
 
-        // The rows themselves are applied either way: applying is idempotent, so a batch another
-        // pull already covered merges to the identical document or is skipped as our own echo.
-        // Only the checkpoint has to refuse to move backwards.
-        if state.lastSeq == fetchedFrom { state.lastSeq = changes.lastSeq }
+        // Unconditional now, unlike the guarded assignment this replaces: the batch was checked
+        // against `fetchedFrom` before any row was touched, and this actor does not suspend between
+        // there and here — `store` and the merge are synchronous — so no overlapping pull can have
+        // moved the checkpoint in between.
+        state.lastSeq = changes.lastSeq
         report.lastSeq = changes.lastSeq
         // Persisted per batch, not once at the end: an interrupted catch-up keeps what it applied.
         persist()
+        return true
     }
 
     /// Downloads the blobs local pages reference and this device does not hold yet.
@@ -726,24 +1029,70 @@ public actor CouchSyncEngine {
     ///
     /// A failure here never fails the pull: the page and its ink are already applied, and an image
     /// that is still on its way is a picture that has not appeared yet, not lost work.
-    private func fetchMissingAssets() async -> [String] {
-        guard let wanted = try? store.missingAssetIDs(), !wanted.isEmpty else { return [] }
-        var fetched: [String] = []
+    /// Every branch below used to be a bare `continue`, so five different failures — an unreadable
+    /// id, a transport error, a peer that has not uploaded the bytes, a digest mismatch, a store
+    /// that would not write — all looked identical from outside: the pull reported success and the
+    /// image simply was not there. The status said idle while the page had a hole in it.
+    ///
+    /// They are still non-fatal, and for the same reason: the page and its ink are already applied,
+    /// and an image on its way is a picture that has not appeared yet, not lost work. What changes
+    /// is that the pull now says so.
+    private func fetchMissingAssets(into report: inout PullReport) async {
+        guard let wanted = try? store.missingAssetIDs(), !wanted.isEmpty else { return }
         for assetID in wanted {
-            guard let sha = CouchAssetID.sha256Hex(ofAssetID: assetID) else { continue }
-            guard let blob = try? await client.getAttachment(assetID) else { continue }
-            // The id is a promise about the bytes. Checking it costs one hash and turns a
-            // truncated or mis-served download into a retry rather than into a corrupt image that
-            // would then be re-uploaded under a name that does not describe it.
-            guard CouchAssetID.sha256Hex(blob.data) == sha else { continue }
+            guard let sha = CouchAssetID.sha256Hex(ofAssetID: assetID) else {
+                // Not a content-addressed id at all — nothing to fetch and nothing to verify
+                // against, so this one will never resolve by retrying.
+                report.assetFailures[assetID] = "not a content-addressed asset id"
+                continue
+            }
+
+            let blob: (data: Data, contentType: String)?
+            do {
+                blob = try await client.getAttachment(assetID)
+            } catch {
+                report.assetFailures[assetID] = Self.describe(error)
+                continue
+            }
+            guard let blob else {
+                // A 404: the peer that referenced this image has not uploaded the bytes yet. The
+                // commonest case by far, and the one that resolves itself.
+                report.missingAssets.append(assetID)
+                continue
+            }
+
+            // The id is a promise about the bytes. Checking it costs one hash and turns a truncated
+            // or mis-served download into a retry rather than into a corrupt image that would then
+            // be re-uploaded under a name that does not describe it.
+            guard CouchAssetID.sha256Hex(blob.data) == sha else {
+                // Logged apart from the rest and never stored: writing it would put bytes under an
+                // id that does not describe them, and the next push would upload them.
+                report.corruptAssets.append(assetID)
+                report.assetFailures[assetID] = "downloaded bytes did not match the asset digest"
+                continue
+            }
+
             let now = NotableDate.format(Date())
             let asset = CouchAsset(
                 contentType: blob.contentType, createdAt: now, updatedAt: now,
                 updatedBy: deviceID, data: blob.data)
-            guard (try? store.apply(assetID, .asset(asset), basedOn: nil)) != nil else { continue }
-            fetched.append(assetID)
+            do {
+                try store.apply(assetID, .asset(asset), basedOn: nil)
+            } catch {
+                // Out of space, a permission problem: local, usually transient, and retried on the
+                // next pull because the store still lists the asset as missing.
+                report.assetFailures[assetID] = Self.describe(error)
+                continue
+            }
+            report.fetchedAssets.append(assetID)
         }
-        return fetched
+    }
+
+    /// Short and stable, for a report that reaches a UI. `String(describing:)` on an arbitrary
+    /// error renders type metadata that varies with the build.
+    private static func describe(_ error: Error) -> String {
+        if let couch = error as? CouchError { return String(describing: couch) }
+        return (error as NSError).localizedDescription
     }
 
     // MARK: Plumbing

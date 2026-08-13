@@ -578,6 +578,101 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertEqual(pulled.fetchedAssets, [pictureID])
     }
 
+    // MARK: Image failures
+    //
+    // All five of these used to be one bare `continue`, so the pull reported success and the page
+    // simply had a hole in it. They are still non-fatal — the ink is applied, and an image on its
+    // way is a picture that has not appeared yet — but the pull now says which of them happened.
+
+    /// The commonest case, and the one that resolves itself: a peer wrote the page before its
+    /// bytes finished uploading.
+    func testAPictureTheServerDoesNotHoldYetIsReportedAsMissing() async throws {
+        // The page names a picture; the bytes were never uploaded.
+        ipadStore.set(pageID, .page(pageWithPicture(updatedAt: 5, by: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        let pulled = try await boox.pull()
+
+        XCTAssertEqual(pulled.missingAssets, [pictureID])
+        XCTAssertTrue(pulled.corruptAssets.isEmpty)
+        XCTAssertTrue(pulled.hasAssetProblems)
+        XCTAssertTrue(pulled.applied.contains(pageID), "the page and its ink still arrived")
+    }
+
+    func testADownloadThatFailedIsReportedWithItsReasonAndStaysRetriable() async throws {
+        ipadStore.set(pageID, .page(pageWithPicture(updatedAt: 5, by: "ipad")))
+        ipadStore.set(pictureID, .asset(CouchAsset(
+            data: picture, at: stamp(1), updatedBy: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        server.failingDocumentIDs["\(pictureID)/blob"] = 503
+        let pulled = try await boox.pull()
+
+        XCTAssertTrue(pulled.fetchedAssets.isEmpty)
+        XCTAssertNotNil(pulled.assetFailures[pictureID], "the reason should be reported, not lost")
+        XCTAssertTrue(pulled.hasAssetProblems)
+        XCTAssertEqual(
+            try booxStore.missingAssetIDs(), [pictureID], "and it is still owed, so still retried")
+    }
+
+    /// The id is a promise about the bytes. Bytes that break it must never be stored — writing
+    /// them would file content under a name that does not describe it, and the next push would
+    /// upload it under that name.
+    func testBytesThatDoNotMatchTheirDigestAreReportedAsCorruptAndNotStored() async throws {
+        ipadStore.set(pageID, .page(pageWithPicture(updatedAt: 5, by: "ipad")))
+        ipadStore.set(pictureID, .asset(CouchAsset(
+            data: picture, at: stamp(1), updatedBy: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        // The server now serves different bytes under the same content-addressed id.
+        server.replaceAttachment(pictureID, with: Data("not the picture at all".utf8))
+        let pulled = try await boox.pull()
+
+        XCTAssertEqual(pulled.corruptAssets, [pictureID])
+        XCTAssertTrue(pulled.fetchedAssets.isEmpty)
+        XCTAssertNil(booxStore.body(pictureID), "corrupt bytes must not be written")
+        XCTAssertNotNil(pulled.assetFailures[pictureID])
+    }
+
+    func testAStoreThatWillNotWriteTheBlobIsReportedRatherThanSwallowed() async throws {
+        ipadStore.set(pageID, .page(pageWithPicture(updatedAt: 5, by: "ipad")))
+        ipadStore.set(pictureID, .asset(CouchAsset(
+            data: picture, at: stamp(1), updatedBy: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        booxStore.failWrites(for: pictureID)
+        let pulled = try await boox.pull()
+
+        XCTAssertTrue(pulled.fetchedAssets.isEmpty)
+        XCTAssertNotNil(pulled.assetFailures[pictureID])
+        XCTAssertNil(booxStore.body(pictureID))
+    }
+
+    /// The warning has to be able to go away on its own, or it would outlive the problem: the set
+    /// is derived from the store on every pull rather than accumulated.
+    func testALaterPullThatSucceedsReportsNoAssetProblems() async throws {
+        ipadStore.set(pageID, .page(pageWithPicture(updatedAt: 5, by: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        let first = try await boox.pull()
+        XCTAssertEqual(first.missingAssets, [pictureID])
+
+        // The picture finishes uploading from the iPad.
+        ipadStore.set(pictureID, .asset(CouchAsset(
+            data: picture, at: stamp(1), updatedBy: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        let second = try await boox.pull()
+        XCTAssertEqual(second.fetchedAssets, [pictureID])
+        XCTAssertFalse(second.hasAssetProblems, "the warning must clear itself")
+    }
+
     /// A wiped local database looks exactly like "the user deleted everything"; the guard makes
     /// the difference a human decision rather than a silent mass delete.
     func testMassDeletionIsRefusedRatherThanPushed() async throws {
@@ -844,6 +939,33 @@ final class CouchSyncEngineTests: XCTestCase {
         // A second pull has nothing left to do: the checkpoint moved past everything applied.
         let again = try await ipad.pull()
         XCTAssertTrue(again.applied.isEmpty)
+    }
+
+    /// The same bound applies to a long poll, which used to be sent with no limit at all.
+    ///
+    /// The reasoning was that a long poll is one wait for one notification — but what it returns is
+    /// everything that changed *while* it waited, which after a reconnection is the whole backlog.
+    /// And once a full batch comes back there is nothing left to wait for, so the loop drops to
+    /// normal requests and drains at full speed: parking a fresh long poll would sit waiting for a
+    /// *new* change while the ones already queued went uncollected.
+    func testALongpollBacklogArrivesInBoundedBatchesAndIsDrained() async throws {
+        let total = CouchSyncEngine.catchUpBatchSize * 2 + 25
+        for index in 0..<total {
+            let id = CouchDocID.page("p\(index)")
+            booxStore.set(id, .page(page(strokes: [stroke("s\(index)", at: index, device: "boox")],
+                                         updatedAt: 5, by: "boox")))
+            await boox.markDirty([id])
+        }
+        _ = await boox.flush()
+
+        let report = try await ipad.pull(longpoll: true)
+
+        XCTAssertEqual(report.applied.count, total, "the backlog should be drained, not sampled")
+        XCTAssertLessThanOrEqual(
+            server.largestChangeBatch(), CouchSyncEngine.catchUpBatchSize,
+            "no single long-poll response should have carried the whole backlog")
+        let again = try await ipad.pull(longpoll: true)
+        XCTAssertTrue(again.applied.isEmpty, "and the checkpoint moved past all of it")
     }
 
     /// Stopping at the first dead connection is right; describing the run as though only that one

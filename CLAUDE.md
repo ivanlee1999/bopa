@@ -32,3 +32,11 @@ already absorb cross-machine antialiasing drift.
 Known flake: a simulator run occasionally dies with "Early unexpected exit …
 before establishing connection". That's the runner crashing before attaching,
 not a product failure — rerun once before investigating.
+
+**The CouchDB end-to-end tests share one database and never clean up**, so the
+suite slows as it fills — seconds, then minutes, then timeouts that read as
+flakiness. `./scripts/couch-reset.sh` empties it (and refuses to touch anything
+that doesn't look like a test database). Run it when the `app` tier starts
+taking noticeably longer than ~10s. Those tests self-skip when no server is
+reachable, so a skipped count above zero means the server is down or refusing
+the `sync` account — not that they passed.

@@ -239,8 +239,16 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
         lock.withLock { docs[documentID]?.deleted ?? false }
     }
 
-    func documentIDs() -> [String] {
-        lock.withLock { docs.keys.sorted() }
+    /// The *library* documents the server holds.
+    ///
+    /// Reserved ids are excluded by default because the protocol says they are not library items
+    /// (§1.1): `sync-meta:database` appears the moment any engine touches a fresh database, and a
+    /// test asking "did this notebook reach the server" is not asking about bookkeeping. The
+    /// identity tests pass `includeReserved` to see it.
+    func documentIDs(includeReserved: Bool = false) -> [String] {
+        lock.withLock {
+            docs.keys.filter { includeReserved || !CouchMetaDocID.isReserved($0) }.sorted()
+        }
     }
 
     /// Writes a document as if another device had pushed it.
@@ -255,6 +263,19 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
             docs[documentID] = Doc(
                 rev: "\(generation + 1)-r\(revCounter)", deleted: deleted,
                 json: json ?? [:], seq: seqCounter)
+        }
+    }
+
+    /// Serves different bytes under a content-addressed id than the ones that named it — a
+    /// truncating proxy, a mis-served range, a corrupted store on the far side. Nothing a
+    /// well-behaved CouchDB does, and exactly what the digest check exists to catch.
+    func replaceAttachment(_ documentID: String, with data: Data) {
+        lock.withLock {
+            guard var doc = docs[documentID] else { return }
+            let contentType = doc.attachments[CouchAssetID.blobName]?.contentType
+                ?? "application/octet-stream"
+            doc.attachments[CouchAssetID.blobName] = (contentType: contentType, data: data)
+            docs[documentID] = doc
         }
     }
 
@@ -291,7 +312,12 @@ final class PauseFirstPutTransport: HTTPTransport, @unchecked Sendable {
     }
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
-        let pause = request.method == "PUT" && shouldPause.withLock { shouldPause in
+        // Reserved ids are stepped over: `sync-meta:database` is written the first time an engine
+        // meets an empty database (§1.2), and it arriving first would make this fixture park the
+        // bookkeeping write rather than the document write every one of its tests is about.
+        let isDocumentWrite = request.method == "PUT"
+            && !request.path.contains("\(CouchDocType.syncMeta):")
+        let pause = isDocumentWrite && shouldPause.withLock { shouldPause in
             guard shouldPause else { return false }
             shouldPause = false
             return true
@@ -321,6 +347,15 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
     /// Runs on the next `load`, to model the editor writing while a merge is in flight.
     var onLoad: (@Sendable () -> Void)?
 
+    /// Ids whose writes throw — a device out of space, a file the OS will not open.
+    private var unwritable: Set<String> = []
+
+    func failWrites(for documentID: String) {
+        lock.withLock { _ = unwritable.insert(documentID) }
+    }
+
+    struct WriteRefused: Error {}
+
     func load(_ documentID: String) throws -> CouchDocBody? {
         // The snapshot is taken first, *then* the hook runs: the engine is modelled as having read
         // the document and gone off to the network, with the editor saving while it is away.
@@ -334,6 +369,7 @@ final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
     /// cannot have decided against it. A double that simply overwrote with the merged body would
     /// silently drop ink saved during the round trip — and would hide that bug from these tests.
     func apply(_ documentID: String, _ body: CouchDocBody, basedOn: CouchDocBody?) throws {
+        if lock.withLock({ unwritable.contains(documentID) }) { throw WriteRefused() }
         lock.withLock {
             if case .page(let merged) = body, case .page(let current) = documents[documentID],
                case .page(let snapshot)? = basedOn {

@@ -337,6 +337,203 @@ final class CouchSyncControllerTests: XCTestCase {
         XCTAssertTrue(message.lowercased().contains("offline"), message)
     }
 
+    // MARK: Image warnings
+
+    /// Images that have not arrived are a note, not a failure. Reporting them as a failed sync
+    /// would have people waiting for a state that has already arrived — the notes and the ink are
+    /// synced — or deleting a library over a picture that is still uploading from the other device.
+    func testWaitingImagesAreReportedBesideTheStatusRatherThanAsAFailure() async throws {
+        let engine = EngineSpy()
+        var report = CouchSyncEngine.PullReport()
+        report.applied = ["page:p1"]
+        report.missingAssets = ["asset:a1", "asset:a2"]
+        engine.setPullReport(report)
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 4))
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(80))
+        controller.stop()
+
+        XCTAssertEqual(controller.status, .idle, "images are not a sync failure")
+        let warning = try XCTUnwrap(controller.assetWarning)
+        XCTAssertTrue(warning.contains("2 images"), warning)
+        XCTAssertTrue(warning.lowercased().contains("ink are synced"), warning)
+        XCTAssertTrue(
+            controller.statusDetail?.contains("2 images") == true,
+            "the note should ride along with the status: \(controller.statusDetail ?? "nil")")
+    }
+
+    /// Distinct wording, because this one does not fix itself by waiting.
+    func testCorruptImagesAreDescribedAsUnverifiedRatherThanAsStillDownloading() async throws {
+        let engine = EngineSpy()
+        var report = CouchSyncEngine.PullReport()
+        report.corruptAssets = ["asset:a1"]
+        report.assetFailures = ["asset:a1": "downloaded bytes did not match the asset digest"]
+        engine.setPullReport(report)
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 4))
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(80))
+        controller.stop()
+
+        let warning = try XCTUnwrap(controller.assetWarning)
+        XCTAssertTrue(warning.contains("could not be verified"), warning)
+        XCTAssertEqual(controller.status, .idle)
+    }
+
+    /// The note is assigned from each report, never accumulated, so it clears itself when the
+    /// blobs land — nothing has to remember it was ever set.
+    func testTheImageNoteClearsOnceTheBlobsArrive() async throws {
+        let engine = EngineSpy()
+        var report = CouchSyncEngine.PullReport()
+        // `applied` is non-empty so the loop keeps pulling rather than parking on the idle floor
+        // and spending its sleeper budget before the second report is in place.
+        report.applied = ["page:p1"]
+        report.missingAssets = ["asset:a1"]
+        engine.setPullReport(report)
+        let controller = makeController(engine: engine, sleeper: FakeSleeper(allowedTicks: 10))
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertNotNil(controller.assetWarning)
+
+        var resolved = CouchSyncEngine.PullReport()
+        resolved.applied = ["page:p1"]
+        resolved.fetchedAssets = ["asset:a1"]
+        engine.setPullReport(resolved)
+        try await Task.sleep(for: .milliseconds(80))
+        controller.stop()
+
+        XCTAssertNil(controller.assetWarning, "a pull with nothing owed should clear the note")
+    }
+
+    // MARK: Push backoff
+
+    private func failingFlush(
+        retriable: Bool, retryAfter: TimeInterval? = nil
+    ) -> CouchSyncEngine.FlushReport {
+        var report = CouchSyncEngine.FlushReport()
+        report.failures = ["page:p1": "server(503)"]
+        report.stillDirty = ["page:p1"]
+        report.hasRetriableFailure = retriable
+        report.retryAfter = retryAfter
+        return report
+    }
+
+    /// A failing outbox has to retry itself. Before this it flushed once, reported the failure, and
+    /// then waited for the user to edit something else or tap Sync now — on a server that was
+    /// briefly down, the queued pages simply sat there.
+    func testAFailedPushRetriesItselfWithGrowingDelays() async throws {
+        let engine = EngineSpy()
+        engine.setFlushReport(failingFlush(retriable: true))
+        let sleeper = FakeSleeper(allowedTicks: 4)
+        let controller = makeController(engine: engine, sleeper: sleeper, quiet: 0.01)
+
+        await controller.pushNow()
+        try await Task.sleep(for: .milliseconds(120))
+        controller.stop()
+
+        XCTAssertGreaterThan(engine.flushCount, 1, "the outbox should have been tried again")
+        let waits = sleeper.recorded
+        XCTAssertGreaterThanOrEqual(waits.count, 2, "expected several retries: \(waits)")
+        // Jittered, so compare across a doubling rather than between neighbours.
+        XCTAssertGreaterThan(waits[1], waits[0] * 1.2, "backoff should grow: \(waits)")
+    }
+
+    /// The trap the plan calls out: pull and push fail independently, and the pull recovers first.
+    /// One shared counter meant every successful pull reset the push delay to a second, so an
+    /// outbox that kept failing retried at full speed forever.
+    func testASuccessfulPullDoesNotResetPushBackoff() async throws {
+        let engine = EngineSpy()
+        engine.setFlushReport(failingFlush(retriable: true))
+        let sleeper = FakeSleeper(allowedTicks: 8)
+        let controller = makeController(engine: engine, sleeper: sleeper, quiet: 0.01)
+
+        // Climb the backoff a few steps.
+        await controller.pushNow()
+        try await Task.sleep(for: .milliseconds(120))
+        let climbed = sleeper.recorded.last ?? 0
+        controller.stop()
+
+        // A pull succeeds — the network is back for reads — and the outbox keeps failing.
+        engine.setPullReport(CouchSyncEngine.PullReport())
+        engine.setPendingCount(1)
+        await controller.pushNow()
+        try await Task.sleep(for: .milliseconds(40))
+        controller.stop()
+
+        let resumed = sleeper.recorded.last ?? 0
+        XCTAssertGreaterThan(
+            resumed, climbed * 0.5,
+            "the push delay should have carried on from where it was, not restarted: "
+                + "\(sleeper.recorded)")
+    }
+
+    func testASuccessfulPushResetsTheBackoff() async throws {
+        let engine = EngineSpy()
+        engine.setFlushReport(failingFlush(retriable: true))
+        let sleeper = FakeSleeper(allowedTicks: 8)
+        let controller = makeController(engine: engine, sleeper: sleeper, quiet: 0.01)
+
+        await controller.pushNow()
+        try await Task.sleep(for: .milliseconds(120))
+        controller.stop()
+        let climbed = sleeper.recorded.last ?? 0
+        XCTAssertGreaterThan(climbed, 1, "the backoff should have grown past the floor first")
+
+        // The outbox drains, and then something fails again from scratch.
+        engine.setFlushReport(CouchSyncEngine.FlushReport())
+        await controller.pushNow()
+        engine.setFlushReport(failingFlush(retriable: true))
+        let before = sleeper.recorded.count
+        await controller.pushNow()
+        try await Task.sleep(for: .milliseconds(30))
+        controller.stop()
+
+        let afterReset = Array(sleeper.recorded.dropFirst(before))
+        XCTAssertFalse(afterReset.isEmpty, "the new failure should have scheduled a retry")
+        XCTAssertLessThan(
+            afterReset[0], climbed,
+            "a push that succeeded should have put the delay back at the floor: \(afterReset)")
+    }
+
+    /// A terminal failure is left queued and reported, but must not put the device into a retry
+    /// loop that cannot end. Nothing about waiting makes a 413 acceptable to the server.
+    func testATerminalPushFailureIsNotRetriedOnATimer() async throws {
+        let engine = EngineSpy()
+        engine.setFlushReport(failingFlush(retriable: false))
+        let sleeper = FakeSleeper(allowedTicks: 8)
+        let controller = makeController(engine: engine, sleeper: sleeper, quiet: 0.01)
+
+        await controller.pushNow()
+        try await Task.sleep(for: .milliseconds(120))
+        controller.stop()
+
+        XCTAssertEqual(engine.flushCount, 1, "a refusal on the merits should not be re-sent on a timer")
+        XCTAssertEqual(controller.pendingCount, 1, "and the document stays queued")
+        guard case .failed = controller.status else {
+            return XCTFail("expected the failure to be reported, got \(controller.status)")
+        }
+    }
+
+    /// RFC 9110 §10.2.3: when the server says when to come back, that answer beats the client's
+    /// own guess.
+    func testARetryAfterOverridesTheClientsOwnDelay() async throws {
+        let engine = EngineSpy()
+        engine.setFlushReport(failingFlush(retriable: true, retryAfter: 30))
+        let sleeper = FakeSleeper(allowedTicks: 2)
+        let controller = makeController(engine: engine, sleeper: sleeper, quiet: 0.01)
+
+        await controller.pushNow()
+        try await Task.sleep(for: .milliseconds(40))
+        controller.stop()
+
+        let first = try XCTUnwrap(sleeper.recorded.first)
+        // Jittered ±15%, so assert the band rather than the number.
+        XCTAssertGreaterThan(first, 24, "should have waited the 30s the server asked for: \(first)")
+        XCTAssertLessThan(first, 36)
+    }
+
     func testARecoveredPullClearsThePreviousFailure() async throws {
         let engine = EngineSpy()
         engine.setPullError(CouchError.transport("offline"))

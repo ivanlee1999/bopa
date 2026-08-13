@@ -23,6 +23,12 @@ final class SyncBackendHost: ObservableObject {
     private var engine: CouchSyncEngine?
     private var couchStore: FileCouchStore?
 
+    /// Asks the system to hold the process open for the final flush. Injected so the lifecycle is
+    /// testable; see `BackgroundFlushAssertion`.
+    private let backgroundAssertion: any BackgroundFlushAssertion
+    private var backgroundFlushToken: Int?
+    private var backgroundFlush: Task<Void, Never>?
+
     /// Where the CouchDB settings come from, injected the way `SyncCoordinator` takes
     /// `loadSettings`. The password lives in the Keychain, and the Keychain is not available to a
     /// test host — `SecItemAdd` fails and `load` reads back nil — so a test that drove this class
@@ -40,10 +46,12 @@ final class SyncBackendHost: ObservableObject {
 
     init(
         loadSettings: @escaping @MainActor () -> CouchSettings = CouchSettings.load,
-        loadBackend: @escaping @MainActor () -> SyncBackend = { CouchSettings.backend }
+        loadBackend: @escaping @MainActor () -> SyncBackend = { CouchSettings.backend },
+        backgroundAssertion: any BackgroundFlushAssertion = UIKitBackgroundFlushAssertion()
     ) {
         self.loadSettings = loadSettings
         self.loadBackend = loadBackend
+        self.backgroundAssertion = backgroundAssertion
         self.backend = loadBackend()
     }
 
@@ -175,8 +183,48 @@ final class SyncBackendHost: ObservableObject {
             guard let store, let coordinator else { return }
             Task { await coordinator.syncIfAutomatic(store: store) }
         case .couchdb:
-            Task { [couch] in await couch?.pushNow() }
+            // Held for the flush, not for the feed. iOS suspends a backgrounded process whenever it
+            // likes, and this `Task` was started with nothing asking the system to wait — the last
+            // few strokes before someone closed the lid were the ones most likely to be cut off,
+            // and the least likely to have been sent by anything else.
+            //
+            // The window is finite by design, so this is a better chance rather than a guarantee.
+            // The outbox stays durable either way: whatever the flush did not reach is still queued
+            // for the next launch.
+            beginBackgroundFlush()
         }
+    }
+
+    /// Runs the final CouchDB flush inside a background assertion, releasing it exactly once.
+    private func beginBackgroundFlush() {
+        // Recorded before the flush starts, not after: `endBackgroundFlush` has to be able to find
+        // this token from the moment anything could call it. A token assigned afterwards would be
+        // assigned to a flush that had already finished releasing — and then never released.
+        //
+        // A nil token is not a reason to skip the work. The system refused the assertion (launched
+        // into the background, budget spent); the flush still runs, just unprotected, exactly as it
+        // did before this existed.
+        backgroundFlushToken = backgroundAssertion.begin("CouchDB final flush") { [weak self] in
+            // The system wants the time back. Stop starting new requests and let go — a document
+            // interrupted mid-PUT is still dirty, and the next run re-sends it (and merges on the
+            // 409 if the write did land).
+            self?.backgroundFlush?.cancel()
+            self?.endBackgroundFlush()
+        }
+
+        backgroundFlush = Task { [weak self, couch] in
+            await couch?.pushNow()
+            self?.endBackgroundFlush()
+        }
+    }
+
+    /// Idempotent: completion and expiration race, and ending a `UIBackgroundTaskIdentifier` twice
+    /// traps rather than failing quietly.
+    private func endBackgroundFlush() {
+        backgroundFlush = nil
+        guard let token = backgroundFlushToken else { return }
+        backgroundFlushToken = nil
+        backgroundAssertion.end(token)
     }
 
     /// A local edit. WebDAV needs telling; CouchDB already heard through `didChangeDocuments`,

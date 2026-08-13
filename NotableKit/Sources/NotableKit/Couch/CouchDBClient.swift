@@ -148,7 +148,13 @@ public struct CouchDBClient: Sendable {
         public var rev: String
         public var deleted: Bool
         /// The document body as raw JSON (`include_docs=true`), decoded by the caller once its
-        /// type prefix is known. Absent for rows the server elided.
+        /// type prefix is known.
+        ///
+        /// Only ever nil for a tombstone. CouchDB answers `"doc": null` for a row whose document
+        /// was deleted between the feed reading the sequence and `include_docs` fetching the body,
+        /// and the engine already synthesizes what a stripped tombstone needs. A *live* row without
+        /// a body is malformed transport data and is rejected at the parser instead — see
+        /// `parseChanges`.
         public var json: Data?
     }
 
@@ -207,13 +213,57 @@ public struct CouchDBClient: Sendable {
             throw CouchError.malformedResponse("_changes carried no last_seq")
         }
 
-        let results = root["results"] as? [[String: Any]] ?? []
-        let rows: [ChangeRow] = results.compactMap { row in
-            guard let id = row["id"] as? String else { return nil }
-            let rev = (row["changes"] as? [[String: Any]])?.first?["rev"] as? String ?? ""
-            let deleted = row["deleted"] as? Bool ?? false
-            let json = (row["doc"] as? [String: Any]).flatMap {
-                try? JSONSerialization.data(withJSONObject: $0)
+        // Strict, because `last_seq` is checkpointed the moment this batch applies. A row dropped
+        // here — a proxy that truncated the response, a server answering a shape this client does
+        // not know — is a remote change skipped *permanently*: the checkpoint moves past it and
+        // CouchDB never offers it again. Refusing the whole response costs one retry; accepting a
+        // partial one costs the change.
+        //
+        // A document this build cannot *merge* is a different thing and is not rejected here: it is
+        // valid transport carrying an unknown schema, and the engine preserves it as a conflict
+        // copy and checkpoints it.
+        guard let results = root["results"] as? [Any] else {
+            throw CouchError.malformedResponse("_changes carried no results array")
+        }
+        let rows: [ChangeRow] = try results.enumerated().map { index, element in
+            guard let row = element as? [String: Any] else {
+                throw CouchError.malformedResponse("_changes result \(index) is not an object")
+            }
+            guard let id = row["id"] as? String, !id.isEmpty else {
+                throw CouchError.malformedResponse("_changes result \(index) carried no id")
+            }
+            guard let rev = (row["changes"] as? [[String: Any]])?.first?["rev"] as? String,
+                  !rev.isEmpty
+            else {
+                throw CouchError.malformedResponse("_changes result \(index) carried no revision")
+            }
+            // `NSNumber` and not `Bool`: JSONSerialization renders every JSON scalar as NSNumber,
+            // so `as? Bool` also accepts `"deleted": 1`. Checking the ObjC type tag is what tells a
+            // real Boolean from a number that happens to be castable to one.
+            let rawDeleted = row["deleted"]
+            let deleted: Bool
+            if rawDeleted == nil || rawDeleted is NSNull {
+                deleted = false
+            } else if let flag = rawDeleted as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID() {
+                deleted = flag.boolValue
+            } else {
+                throw CouchError.malformedResponse(
+                    "_changes result \(index) carried a non-Boolean deleted")
+            }
+
+            let rawDocument = row["doc"]
+            let json: Data?
+            if let document = rawDocument as? [String: Any] {
+                json = try JSONSerialization.data(withJSONObject: document)
+            } else if deleted, rawDocument == nil || rawDocument is NSNull {
+                // The one body CouchDB legitimately omits: `include_docs` found the document
+                // already deleted. The engine synthesizes the tombstone the merge needs from
+                // `deleted` and the revision alone, so there is nothing to fetch and nothing to
+                // lose.
+                json = nil
+            } else {
+                throw CouchError.malformedResponse(
+                    "_changes result \(index) (\(id)) carried no document")
             }
             return ChangeRow(id: id, rev: rev, deleted: deleted, json: json)
         }
@@ -288,10 +338,47 @@ public struct CouchDBClient: Sendable {
         case 401, 403: return .unauthorized
         case 404: return .notFound(path: path)
         case 409: return .conflict(documentID: path)
-        default: return .server(status: response.status, path: path)
+        default:
+            return .server(
+                status: response.status, path: path,
+                retryAfter: Self.retryAfter(response.header("Retry-After")))
         }
     }
+
+    /// `Retry-After` in either shape RFC 9110 allows: a delay in seconds, or an HTTP date.
+    ///
+    /// Clamped rather than trusted. A misconfigured proxy answering `Retry-After: 86400` would
+    /// otherwise park sync for a day — the server gets to slow this device down, not to switch it
+    /// off — and a date already in the past means "now", not a negative sleep.
+    static func retryAfter(_ header: String?) -> TimeInterval? {
+        guard let header = header?.trimmingCharacters(in: .whitespaces), !header.isEmpty else {
+            return nil
+        }
+        let seconds: TimeInterval
+        if let delay = TimeInterval(header) {
+            seconds = delay
+        } else if let date = httpDateFormatter.date(from: header) {
+            seconds = date.timeIntervalSinceNow
+        } else {
+            return nil
+        }
+        return min(max(seconds, 0), maxRetryAfter)
+    }
+
+    /// The longest a server may push this device out. Matches the retry ceiling the controllers
+    /// back off to on their own.
+    static let maxRetryAfter: TimeInterval = 60
 }
+
+/// RFC 9110 §5.6.7 preferred form, in the fixed locale the spec requires — a device set to a
+/// non-Gregorian calendar or a non-English locale would otherwise fail to parse a valid header.
+private let httpDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+    return formatter
+}()
 
 public enum CouchError: Error, Equatable {
     /// The stored revision was stale. The caller re-reads, merges, and writes again.
@@ -299,16 +386,48 @@ public enum CouchError: Error, Equatable {
     case notFound(path: String)
     /// Credentials rejected — worth surfacing immediately, since retrying cannot fix it.
     case unauthorized
-    case server(status: Int, path: String)
+    /// Any other status the client does not handle specially. `retryAfter` carries the server's
+    /// own answer to "when should I come back", in seconds, when it sent one.
+    case server(status: Int, path: String, retryAfter: TimeInterval? = nil)
     /// Offline, DNS failure, timeout: keep the work queued and back off.
     case transport(String)
     case malformedResponse(String)
+    /// The database is not the one this device has been syncing with, requires a newer client, or
+    /// is locked for a rebuild (§1.2). Never retried: the answer is a human's, not a delay's.
+    case databaseIdentity(CouchSyncEngine.DatabaseIdentity)
 
     /// Whether waiting and trying again could plausibly succeed.
+    ///
+    /// Every `server` status used to answer yes, which meant a request the server had already
+    /// refused on its merits — a document larger than the configured maximum, a malformed request,
+    /// a database name this account may not touch — was retried on the same escalating schedule as
+    /// a dropped connection, forever, and the one message that would tell the user what to fix
+    /// scrolled past between attempts.
+    ///
+    /// The line is whether *waiting* is plausibly part of the answer. 5xx says the server failed at
+    /// something it agreed to do; 408, 425 and 429 say "not now, ask again". Every other 4xx is
+    /// this device having asked something the server will keep declining.
     public var isRetriable: Bool {
         switch self {
-        case .transport, .server: return true
-        case .conflict, .notFound, .unauthorized, .malformedResponse: return false
+        case .transport: return true
+        case let .server(status, _, _):
+            switch status {
+            case 408, 425, 429: return true          // timeout, too early, rate limited
+            case 500...599: return true              // the server's own fault, possibly transient
+            default: return false                    // 400, 403, 405, 413, … will not improve
+            }
+        // 404 and 409 are inputs to the caller's own logic rather than failures to retry blindly,
+        // and no amount of waiting fixes a rejected credential, a response this build cannot parse,
+        // or a database whose identity the user has to rule on.
+        case .conflict, .notFound, .unauthorized, .malformedResponse, .databaseIdentity:
+            return false
         }
+    }
+
+    /// How long the server asked this device to wait, if it said. Only meaningful when
+    /// `isRetriable`.
+    public var retryAfter: TimeInterval? {
+        if case let .server(_, _, retryAfter) = self { return retryAfter }
+        return nil
     }
 }

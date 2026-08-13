@@ -39,6 +39,22 @@ final class ChangesFeedRequestTests: XCTestCase {
         XCTAssertEqual(request.timeout, 70)
     }
 
+    /// A long poll used to be sent with no `limit` at all, on the reasoning that it is one wait for
+    /// one notification. But the batch that follows a wait is everything that changed *while* it
+    /// waited: after a day offline, or behind a proxy that buffered, that is the whole backlog in
+    /// one response with every page's base64 ink inlined — the response paging exists to prevent.
+    func testALongpollIsBoundedByTheSameBatchLimitAsACatchUp() async throws {
+        let transport = RecordingTransport()
+        let client = CouchDBClient(transport: transport, database: "notes")
+
+        _ = try await client.changes(
+            since: "0", longpoll: true, timeoutMs: 55_000,
+            limit: CouchSyncEngine.catchUpBatchSize)
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertTrue(request.query.contains(HTTPQueryItem("limit", "100")))
+    }
+
     func testACatchUpReadCarriesNeitherTimeoutNorDeadline() async throws {
         let transport = RecordingTransport()
         let client = CouchDBClient(transport: transport, database: "notes")
