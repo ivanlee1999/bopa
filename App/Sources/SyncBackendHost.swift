@@ -149,6 +149,11 @@ final class SyncBackendHost: ObservableObject {
                 await MainActor.run { self.couch?.noteEdited() }
             }
         }
+
+        // Last, and only now that the queue above exists: anything thrown away before the Trash
+        // was a published field left the peer still listing it, and nothing but this will ever
+        // send it. A no-op on every launch after the first.
+        store.republishStrandedTrashings()
     }
 
     // MARK: Lifecycle
