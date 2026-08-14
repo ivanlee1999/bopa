@@ -15,6 +15,7 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         case version, notebookId, title, pageIds, openPageId, parentFolderId
         case defaultBackground, defaultBackgroundType, linkedExternalUri
         case defaultPageWidth, defaultPageHeight
+        case bookmarks, outline
         case createdAt, updatedAt, serverTimestamp, deletedPageIds, updatedBy
     }
 
@@ -33,6 +34,19 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
     /// labour as `defaultBackground` and `background`.
     public var defaultPageWidth: Int?
     public var defaultPageHeight: Int?
+    /// Starred pages — `notable-sync-protocol.md` §3.2, with the field semantics and merge rules
+    /// spelled out in `couch-sync-protocol.md` §3.2.1 / §5.2.1.
+    ///
+    /// Not an upstream field, the same standing as the page sizes above: a stock Notable ignores it
+    /// on read and drops it when it writes the manifest back, so bookmarks survive a stock install
+    /// only if it never touches the notebook. Both this app and the BOOX fork carry it.
+    ///
+    /// This is also where bopa *stores* them: the manifest is the local on-disk format, not only
+    /// the wire one, so a field the manifest has no room for is a field that does not persist.
+    public var bookmarks: [CouchBookmark]
+    /// The notebook's table of contents, in reading order — `notable-sync-protocol.md` §3.2, and
+    /// `couch-sync-protocol.md` §3.2.2 / §5.2.2. Same standing as `bookmarks`.
+    public var outline: [CouchOutlineEntry]
     public var createdAt: String
     public var updatedAt: String
     public var serverTimestamp: String
@@ -53,6 +67,8 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         linkedExternalUri: String? = nil,
         defaultPageWidth: Int? = nil,
         defaultPageHeight: Int? = nil,
+        bookmarks: [CouchBookmark] = [],
+        outline: [CouchOutlineEntry] = [],
         createdAt: String,
         updatedAt: String,
         serverTimestamp: String,
@@ -72,6 +88,8 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         self.linkedExternalUri = linkedExternalUri
         self.defaultPageWidth = defaultPageWidth
         self.defaultPageHeight = defaultPageHeight
+        self.bookmarks = bookmarks
+        self.outline = outline
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.serverTimestamp = serverTimestamp
@@ -94,6 +112,8 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
             .flatMap { $0 > 0 ? $0 : nil }
         defaultPageHeight = try c.decodeIfPresent(Int.self, forKey: .defaultPageHeight)
             .flatMap { $0 > 0 ? $0 : nil }
+        bookmarks = try c.decodeIfPresent([CouchBookmark].self, forKey: .bookmarks) ?? []
+        outline = try c.decodeIfPresent([CouchOutlineEntry].self, forKey: .outline) ?? []
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
         serverTimestamp = try c.decodeIfPresent(String.self, forKey: .serverTimestamp) ?? updatedAt
@@ -114,6 +134,8 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
         try c.encode(linkedExternalUri, forKey: .linkedExternalUri)
         try c.encode(defaultPageWidth, forKey: .defaultPageWidth)
         try c.encode(defaultPageHeight, forKey: .defaultPageHeight)
+        try c.encode(bookmarks, forKey: .bookmarks)
+        try c.encode(outline, forKey: .outline)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(serverTimestamp, forKey: .serverTimestamp)

@@ -335,9 +335,113 @@ public struct CouchPage: Codable, Equatable, Sendable {
     }
 }
 
+/// A page the reader starred, or the record of it being un-starred — protocol §3.2.1.
+///
+/// Deliberately *not* a list of ids plus a `CouchTombstone` list, which is how every other removal
+/// in this protocol is expressed. That pattern makes removal permanent, and it is sound everywhere
+/// it is used because the thing removed never comes back under the same id: a redrawn stroke is a
+/// new stroke with a new id. A bookmark is the exception — the page keeps its id, so starring the
+/// same page again is a thing users do routinely, and "remove wins forever" would make the second
+/// star impossible to express. Carrying `removed` on the entry instead lets whichever write came
+/// last say either thing, which is what last-writer-wins per `pageId` needs.
+public struct CouchBookmark: Codable, Equatable, Sendable {
+    enum CodingKeys: String, CodingKey {
+        case pageId, updatedAt, removed
+    }
+
+    public var pageId: String
+    public var updatedAt: String
+    /// True for a page that was bookmarked and then un-bookmarked. Kept rather than dropped so the
+    /// un-starring propagates to a peer that still holds the star.
+    public var removed: Bool
+
+    public init(pageId: String, updatedAt: String, removed: Bool = false) {
+        self.pageId = pageId
+        self.updatedAt = updatedAt
+        self.removed = removed
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pageId = try c.decode(String.self, forKey: .pageId)
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+        removed = try c.decodeIfPresent(Bool.self, forKey: .removed) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(pageId, forKey: .pageId)
+        try c.encode(updatedAt, forKey: .updatedAt)
+        try c.encode(removed, forKey: .removed)
+    }
+}
+
+/// One line of a notebook's outline — its table of contents, protocol §3.2.2.
+///
+/// An entry points at a *page*, not at a position on one. Both apps this protocol has to satisfy
+/// anchor the same way (Goodnotes' outline and the BOOX reader's TOC), and a page anchor is the
+/// only one that survives the page being written on: ink has no headings to re-find, so an offset
+/// anchor would drift the moment the page was edited on the other device.
+public struct CouchOutlineEntry: Codable, Equatable, Sendable {
+    enum CodingKeys: String, CodingKey {
+        case id, pageId, title, depth, updatedAt, removed
+    }
+
+    /// The entry's own id, not the page's. A page is allowed to appear in the outline more than
+    /// once — both reference apps allow it, and it is how a page that opens one section and closes
+    /// another gets to say so — which rules out keying entries by page.
+    public var id: String
+    public var pageId: String
+    public var title: String
+    /// 0, 1 or 2: heading, subheading, sub-subheading. Three levels is what both reference apps
+    /// settled on. Clamped rather than rejected on decode, so a document from a build that one day
+    /// allows four levels degrades to a flatter outline instead of failing to merge.
+    public var depth: Int
+    public var updatedAt: String
+    /// True for a deleted entry, kept for the same reason as `CouchBookmark.removed`.
+    public var removed: Bool
+
+    /// The deepest `depth` this build understands.
+    public static let maxDepth = 2
+
+    public init(
+        id: String, pageId: String, title: String, depth: Int = 0,
+        updatedAt: String, removed: Bool = false
+    ) {
+        self.id = id
+        self.pageId = pageId
+        self.title = title
+        self.depth = Swift.min(Swift.max(depth, 0), CouchOutlineEntry.maxDepth)
+        self.updatedAt = updatedAt
+        self.removed = removed
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        pageId = try c.decodeIfPresent(String.self, forKey: .pageId) ?? ""
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        let rawDepth = try c.decodeIfPresent(Int.self, forKey: .depth) ?? 0
+        depth = Swift.min(Swift.max(rawDepth, 0), CouchOutlineEntry.maxDepth)
+        updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+        removed = try c.decodeIfPresent(Bool.self, forKey: .removed) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(pageId, forKey: .pageId)
+        try c.encode(title, forKey: .title)
+        try c.encode(depth, forKey: .depth)
+        try c.encode(updatedAt, forKey: .updatedAt)
+        try c.encode(removed, forKey: .removed)
+    }
+}
+
 public struct CouchNotebook: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case type, schema, title, pageIds, deletedPageIds, parentFolderId
+        case bookmarks, outline
         case defaultBackground, defaultBackgroundType
         case defaultPageWidth, defaultPageHeight
         case deletedAt
@@ -350,6 +454,12 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
     public var pageIds: [String]
     public var deletedPageIds: [CouchTombstone]
     public var parentFolderId: String?
+    /// Starred pages, including the un-starred ones — see `CouchBookmark`. Sorted by `pageId` in a
+    /// merged document so the encoded body is byte-stable across devices.
+    public var bookmarks: [CouchBookmark]
+    /// The notebook's table of contents, in reading order. Order is carried by the array itself,
+    /// the way `pageIds` carries page order, and merged the same way.
+    public var outline: [CouchOutlineEntry]
     public var defaultBackground: String
     public var defaultBackgroundType: String
     /// Sheet size for new pages here, in page units; nil for a notebook created before page
@@ -370,6 +480,7 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         type: String = CouchDocType.notebook, schema: Int = couchSchemaVersion,
         title: String, pageIds: [String] = [], deletedPageIds: [CouchTombstone] = [],
         parentFolderId: String? = nil,
+        bookmarks: [CouchBookmark] = [], outline: [CouchOutlineEntry] = [],
         defaultBackground: String = "blank", defaultBackgroundType: String = "native",
         defaultPageWidth: Int? = nil, defaultPageHeight: Int? = nil,
         deletedAt: String? = nil,
@@ -381,6 +492,8 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         self.pageIds = pageIds
         self.deletedPageIds = deletedPageIds
         self.parentFolderId = parentFolderId
+        self.bookmarks = bookmarks
+        self.outline = outline
         self.defaultBackground = defaultBackground
         self.defaultBackgroundType = defaultBackgroundType
         self.defaultPageWidth = defaultPageWidth
@@ -399,6 +512,8 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         pageIds = try c.decodeIfPresent([String].self, forKey: .pageIds) ?? []
         deletedPageIds = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedPageIds) ?? []
         parentFolderId = try c.decodeIfPresent(String.self, forKey: .parentFolderId)
+        bookmarks = try c.decodeIfPresent([CouchBookmark].self, forKey: .bookmarks) ?? []
+        outline = try c.decodeIfPresent([CouchOutlineEntry].self, forKey: .outline) ?? []
         defaultBackground = try c.decodeIfPresent(String.self, forKey: .defaultBackground) ?? "blank"
         defaultBackgroundType =
             try c.decodeIfPresent(String.self, forKey: .defaultBackgroundType) ?? "native"
@@ -423,6 +538,8 @@ public struct CouchNotebook: Codable, Equatable, Sendable {
         try c.encode(pageIds, forKey: .pageIds)
         try c.encode(deletedPageIds, forKey: .deletedPageIds)
         try c.encode(parentFolderId, forKey: .parentFolderId)
+        try c.encode(bookmarks, forKey: .bookmarks)
+        try c.encode(outline, forKey: .outline)
         try c.encode(defaultBackground, forKey: .defaultBackground)
         try c.encode(defaultBackgroundType, forKey: .defaultBackgroundType)
         try c.encode(defaultPageWidth, forKey: .defaultPageWidth)

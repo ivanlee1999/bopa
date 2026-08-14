@@ -161,6 +161,91 @@ final class CouchMergePropertyTests: XCTestCase {
             createdAt: stamp(0), updatedAt: stamp(rng.next(60)), updatedBy: deviceId)
     }
 
+    /// A notebook carrying bookmarks and an outline, both of which the merge has to reconcile
+    /// without a common ancestor. Page ids are drawn from a small pool so the two sides collide
+    /// often — a generator whose documents never overlap would exercise none of the interesting
+    /// cases.
+    private func randomNotebook(_ rng: inout Rng, deviceId: String) -> CouchNotebook {
+        let base = 1_770_000_000_000 as Int64
+        func stamp(_ offsetSeconds: Int) -> String {
+            NotableDate.format(Date(timeIntervalSince1970: Double(base) / 1000 + Double(offsetSeconds)))
+        }
+        var pageIds: [String] = []
+        for _ in 0..<rng.next(6) {
+            let id = "p\(rng.next(8))"
+            if !pageIds.contains(id) { pageIds.append(id) }
+        }
+        var bookmarks: [CouchBookmark] = []
+        for _ in 0..<rng.next(5) {
+            bookmarks.append(CouchBookmark(
+                pageId: "p\(rng.next(8))", updatedAt: stamp(rng.next(60)),
+                removed: rng.next(3) == 0))
+        }
+        var outline: [CouchOutlineEntry] = []
+        for _ in 0..<rng.next(5) {
+            outline.append(CouchOutlineEntry(
+                id: "e\(rng.next(8))", pageId: "p\(rng.next(8))",
+                title: "section \(rng.next(4))", depth: rng.next(3),
+                updatedAt: stamp(rng.next(60)), removed: rng.next(4) == 0))
+        }
+        var tombs: [CouchTombstone] = []
+        for _ in 0..<rng.next(3) {
+            tombs.append(CouchTombstone(id: "p\(rng.next(8))", deletedAt: stamp(rng.next(30))))
+        }
+        return CouchNotebook(
+            title: "book \(rng.next(3))", pageIds: pageIds, deletedPageIds: tombs,
+            bookmarks: bookmarks, outline: outline,
+            createdAt: stamp(0), updatedAt: stamp(rng.next(60)), updatedBy: deviceId)
+    }
+
+    /// The property the whole design rests on: two devices that were both offline reconcile to the
+    /// same notebook whichever way round they merge, and re-merging changes nothing.
+    func testNotebookMergeIsCommutativeAndIdempotent() {
+        var rng = Rng(state: 0xB00C)
+        for iteration in 0..<300 {
+            let a = randomNotebook(&rng, deviceId: "ipad")
+            let b = randomNotebook(&rng, deviceId: "boox")
+            let ab = CouchMerge.merge(a, b)
+            XCTAssertEqual(ab, CouchMerge.merge(b, a), "iteration \(iteration): not commutative")
+            XCTAssertEqual(ab, CouchMerge.merge(ab, a), "iteration \(iteration): not idempotent in a")
+            XCTAssertEqual(ab, CouchMerge.merge(ab, b), "iteration \(iteration): not idempotent in b")
+        }
+    }
+
+    /// A bookmark must never point at a page the notebook no longer has, however many times the two
+    /// sides re-merge — a starred page deleted on the other device would otherwise stay in the list
+    /// as a line that does nothing when tapped.
+    ///
+    /// Asserted for bookmarks only. The outline cannot be filtered this way and stay idempotent —
+    /// see the note in `CouchMerge.merge(_:_:)` — so a dangling outline entry is the reader's to
+    /// skip, not the merge's to remove.
+    func testBookmarksNeverOutliveTheirPage() {
+        var rng = Rng(state: 0x0B17)
+        for _ in 0..<200 {
+            let a = randomNotebook(&rng, deviceId: "ipad")
+            let b = randomNotebook(&rng, deviceId: "boox")
+            let merged = CouchMerge.merge(a, b)
+            let removed = Set(merged.deletedPageIds.map(\.id))
+            XCTAssertTrue(merged.bookmarks.allSatisfy { !removed.contains($0.pageId) })
+            let again = CouchMerge.merge(merged, a)
+            XCTAssertTrue(again.bookmarks.allSatisfy { !removed.contains($0.pageId) })
+        }
+    }
+
+    /// Outline entries carry no position field, so the only thing keeping two devices from
+    /// rendering the table of contents in different orders is that the merge is deterministic.
+    func testOutlineOrderIsIdenticalInBothArgumentOrders() {
+        var rng = Rng(state: 0x0F17)
+        for iteration in 0..<200 {
+            let a = randomNotebook(&rng, deviceId: "ipad")
+            let b = randomNotebook(&rng, deviceId: "boox")
+            XCTAssertEqual(
+                CouchMerge.merge(a, b).outline.map(\.id),
+                CouchMerge.merge(b, a).outline.map(\.id),
+                "iteration \(iteration): outline order depends on argument order")
+        }
+    }
+
     func testMergeIsCommutativeAndIdempotent() {
         var rng = Rng(state: 0x5EED)
         for iteration in 0..<300 {

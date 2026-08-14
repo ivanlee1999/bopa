@@ -159,6 +159,8 @@ public enum CouchMapping {
             pageIds: manifest.pageIds,
             deletedPageIds: manifest.deletedPageIds,
             parentFolderId: manifest.parentFolderId,
+            bookmarks: manifest.bookmarks,
+            outline: manifest.outline,
             defaultBackground: manifest.defaultBackground,
             defaultBackgroundType: manifest.defaultBackgroundType,
             defaultPageWidth: manifest.defaultPageWidth,
@@ -187,6 +189,11 @@ public enum CouchMapping {
             // build does not know it.
             defaultPageWidth: notebook.defaultPageWidth ?? existing?.defaultPageWidth,
             defaultPageHeight: notebook.defaultPageHeight ?? existing?.defaultPageHeight,
+            // Straight from the merged document, not `?? existing`: unlike a page size, an empty
+            // bookmark list is a real state — the last star being removed — and falling back to
+            // what is already on disk would make removing the last one impossible.
+            bookmarks: notebook.bookmarks,
+            outline: notebook.outline,
             createdAt: notebook.createdAt,
             updatedAt: notebook.updatedAt,
             serverTimestamp: notebook.updatedAt,

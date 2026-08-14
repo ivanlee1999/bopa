@@ -78,6 +78,8 @@ e.g. `2026-08-02T10:00:00.123Z`). Notable skips (does not fail on) entries with 
   "linkedExternalUri": null,
   "defaultPageWidth": 1400,             // page units; null = undeclared, see §3.1
   "defaultPageHeight": 1980,
+  "bookmarks": [],                      // starred pages, see §3.2
+  "outline": [],                        // table of contents, see §3.2
   "createdAt": "...", "updatedAt": "...",
   "serverTimestamp": "..."
 }
@@ -134,6 +136,31 @@ Rules both implementations follow:
   past the right edge whenever it was written on a device wider than the sheet (including every
   undeclared page). An area that stops at the sheet's edge does not merely park that ink
   off-page, it makes it unreachable.
+
+### 3.2 Bookmarks and outline
+
+> **Not upstream fields.** Stock Ethran/notable has neither. Like the page sizes above, they are an
+> addition shared by bopa and the BOOX fork in `~/workspace/notable`. A stock install parses with
+> `ignoreUnknownKeys` so it ignores them harmlessly on read — but it does **not** carry them when
+> it writes `manifest.json` back, so a notebook that passes through a stock install loses its
+> bookmarks and outline. That is a weaker guarantee than the page sizes get (which a stock install
+> merely fails to *honour*), and it is why both fields are additionally carried in the CouchDB
+> backend, where nothing strips them.
+
+```json
+"bookmarks": [{ "pageId": "<uuid>", "updatedAt": "…", "removed": false }],
+"outline":   [{ "id": "<uuid>", "pageId": "<uuid>", "title": "Chapter 1",
+                "depth": 0, "updatedAt": "…", "removed": false }]
+```
+
+`bookmarks` is the set of starred pages; `outline` is the notebook's table of contents, in reading
+order, with `depth` in 0–2. Both keep removals in place as `removed: true` entries rather than
+dropping them, so an un-starring or a deleted entry reaches the other device instead of being
+re-added by it.
+
+The field semantics, the clamping rule for `depth`, and the merge functions are normative in
+[couch-sync-protocol.md](couch-sync-protocol.md) §3.2.1–3.2.2 and §5.2.1–5.2.2. Absent or null
+reads as empty on both sides.
 
 ## 4. Page file (`pages/<pageId>.json`)
 
