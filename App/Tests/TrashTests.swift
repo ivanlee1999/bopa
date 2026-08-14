@@ -75,6 +75,76 @@ final class TrashTests: XCTestCase {
         XCTAssertTrue(changed.contains(CouchDocID.folder(folder.id)))
     }
 
+    // MARK: Republishing what an older build stranded
+
+    /// Rewrite the Trash the way a build that did not publish it left the file: entries with no
+    /// `published` flag at all.
+    private func strandTrashing(notebookIDs: [String] = [], folderIDs: [String] = []) throws {
+        let stamp = NotableDate.format(Date(timeIntervalSince1970: 1_000))
+        let item: (String) -> [String: Any] = { ["id": $0, "deletedAt": stamp] }
+        let json: [String: Any] = [
+            "notebooks": notebookIDs.map(item), "folders": folderIDs.map(item),
+        ]
+        try JSONSerialization.data(withJSONObject: json)
+            .write(to: LocalTrash.fileURL(root: rootURL), options: .atomic)
+        store.refresh()
+    }
+
+    /// The bug this exists for: before the Trash was a field of the document, throwing something
+    /// away here wrote the local file and nothing else, so it stayed in the BOOX's library. The
+    /// item is hidden, so no edit will ever queue it, and it has been through the server, so the
+    /// "never sent" scan cannot see it either — only this republish reaches it.
+    func testAStrandedTrashingIsPublishedOnce() throws {
+        let notebook = try store.createNotebook(title: "Draft")
+        let folder = try store.createFolder(title: "Term 1")
+        try strandTrashing(notebookIDs: [notebook.notebookId], folderIDs: [folder.id])
+        changed = []
+
+        store.republishStrandedTrashings()
+
+        XCTAssertTrue(
+            changed.contains(CouchDocID.notebook(notebook.notebookId)),
+            "a trashing the peer never heard about has to be sent")
+        XCTAssertTrue(changed.contains(CouchDocID.folder(folder.id)))
+        XCTAssertEqual(
+            store.manifest(id: notebook.notebookId)?.updatedBy, store.deviceID,
+            "the republish is this device's write")
+
+        // Once. A second launch must not re-stamp, or every start would push the whole Trash
+        // forward in time and re-win an argument the user may since have settled from the BOOX.
+        changed = []
+        store.republishStrandedTrashings()
+        XCTAssertEqual(changed, [], "the republish is once, not every launch")
+    }
+
+    /// The stamp, not just the queueing. `deletedAt` rides in the scalar envelope that §5.5 decides
+    /// by `updatedAt`, and the original trashing never advanced it — so a republish that queued the
+    /// document unchanged would tie with the peer's live copy and leave it in the library.
+    func testAStrandedTrashingIsRestampedSoItOutranksThePeersCopy() throws {
+        let notebook = try store.createNotebook(title: "Draft")
+        let before = store.manifest(id: notebook.notebookId)!.updatedAt
+        try strandTrashing(notebookIDs: [notebook.notebookId])
+
+        store.republishStrandedTrashings()
+
+        XCTAssertGreaterThanOrEqual(store.manifest(id: notebook.notebookId)!.updatedAt, before)
+        XCTAssertTrue(
+            store.trash.notebookIDs.contains(notebook.notebookId),
+            "republishing the trashing must not restore the notebook")
+    }
+
+    /// A Trash written by a build that publishes is already agreed with the peer; re-stamping it
+    /// would push someone else's `deletedAt` forward for no reason.
+    func testAPublishedTrashingIsLeftAlone() throws {
+        let notebook = try store.createNotebook(title: "Draft")
+        try store.trashNotebook(id: notebook.notebookId)
+        changed = []
+
+        store.republishStrandedTrashings()
+
+        XCTAssertEqual(changed, [])
+    }
+
     /// A restore is a second published edit, not a local un-hiding: the peer is holding a trashed
     /// copy and only a newer write takes it back out of its Trash too.
     func testRestoringPublishesTheNotebookAgain() throws {

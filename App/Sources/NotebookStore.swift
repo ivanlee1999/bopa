@@ -462,6 +462,46 @@ final class NotebookStore: ObservableObject {
         trash.folders.first { $0.id == folderId }.flatMap { NotableDate.parse($0.deletedAt) }
     }
 
+    /// Tell the peer about the trashings that were only ever local, so the two libraries can agree
+    /// again.
+    ///
+    /// Until the Trash became a field of the document, throwing something away here wrote
+    /// `.bopa-trash.json` and stopped: no `updatedAt` stamp, no queued document. The item left this
+    /// library and stayed in the BOOX's, and shipping the fix does not rescue it — the notebook has
+    /// been through the server already, so it is in the engine's rev map and the "never sent" scan
+    /// deliberately cannot see it, while the item being hidden here means no edit will ever queue
+    /// it either. Without this it stays hidden on one device and listed on the other, permanently.
+    ///
+    /// `touchNotebook`/`touchFolder` are exactly what a trashing does today, which is the point:
+    /// the stamp is what makes `deletedAt` outrank the peer's live copy under §5.5, and queueing
+    /// alone would push a trashing that ties with it and loses.
+    ///
+    /// Called by `SyncBackendHost` once the CouchDB queue exists, not from `init`: the stamp is
+    /// only half of a republish, and running before `didChangeDocuments` is wired would write the
+    /// stamp into a queue that is not listening, clear the flag, and stand the item down for good
+    /// having told nobody. It is confined to the CouchDB backend for the same reason — under
+    /// WebDAV or with sync off there is no peer to tell, and burning the flag would strand the
+    /// item permanently the moment CouchDB was switched on.
+    ///
+    /// Failures are swallowed per item: an item that could not be written keeps its missing flag
+    /// and is retried on the next launch.
+    func republishStrandedTrashings() {
+        let stranded = LocalTrash.unpublished(root: rootURL)
+        guard !stranded.notebookIDs.isEmpty || !stranded.folderIDs.isEmpty else { return }
+
+        var republishedNotebooks: Set<String> = []
+        var republishedFolders: Set<String> = []
+        for id in stranded.notebookIDs where (try? touchNotebook(id)) != nil {
+            republishedNotebooks.insert(id)
+        }
+        for id in stranded.folderIDs where (try? touchFolder(id)) != nil {
+            republishedFolders.insert(id)
+        }
+        try? LocalTrash.markPublished(
+            notebookIDs: republishedNotebooks, folderIDs: republishedFolders, root: rootURL)
+        refresh()
+    }
+
     /// Throw a notebook away. Its files stay and it goes on syncing — only emptying the Trash
     /// deletes anything — but the Trash itself is published, so the notebook leaves the library on
     /// every device and can be restored from any of them.

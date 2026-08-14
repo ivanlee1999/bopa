@@ -6,9 +6,23 @@ public struct TrashedItem: Codable, Equatable, Sendable {
     /// ISO-8601, the same stamp format as everything else written here.
     public let deletedAt: String
 
-    public init(id: String, deletedAt: String) {
+    /// Whether the peer has been told about this trashing.
+    ///
+    /// Absent, not false, in a file written before the Trash was published at all: back then
+    /// throwing something away wrote this file and nothing else — no `updatedAt` stamp, no queued
+    /// document — so the item left this library and stayed in the other one. Those entries are the
+    /// ones `LocalTrash.unpublished` hands back to be republished once, on the first launch after
+    /// the upgrade; see `NotebookStore.republishStrandedTrashings`.
+    ///
+    /// A missing flag therefore has to read as "nobody knows", which is why this is an optional
+    /// rather than a `Bool` defaulting to false: `false` is a claim, and the only entries entitled
+    /// to make it are ones this build wrote.
+    public let published: Bool?
+
+    public init(id: String, deletedAt: String, published: Bool? = true) {
         self.id = id
         self.deletedAt = deletedAt
+        self.published = published
     }
 }
 
@@ -129,6 +143,38 @@ public enum LocalTrash {
         var contents = load(root: root)
         contents.notebooks.removeAll { notebookIDs.contains($0.id) }
         contents.folders.removeAll { folderIDs.contains($0.id) }
+        try save(contents, root: root)
+    }
+
+    /// The trashings the peer was never told about — see `TrashedItem.published`.
+    ///
+    /// Empty for any Trash written by a build that publishes, which is every build from the fix
+    /// onwards, so the republish this feeds costs one file read per launch and nothing else.
+    public static func unpublished(root: URL) -> (notebookIDs: [String], folderIDs: [String]) {
+        let contents = load(root: root)
+        return (
+            contents.notebooks.filter { $0.published == nil }.map(\.id),
+            contents.folders.filter { $0.published == nil }.map(\.id)
+        )
+    }
+
+    /// Record that the peer has now been told, so the republish does not run again.
+    ///
+    /// Written after the stamp-and-queue rather than before: the queue is durable, so a crash
+    /// between the two costs a repeat of a write that is idempotent anyway, while the reverse
+    /// order would drop the item back into the stranded state it was just rescued from.
+    public static func markPublished(
+        notebookIDs: Set<String>, folderIDs: Set<String>, root: URL
+    ) throws {
+        var contents = load(root: root)
+        contents.notebooks = contents.notebooks.map {
+            notebookIDs.contains($0.id)
+                ? TrashedItem(id: $0.id, deletedAt: $0.deletedAt, published: true) : $0
+        }
+        contents.folders = contents.folders.map {
+            folderIDs.contains($0.id)
+                ? TrashedItem(id: $0.id, deletedAt: $0.deletedAt, published: true) : $0
+        }
         try save(contents, root: root)
     }
 }
