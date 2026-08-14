@@ -95,6 +95,62 @@ public enum CouchMerge {
         .sorted { $0.id < $1.id }
     }
 
+    // MARK: - Bookmarks and outline
+
+    /// Union keyed by `pageId`, keeping whichever side wrote last — protocol §3.2.1.
+    ///
+    /// Last-writer-wins rather than remove-wins, because a bookmark is re-addable under the same
+    /// id; see `CouchBookmark`. Equal instants fall back to `removed` losing, so two devices that
+    /// star and un-star in the same millisecond both end up keeping the star rather than
+    /// disagreeing — and, more importantly, agreeing is what makes this commutative.
+    public static func unionBookmarks(
+        _ a: [CouchBookmark], _ b: [CouchBookmark]
+    ) -> [CouchBookmark] {
+        unionById(a, b, id: \.pageId) { x, y in
+            let (mx, my) = (millis(x.updatedAt), millis(y.updatedAt))
+            if mx != my { return mx > my ? x : y }
+            if x.removed != y.removed { return x.removed ? y : x }
+            return x.updatedAt >= y.updatedAt ? x : y
+        }
+        .sorted { $0.pageId < $1.pageId }
+    }
+
+    /// Merge two outlines — protocol §3.2.2.
+    ///
+    /// Order comes from `winner`, with entries only `loser` knows about appended in the loser's own
+    /// relative order; content per entry is last-writer-wins. This is deliberately the same rule as
+    /// `pageIds` in `merge(_:_:)` below rather than a fractional index or a position field: the
+    /// outline is a list the user reorders wholesale, the ordered add-wins union is already proven
+    /// and vector-tested here, and it needs no extra state on the entry to stay deterministic.
+    ///
+    /// Removed entries stay in the array. They are the tombstones, so dropping them here would let
+    /// a peer that still holds the entry put it back on the next merge.
+    static func mergeOutline(
+        winner: [CouchOutlineEntry], loser: [CouchOutlineEntry]
+    ) -> [CouchOutlineEntry] {
+        var content: [String: CouchOutlineEntry] = [:]
+        for entry in winner + loser {
+            content[entry.id] = content[entry.id].map { held in
+                let (mh, me) = (millis(held.updatedAt), millis(entry.updatedAt))
+                if mh != me { return mh > me ? held : entry }
+                // Same instant: `removed` loses, then the raw string breaks the tie, so both
+                // devices pick the same entry whichever order they merged in.
+                if held.removed != entry.removed { return held.removed ? entry : held }
+                return held.updatedAt >= entry.updatedAt ? held : entry
+            } ?? entry
+        }
+
+        var ordered = winner.map(\.id)
+        let known = Set(ordered)
+        ordered.append(contentsOf: loser.map(\.id).filter { !known.contains($0) })
+
+        var seen = Set<String>()
+        return ordered.compactMap { id in
+            guard seen.insert(id).inserted else { return nil }
+            return content[id]
+        }
+    }
+
     // MARK: - Page
 
     public static func merge(_ a: CouchPage, _ b: CouchPage) -> CouchPage {
@@ -242,6 +298,21 @@ public enum CouchMerge {
             pageIds: pageIds,
             deletedPageIds: deletedPageIds,
             parentFolderId: winner.parentFolderId,
+            // A bookmark on a deleted page is dropped. Safe to do here because a bookmark is keyed
+            // by the very field being tested: the same pageId is filtered on every future merge,
+            // so the drop cannot come undone.
+            bookmarks: unionBookmarks(a.bookmarks, b.bookmarks)
+                .filter { !removed.contains($0.pageId) },
+            // The outline is deliberately *not* filtered the same way, though the dangling entries
+            // it keeps are just as useless to tap. An entry is keyed by its own id while the test
+            // would be on `pageId`, and those can disagree: if the surviving version of entry `e`
+            // points at a deleted page, filtering erases `e` from the result entirely — and the
+            // next merge against the peer that still holds `e` reads it as an entry this side has
+            // never seen and adds it straight back. Not idempotent, and the randomised merge tests
+            // catch it. Deleting a page instead marks its entries removed at the point of deletion,
+            // which is an ordinary edit the merge already knows how to carry, and readers skip any
+            // entry whose page is gone.
+            outline: mergeOutline(winner: winner.outline, loser: loser.outline),
             defaultBackground: winner.defaultBackground,
             defaultBackgroundType: winner.defaultBackgroundType,
             defaultPageWidth: winner.defaultPageWidth ?? loser.defaultPageWidth,

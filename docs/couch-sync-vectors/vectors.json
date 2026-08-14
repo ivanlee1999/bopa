@@ -1396,6 +1396,804 @@
         "updatedAt": "2026-08-10T06:07:00Z",
         "updatedBy": "boox"
       }
+    },
+    {
+      "name": "notebook-bookmark-unstar-beats-earlier-star",
+      "kind": "notebook",
+      "why": "Bookmarks are last-writer-wins per page: the later un-starring wins over the earlier star, and is kept as a removed entry so it reaches a peer that still holds the star.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": true
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": true
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-bookmark-restar-beats-earlier-unstar",
+      "kind": "notebook",
+      "why": "The property a tombstone union could not express: a page keeps its id, so starring it again after un-starring must win. Remove-wins would make the second star unreachable forever.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": true
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-bookmarks-union-sorted-by-page",
+      "kind": "notebook",
+      "why": "Two devices starred different pages offline; both survive, and the result is sorted by pageId so the encoded document is byte-stable whichever device wrote it.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p2",
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          },
+          {
+            "pageId": "p2",
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-bookmark-dropped-with-its-page",
+      "kind": "notebook",
+      "why": "A star on a page that has since been deleted is dropped rather than kept: it can no longer be navigated to, so keeping it would show a line that does nothing when tapped.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          },
+          {
+            "pageId": "p2",
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [
+          {
+            "id": "p2",
+            "deletedAt": "2026-08-10T06:06:00Z"
+          }
+        ],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [
+          {
+            "id": "p2",
+            "deletedAt": "2026-08-10T06:06:00Z"
+          }
+        ],
+        "parentFolderId": null,
+        "bookmarks": [
+          {
+            "pageId": "p1",
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-outline-order-from-winner",
+      "kind": "notebook",
+      "why": "Outline order follows the same ordered add-wins rule as pageIds: the winner's order is authoritative and entries only the loser knows are appended in the loser's relative order.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1",
+          "p2",
+          "p3"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          },
+          {
+            "id": "e2",
+            "pageId": "p2",
+            "title": "Body",
+            "depth": 1,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2",
+          "p3"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e3",
+            "pageId": "p3",
+            "title": "Notes",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          },
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2",
+          "p3"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e3",
+            "pageId": "p3",
+            "title": "Notes",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          },
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          },
+          {
+            "id": "e2",
+            "pageId": "p2",
+            "title": "Body",
+            "depth": 1,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-outline-rename-lww",
+      "kind": "notebook",
+      "why": "Entry content is last-writer-wins per entry id, independently of where the entry sits in the order.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Introduction",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Introduction",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-outline-removal-travels",
+      "kind": "notebook",
+      "why": "A deleted entry stays in the list as a removed tombstone. Dropping it here would let the peer that still holds it put the entry straight back on the next merge.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          },
+          {
+            "id": "e2",
+            "pageId": "p2",
+            "title": "Body",
+            "depth": 1,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": true
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": true
+          },
+          {
+            "id": "e2",
+            "pageId": "p2",
+            "title": "Body",
+            "depth": 1,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-outline-depth-clamped-on-decode",
+      "kind": "notebook",
+      "why": "A depth from a build that allows more levels degrades to the deepest this one understands instead of failing to merge, and both implementations must clamp identically or the two would render different outlines.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Deep",
+            "depth": 5,
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Deep",
+            "depth": 1,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Deep",
+            "depth": 2,
+            "updatedAt": "2026-08-10T06:06:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "notebook-outline-entry-survives-its-pages-deletion",
+      "kind": "notebook",
+      "why": "Unlike a bookmark, an outline entry whose page was deleted is kept by the merge. An entry is keyed by its own id but would be tested on pageId, and dropping it loses the record that stops the peer re-adding it on the next merge — so readers skip dangling entries instead, and deleting a page marks its entries removed as an ordinary edit.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "A",
+        "pageIds": [
+          "p1",
+          "p2"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          },
+          {
+            "id": "e2",
+            "pageId": "p2",
+            "title": "Body",
+            "depth": 1,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:05:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [
+          {
+            "id": "p2",
+            "deletedAt": "2026-08-10T06:06:00Z"
+          }
+        ],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "B",
+        "pageIds": [
+          "p1"
+        ],
+        "deletedPageIds": [
+          {
+            "id": "p2",
+            "deletedAt": "2026-08-10T06:06:00Z"
+          }
+        ],
+        "parentFolderId": null,
+        "outline": [
+          {
+            "id": "e1",
+            "pageId": "p1",
+            "title": "Intro",
+            "depth": 0,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          },
+          {
+            "id": "e2",
+            "pageId": "p2",
+            "title": "Body",
+            "depth": 1,
+            "updatedAt": "2026-08-10T06:05:00Z",
+            "removed": false
+          }
+        ],
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:06:00Z",
+        "updatedBy": "boox"
+      }
     }
   ]
 }

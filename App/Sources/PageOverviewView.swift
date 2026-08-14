@@ -7,20 +7,26 @@ import SwiftUI
 /// so a notebook of forty pages could only be crossed one tap at a time and a page could not be
 /// renamed, duplicated, deleted or moved at all. This is the same set of actions, drawn the way
 /// this app draws things.
+///
+/// One of the three tabs of `NotebookNavigatorView`, which owns the chrome around it — this view
+/// draws the grid and nothing else, so the three tabs share one title bar rather than each
+/// bringing their own.
 struct PageOverviewView: View {
     @EnvironmentObject private var store: NotebookStore
-    @Environment(\.dismiss) private var dismiss
 
     let notebookId: String
     /// The page the editor currently has open — highlighted, and scrolled to on appear.
     let currentPageId: String?
-    /// Tapping a page opens it in the editor and closes this.
+    /// Tapping a page opens it in the editor and closes the navigator.
     let openPage: (String) -> Void
 
     @State private var renamingPageId: String?
     @State private var renameTitle = ""
     @State private var showingRename = false
     @State private var deletingPageId: String?
+    @State private var outliningPageId: String?
+    @State private var outlineTitle = ""
+    @State private var showingOutlinePrompt = false
     @State private var actionError: LibraryActionError?
 
     private var manifest: NotebookManifest? { store.manifest(id: notebookId) }
@@ -46,24 +52,6 @@ struct PageOverviewView: View {
             }
         }
         .background(Modernist.paper)
-        .navigationTitle(manifest?.title ?? "Pages")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Done") { dismiss() }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    perform("Adding a page", error: $actionError) {
-                        try store.insertPage(into: notebookId, at: nil)
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .accessibilityLabel("Add page")
-                .accessibilityIdentifier("pages.add")
-            }
-        }
         .alert("Rename page", isPresented: $showingRename) {
             TextField("Name", text: $renameTitle)
             Button("Rename") {
@@ -77,6 +65,21 @@ struct PageOverviewView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .alert("Add to outline", isPresented: $showingOutlinePrompt) {
+            TextField("Section name", text: $outlineTitle)
+            Button("Add") {
+                guard let pageId = outliningPageId else { return }
+                let trimmed = outlineTitle.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { return }
+                perform("Adding the outline entry", error: $actionError) {
+                    try store.addOutlineEntry(
+                        notebookId: notebookId, pageId: pageId, title: trimmed)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The entry jumps to this page. Nest it under another from the Outline tab.")
         }
         .confirmationDialog(
             "Delete this page?", isPresented: .constant(deletingPageId != nil),
@@ -103,7 +106,6 @@ struct PageOverviewView: View {
     private func pageCell(pageId: String, index: Int) -> some View {
         Button {
             openPage(pageId)
-            dismiss()
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 thumbnail(pageId: pageId)
@@ -154,6 +156,17 @@ struct PageOverviewView: View {
                     Modernist.ink,
                     lineWidth: pageId == currentPageId ? Modernist.ruleHeavy : Modernist.ruleHair)
         }
+        // A starred page carries a solid tab in its top corner — the paper analogue, and legible
+        // on a panel that has washed the colour out, which a tinted border would not be.
+        .overlay(alignment: .topTrailing) {
+            if store.isBookmarked(notebookId: notebookId, pageId: pageId) {
+                Rectangle()
+                    .fill(Modernist.accent700)
+                    .frame(width: 10, height: 22)
+                    .padding(.trailing, 10)
+                    .accessibilityLabel("Bookmarked")
+            }
+        }
     }
 
     /// The page's own name if it has one, else its position — the number is what everyone counts
@@ -166,6 +179,30 @@ struct PageOverviewView: View {
 
     @ViewBuilder
     private func menu(pageId: String, index: Int) -> some View {
+        // Bookmarking and outlining lead, because they are what this menu gained and what the
+        // other two tabs are filled from — the same place Goodnotes puts them, under the page.
+        let bookmarked = store.isBookmarked(notebookId: notebookId, pageId: pageId)
+        Button {
+            perform(bookmarked ? "Removing the bookmark" : "Bookmarking the page",
+                    error: $actionError) {
+                try store.setBookmark(
+                    notebookId: notebookId, pageId: pageId, bookmarked: !bookmarked)
+            }
+        } label: {
+            Label(bookmarked ? "Remove bookmark" : "Bookmark",
+                  systemImage: bookmarked ? "bookmark.slash" : "bookmark")
+        }
+        Button {
+            outliningPageId = pageId
+            // Seeded with the page's own name when it has one: an outline entry for a page called
+            // "Method" is almost always going to be called "Method" too.
+            outlineTitle = (try? store.loadPage(notebookId: notebookId, pageId: pageId).title)
+                .flatMap { $0 } ?? "Page \(index + 1)"
+            showingOutlinePrompt = true
+        } label: {
+            Label("Add to outline", systemImage: "list.bullet.indent")
+        }
+        Divider()
         Button {
             renamingPageId = pageId
             renameTitle = (try? store.loadPage(notebookId: notebookId, pageId: pageId).title) ?? ""

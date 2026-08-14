@@ -144,6 +144,9 @@ Deletion: `PUT` the document with `"_deleted": true` while retaining `type`, `de
   "parentFolderId": null,
   "defaultBackground": "blank", "defaultBackgroundType": "native",
   "defaultPageWidth": 1400, "defaultPageHeight": 1980,
+  "bookmarks": [{ "pageId": "<uuid>", "updatedAt": "…", "removed": false }],
+  "outline": [{ "id": "<uuid>", "pageId": "<uuid>", "title": "Chapter 1",
+                "depth": 0, "updatedAt": "…", "removed": false }],
   "deletedAt": null,
   "createdAt": "…", "updatedAt": "…", "updatedBy": "ipad" }
 ```
@@ -168,6 +171,44 @@ A reader that does not know the field treats the notebook as live, which is the 
 the item stays visible on an old build rather than vanishing with no way to get it back.
 
 `openPageId`, scroll position and `linkedExternalUri` are device-local and **never** written.
+
+#### 3.2.1 `bookmarks` — starred pages
+
+A flat set of pages the reader starred, keyed by `pageId`. Both entries and removals live in the
+same array: `removed: true` is a page that was starred and then un-starred, kept so the un-starring
+reaches a peer that still holds the star.
+
+This is the one removal in the protocol **not** expressed as a `deletedX` tombstone list, and the
+exception is deliberate. Tombstone unions make removal permanent (§4), which is sound everywhere
+else because the removed thing never returns under the same id — a redrawn stroke is a new stroke.
+A page keeps its id, so starring it again is routine, and remove-wins would make the second star
+impossible to express. Last-writer-wins per `pageId` can say either thing; see §5.2.1.
+
+Absent or `null` reads as an empty list: a notebook written by a build that predates the field has
+no bookmarks, which is the correct reading.
+
+#### 3.2.2 `outline` — the table of contents
+
+An **ordered** list of named entries pointing at pages. Order is carried by the array itself, the
+way `pageIds` carries page order, and merges the same way (§5.2.2). `removed: true` is a deleted
+entry, kept as its own tombstone for the same reason as a bookmark's.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The entry's own id, **not** the page's. A page may appear in the outline more than once, so the page cannot be the key. |
+| `pageId` | string | The page this entry jumps to. |
+| `title` | string | What the reader named it. |
+| `depth` | int | `0`, `1` or `2` — heading, subheading, sub-subheading. |
+| `updatedAt` | string | Stamped on every edit to this entry; drives the per-entry merge. |
+| `removed` | bool | A deleted entry. |
+
+An entry anchors to a **page**, never to a position on one. Ink has no headings to re-find, so an
+offset anchor would drift the moment the page was edited on the other device — and both apps this
+protocol answers to (Goodnotes' outline, the BOOX reader's TOC) anchor by page as well.
+
+`depth` is **clamped, not rejected**, to the range above. A document from a build that one day
+allows four levels must degrade to a flatter outline rather than fail to merge; the two
+implementations clamp identically, or they would render different outlines from one document.
 
 ### 3.3 page
 
@@ -352,6 +393,52 @@ knows about are appended in the loser's relative order.
 > Ordering is deterministic for any fixed pair of inputs and therefore identical on both
 > devices. It is not strictly associative across three or more concurrent orderings — the
 > resulting **set** always is. With two devices this never surfaces.
+
+#### 5.2.1 bookmarks — last-writer-wins per page
+
+```
+union by pageId, preferring:
+    later updatedAt                      // the ordinary case
+    then removed=false                   // same instant: the star survives
+    then the larger updatedAt string     // same instant and flag: total, so both orders agree
+then .filter { $0.pageId ∉ tomb }
+then .sortBy(pageId)
+```
+
+The `removed=false` step is not a preference so much as a requirement: the two devices must agree,
+and agreeing on *something* is what makes the function commutative. Sorting by `pageId` makes the
+encoded document byte-stable, so two devices that merged the same pair produce the same body.
+
+Filtering by `tomb` is safe **here** because a bookmark is keyed by the very field being tested:
+the same `pageId` is filtered on every future merge, so the drop cannot come undone.
+
+#### 5.2.2 outline — ordered add-wins, content last-writer-wins per entry
+
+```
+content = for each id, prefer: later updatedAt
+                             then removed=false
+                             then the larger updatedAt string
+order   = w.outline.ids ++ [ id ∈ o.outline.ids : id ∉ w.outline.ids ]
+result  = order.map { content[$0] }        // NOT filtered by tomb — see below
+```
+
+Same ordered add-wins rule as `pageIds`, and for the same reason: the outline is a list the reader
+reorders wholesale, the rule is already proven here, and it needs no position field on the entry to
+stay deterministic.
+
+**The outline is not filtered by `tomb`, though a dangling entry is as useless to tap as a dangling
+bookmark.** An entry is keyed by its own `id` while the test would be on `pageId`, and the two can
+disagree. If the surviving version of entry `e` points at a deleted page, filtering erases `e` from
+the result entirely — and the next merge against a peer that still holds `e` reads it as an entry
+this side has never seen and adds it straight back. That is not idempotent, and
+`notebook-outline-entry-survives-its-pages-deletion` pins the agreed behaviour.
+
+Instead:
+
+- **Deleting a page marks its outline entries `removed` at the point of deletion**, with a fresh
+  `updatedAt`. That is an ordinary edit, which the merge above already carries correctly.
+- **Readers skip any entry whose page is not in `pageIds`**, so an entry that outlives its page
+  through some path nobody anticipated is invisible rather than broken.
 
 ### 5.3 mergeFolder(a, b)
 
