@@ -360,6 +360,16 @@ final class NotebookStore: ObservableObject {
         let now = NotableDate.format(Date())
         manifest.pageIds.removeAll { $0 == pageId }
         manifest.deletedPageIds.append(CouchTombstone(id: pageId, deletedAt: now))
+        // The bookmark can simply go — the merge filters starred pages by the tombstone too. The
+        // outline entries have to be *marked* removed instead, because the merge deliberately does
+        // not filter those (protocol §5.2.2) and a peer still holding them would otherwise add them
+        // straight back. Doing it here, as an ordinary stamped edit, is what makes the removal
+        // travel.
+        manifest.bookmarks.removeAll { $0.pageId == pageId }
+        for index in manifest.outline.indices where manifest.outline[index].pageId == pageId {
+            manifest.outline[index].removed = true
+            manifest.outline[index].updatedAt = now
+        }
         if manifest.openPageId == pageId { manifest.openPageId = manifest.pageIds.first }
         manifest.updatedAt = now
         manifest.updatedBy = deviceID
@@ -374,6 +384,135 @@ final class NotebookStore: ObservableObject {
     }
 
     /// Reorders a page within its notebook.
+    // MARK: Bookmarks
+
+    /// Every page starred in this notebook, in page order — not the order the entries happen to be
+    /// stored in, which is sorted by id to keep the merged document byte-stable.
+    func bookmarkedPageIds(in notebookId: String) -> [String] {
+        guard let manifest = manifest(id: notebookId) else { return [] }
+        let starred = Set(manifest.bookmarks.filter { !$0.removed }.map(\.pageId))
+        return manifest.pageIds.filter { starred.contains($0) }
+    }
+
+    func isBookmarked(notebookId: String, pageId: String) -> Bool {
+        manifest(id: notebookId)?.bookmarks
+            .first { $0.pageId == pageId }
+            .map { !$0.removed } ?? false
+    }
+
+    /// Star or un-star a page. Un-starring writes a `removed` entry rather than dropping the
+    /// bookmark, so the un-starring reaches the other device instead of being undone by it.
+    func setBookmark(notebookId: String, pageId: String, bookmarked: Bool) throws {
+        guard var manifest = readManifestFromDisk(notebookId),
+              manifest.pageIds.contains(pageId)
+        else { throw CocoaError(.fileNoSuchFile) }
+
+        let now = NotableDate.format(Date())
+        let entry = CouchBookmark(pageId: pageId, updatedAt: now, removed: !bookmarked)
+        manifest.bookmarks.removeAll { $0.pageId == pageId }
+        manifest.bookmarks.append(entry)
+        manifest.bookmarks.sort { $0.pageId < $1.pageId }
+        manifest.updatedAt = now
+        manifest.updatedBy = deviceID
+        try writeManifest(manifest)
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+    }
+
+    // MARK: Outline
+
+    /// The notebook's table of contents: live entries whose page still exists, in stored order.
+    ///
+    /// Dangling entries are skipped rather than repaired. The merge cannot drop them and stay
+    /// idempotent (protocol §5.2.2), so hiding them here is what keeps a deleted page from leaving
+    /// a line that does nothing when tapped.
+    func outline(in notebookId: String) -> [CouchOutlineEntry] {
+        guard let manifest = manifest(id: notebookId) else { return [] }
+        let pages = Set(manifest.pageIds)
+        return manifest.outline.filter { !$0.removed && pages.contains($0.pageId) }
+    }
+
+    func addOutlineEntry(notebookId: String, pageId: String, title: String, depth: Int = 0) throws {
+        guard var manifest = readManifestFromDisk(notebookId),
+              manifest.pageIds.contains(pageId)
+        else { throw CocoaError(.fileNoSuchFile) }
+
+        let now = NotableDate.format(Date())
+        // Appended at the page's position rather than at the end: an outline is read against the
+        // notebook, so a new entry belongs beside the pages it sits between, not after everything.
+        let entry = CouchOutlineEntry(
+            id: UUID().uuidString.lowercased(), pageId: pageId, title: title, depth: depth,
+            updatedAt: now)
+        let order = pageOrder(manifest)
+        let insertion = manifest.outline.firstIndex {
+            (order[$0.pageId] ?? Int.max) > (order[pageId] ?? Int.max)
+        } ?? manifest.outline.endIndex
+        manifest.outline.insert(entry, at: insertion)
+        manifest.updatedAt = now
+        manifest.updatedBy = deviceID
+        try writeManifest(manifest)
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+    }
+
+    /// Rename an entry, change its nesting depth, or both. Depth is clamped to what the format
+    /// allows rather than rejected, matching the decoder.
+    func updateOutlineEntry(
+        notebookId: String, entryId: String, title: String? = nil, depth: Int? = nil
+    ) throws {
+        try editOutline(notebookId: notebookId, entryId: entryId) { entry, now in
+            if let title { entry.title = title }
+            if let depth { entry.depth = min(max(depth, 0), CouchOutlineEntry.maxDepth) }
+            entry.updatedAt = now
+        }
+    }
+
+    /// Delete an entry by marking it removed — an ordinary edit the merge carries, rather than a
+    /// drop the peer would undo.
+    func removeOutlineEntry(notebookId: String, entryId: String) throws {
+        try editOutline(notebookId: notebookId, entryId: entryId) { entry, now in
+            entry.removed = true
+            entry.updatedAt = now
+        }
+    }
+
+    /// Reorder the outline, addressing positions in the *live* list the reader can see rather than
+    /// in the stored one, which also holds removed entries they cannot.
+    func moveOutlineEntry(in notebookId: String, from source: Int, to destination: Int) throws {
+        guard var manifest = readManifestFromDisk(notebookId) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let live = manifest.outline.enumerated().filter { !$0.element.removed }
+        guard live.indices.contains(source) else { throw CocoaError(.fileNoSuchFile) }
+
+        let entry = manifest.outline.remove(at: live[source].offset)
+        let target = live.indices.contains(destination)
+            ? live[destination].offset - (live[destination].offset > live[source].offset ? 1 : 0)
+            : manifest.outline.endIndex
+        manifest.outline.insert(entry, at: min(max(target, 0), manifest.outline.endIndex))
+        manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedBy = deviceID
+        try writeManifest(manifest)
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+    }
+
+    private func editOutline(
+        notebookId: String, entryId: String, _ edit: (inout CouchOutlineEntry, String) -> Void
+    ) throws {
+        guard var manifest = readManifestFromDisk(notebookId),
+              let index = manifest.outline.firstIndex(where: { $0.id == entryId })
+        else { throw CocoaError(.fileNoSuchFile) }
+
+        let now = NotableDate.format(Date())
+        edit(&manifest.outline[index], now)
+        manifest.updatedAt = now
+        manifest.updatedBy = deviceID
+        try writeManifest(manifest)
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+    }
+
+    private func pageOrder(_ manifest: NotebookManifest) -> [String: Int] {
+        Dictionary(uniqueKeysWithValues: manifest.pageIds.enumerated().map { ($1, $0) })
+    }
+
     func movePage(in notebookId: String, from source: Int, to destination: Int) throws {
         guard var manifest = readManifestFromDisk(notebookId),
               manifest.pageIds.indices.contains(source)

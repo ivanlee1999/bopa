@@ -98,7 +98,7 @@ struct EditorView: View {
             .libraryActionAlert($actionError)
             .sheet(isPresented: $showingPageOverview) {
                 NavigationStack {
-                    PageOverviewView(
+                    NotebookNavigatorView(
                         notebookId: notebookId,
                         currentPageId: pageId,
                         openPage: { open(pageId: $0) })
