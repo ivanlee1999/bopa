@@ -3,7 +3,7 @@ import XCTest
 
 @testable import Bopa
 
-/// Nib width, the highlighter, and the two ways of erasing.
+/// Nib width, ink, the highlighter, and the two ways of erasing.
 ///
 /// The rail offered one fixed width per tool, no highlighter, and a single eraser mode, so writing
 /// small was impossible and taking a whole stroke away had no gesture at all.
@@ -113,6 +113,105 @@ final class ToolSelectionWidthTests: XCTestCase {
         first.select(eraserMode: .stroke)
 
         XCTAssertEqual(makeSelection().eraserMode, .stroke)
+    }
+
+    // MARK: The width ramp
+
+    /// Every step has to be visibly broader than the one before it, or the rail is offering a
+    /// choice that makes no mark.
+    func testTheWidthRampOnlyEverGetsBroader() {
+        let selection = makeSelection()
+        selection.select(.pen)
+
+        var previous: CGFloat = 0
+        for width in ToolSelection.Width.allCases {
+            selection.select(width: width)
+            let nib = inkingWidth(selection)
+            XCTAssertGreaterThan(nib, previous, "\(width.label) is not broader than the step before it")
+            previous = nib
+        }
+    }
+
+    /// The ramp used to start at fine and stop at broad, so annotating printed text and lettering
+    /// a title were both off the end of it.
+    func testTheRampReachesPastTheOldEnds() {
+        XCTAssertLessThan(ToolSelection.Width.hair.scale, ToolSelection.Width.fine.scale)
+        XCTAssertGreaterThan(ToolSelection.Width.heavy.scale, ToolSelection.Width.broad.scale)
+        XCTAssertEqual(ToolSelection.Width.allCases.count, 5)
+    }
+
+    /// The dots stand for the nibs, so they have to rank the same way.
+    func testTheDotsRankLikeTheNibs() {
+        let dots = ToolSelection.Width.allCases.map(\.dotSize)
+        XCTAssertEqual(dots, dots.sorted())
+    }
+
+    /// The three original steps are already written to defaults on people's devices. Renaming one
+    /// would silently reset the pen it belonged to, so the stored spellings are a contract.
+    func testWidthsStoredByTheOldRailStillLoad() {
+        defaults.set("broad", forKey: "editor.width.pen")
+
+        XCTAssertEqual(makeSelection().widths[.pen], .broad)
+    }
+
+    // MARK: Ink
+
+    func testChoosingAnInkChangesWhatIsWrittenWith() {
+        let selection = makeSelection()
+        selection.select(.pen)
+
+        selection.select(inkIndex: 8)
+
+        XCTAssertEqual((selection.pkTool as? PKInkingTool)?.color, Modernist.inks[8].uiColor)
+    }
+
+    func testAnInkOutsideThePaletteIsIgnored() {
+        let selection = makeSelection()
+        selection.select(inkIndex: 2)
+
+        selection.select(inkIndex: Modernist.inks.count)
+
+        XCTAssertEqual(selection.inkIndex, 2)
+    }
+
+    /// Picking an ink while erasing means "go back to writing with it".
+    func testPickingAnInkWhileErasingReturnsToThePen() {
+        let selection = makeSelection()
+        selection.select(.eraser)
+
+        selection.select(inkIndex: 6)
+
+        XCTAssertEqual(selection.kind, .pen)
+        XCTAssertEqual(selection.inkIndex, 6)
+    }
+
+    /// A colour that reset to black on every launch would not be a choice, only a detour — the
+    /// widths have survived a relaunch since they existed and the ink did not.
+    func testInkSurvivesRelaunch() {
+        let first = makeSelection()
+        first.select(inkIndex: 10)
+
+        XCTAssertEqual(makeSelection().inkIndex, 10)
+    }
+
+    /// A palette shrunk below a stored index must not strand the rail on an ink that is gone.
+    func testAStoredInkBeyondThePaletteFallsBackToTheFirst() {
+        defaults.set(Modernist.inks.count + 3, forKey: "editor.ink")
+
+        XCTAssertEqual(makeSelection().inkIndex, 0)
+    }
+
+    /// Ids are what the rail selects by and what `inkIndex(matching:)` hands back, so they have to
+    /// stay the positions in the array — and every colour has to be far enough from every other
+    /// for that lookup to name it.
+    func testEveryInkIsItsOwnColour() {
+        XCTAssertGreaterThanOrEqual(Modernist.inks.count, 12)
+        for (index, ink) in Modernist.inks.enumerated() {
+            XCTAssertEqual(ink.id, index)
+            XCTAssertEqual(
+                Modernist.inkIndex(matching: ink.uiColor), ink.id,
+                "\(ink.name) is not distinguishable from an earlier ink")
+        }
     }
 
     /// A marker chosen by an Apple Pencil gesture has to land on the rail as the highlighter,
