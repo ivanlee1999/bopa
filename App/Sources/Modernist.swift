@@ -73,9 +73,10 @@ enum Modernist {
 
     // MARK: Inks
 
-    /// The four inks the tool rail offers. Deliberately few and deliberately saturated:
-    /// on Kaleido a pale ink is indistinguishable from grey, so a wide picker would be
-    /// lying about what the BOOX can show.
+    /// The inks the tool rail offers. A full spread of hues, but every one of them deliberately
+    /// saturated and dark: on Kaleido a pale ink is indistinguishable from grey, so the palette
+    /// widens across the wheel rather than into tints, and each entry stays deep enough to carry
+    /// paragraph-size handwriting on this ground.
     struct Ink: Identifiable, Hashable {
         let id: Int
         let name: String
@@ -83,11 +84,21 @@ enum Modernist {
         let uiColor: UIColor
     }
 
+    /// Ids are stable and append-only: they are what the rail selects by and what
+    /// [inkIndex(matching:)] hands back, so the first four keep the values they shipped with.
     static let inks: [Ink] = [
         Ink(id: 0, name: "Ink", color: ink, uiColor: UIColor(hex: 0x201E1D)),
         Ink(id: 1, name: "Red", color: accent700, uiColor: UIColor(hex: 0xAE1800)),
         Ink(id: 2, name: "Coral", color: accent600, uiColor: UIColor(hex: 0xDD2B0F)),
         Ink(id: 3, name: "Grey", color: Color(hex: 0x888888), uiColor: UIColor(hex: 0x888888)),
+        Ink(id: 4, name: "Orange", color: Color(hex: 0xC2610A), uiColor: UIColor(hex: 0xC2610A)),
+        Ink(id: 5, name: "Gold", color: Color(hex: 0x96700A), uiColor: UIColor(hex: 0x96700A)),
+        Ink(id: 6, name: "Green", color: Color(hex: 0x2E7D32), uiColor: UIColor(hex: 0x2E7D32)),
+        Ink(id: 7, name: "Teal", color: Color(hex: 0x0F6E78), uiColor: UIColor(hex: 0x0F6E78)),
+        Ink(id: 8, name: "Blue", color: Color(hex: 0x1B4FA0), uiColor: UIColor(hex: 0x1B4FA0)),
+        Ink(id: 9, name: "Violet", color: Color(hex: 0x4B3A9B), uiColor: UIColor(hex: 0x4B3A9B)),
+        Ink(id: 10, name: "Plum", color: Color(hex: 0x8E2166), uiColor: UIColor(hex: 0x8E2166)),
+        Ink(id: 11, name: "Brown", color: Color(hex: 0x6B4423), uiColor: UIColor(hex: 0x6B4423)),
     ]
 
     /// Index of the ink whose colour matches `uiColor`, if it is one of ours. Used to

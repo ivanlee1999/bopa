@@ -62,37 +62,47 @@ final class ToolSelection: ObservableObject {
 
     /// How broad the nib is.
     ///
-    /// Three steps rather than a slider: on e-ink a slider is a drag that redraws the screen, and
-    /// on glass three named widths are what people actually reach for. The rail offered one fixed
-    /// width per tool and nothing else, so writing small was impossible.
+    /// Named steps rather than a slider: on e-ink a slider is a drag that redraws the screen every
+    /// frame. Five of them rather than three — fine/medium/broad covered ordinary writing but left
+    /// no hairline for annotating printed text and nothing heavy enough to letter a title with.
+    ///
+    /// The raw values and the scales of the original three are fixed: they are the keys already
+    /// written to defaults, so a pen left on `broad` has to come back as the same `broad`.
     enum Width: String, CaseIterable, Identifiable {
-        case fine, medium, broad
+        case hair, fine, medium, broad, heavy
 
         var id: String { rawValue }
 
         var label: String {
             switch self {
+            case .hair: "Hairline"
             case .fine: "Fine"
             case .medium: "Medium"
             case .broad: "Broad"
+            case .heavy: "Heavy"
             }
         }
 
         /// Applied to the tool's own [Kind.baseWidth], so each implement keeps its character.
         var scale: CGFloat {
             switch self {
+            case .hair: 0.3
             case .fine: 0.5
             case .medium: 1
             case .broad: 2
+            case .heavy: 3
             }
         }
 
-        /// The dot the rail draws for it, in points.
+        /// The dot the rail draws for it, in points. Not the nib itself — the nib depends on the
+        /// tool — but the same ordering, so the row reads as one ramp.
         var dotSize: CGFloat {
             switch self {
+            case .hair: 3
             case .fine: 6
             case .medium: 11
             case .broad: 17
+            case .heavy: 24
             }
         }
     }
@@ -144,10 +154,15 @@ final class ToolSelection: ObservableObject {
            let mode = EraserMode(rawValue: raw) {
             eraserMode = mode
         }
+        if let stored = defaults.object(forKey: Self.inkKey) as? Int,
+           Modernist.inks.indices.contains(stored) {
+            inkIndex = stored
+        }
     }
 
     private static func widthKey(_ kind: Kind) -> String { "editor.width.\(kind.rawValue)" }
     private static let eraserKey = "editor.eraserMode"
+    private static let inkKey = "editor.ink"
 
     var ink: Modernist.Ink { Modernist.inks[min(inkIndex, Modernist.inks.count - 1)] }
 
@@ -176,9 +191,12 @@ final class ToolSelection: ObservableObject {
         revision += 1
     }
 
+    /// Sets the ink every inking tool writes with. Persisted like the widths are: a colour that
+    /// reset to black on every launch would not be a choice, only a detour.
     func select(inkIndex: Int) {
         guard Modernist.inks.indices.contains(inkIndex) else { return }
         self.inkIndex = inkIndex
+        defaults.set(inkIndex, forKey: Self.inkKey)
         // Picking an ink while erasing or selecting means "go back to writing with it".
         if !kind.takesInk { kind = .pen }
         revision += 1
@@ -234,18 +252,27 @@ struct ToolRail: View {
     var body: some View {
         Group {
             if vertical {
-                VStack(spacing: 0) {
-                    tools
-                    ModernistRule()
-                        .frame(width: hit)
-                    widthPicker
-                    ModernistRule()
-                        .frame(width: hit)
-                    history
-                    Spacer(minLength: 0)
-                    swatches
+                // Five widths and a full palette are taller than a landscape iPad on the short
+                // edge, so the column scrolls rather than clips. `basedOnSize` keeps it inert
+                // whenever it does fit — on e-ink a rail that bounces is a full-screen refresh
+                // for nothing.
+                ScrollView(.vertical) {
+                    VStack(spacing: 0) {
+                        tools
+                        ModernistRule()
+                            .frame(width: hit)
+                        widthPicker
+                        ModernistRule()
+                            .frame(width: hit)
+                        history
+                        ModernistRule()
+                            .frame(width: hit)
+                        swatches
+                    }
+                    .padding(.vertical, 6)
                 }
-                .padding(.vertical, 6)
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollIndicators(.hidden)
                 .frame(width: 60)
                 .frame(maxHeight: .infinity)
                 .overlay(alignment: .trailing) {
@@ -255,10 +282,18 @@ struct ToolRail: View {
                 }
             } else {
                 HStack(spacing: 0) {
-                    tools
-                    widthPicker
-                    history
-                    Spacer(minLength: 0)
+                    // Same bargain along the bottom: the tools, the widths and undo/redo are
+                    // wider than an iPhone, so they scroll while the ink stays put — the one
+                    // control you always want to be able to reach for.
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 0) {
+                            tools
+                            widthPicker
+                            history
+                        }
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollIndicators(.hidden)
                     inkMenu
                 }
                 .padding(.horizontal, 4)
@@ -324,7 +359,7 @@ struct ToolRail: View {
         }
     }
 
-    /// Three widths, as the dots they draw.
+    /// The widths, as the dots they draw.
     ///
     /// Shown as sizes rather than named, because the thing being chosen is a size — and while the
     /// eraser is selected it becomes the eraser's two modes instead, which is the choice that
@@ -353,8 +388,10 @@ struct ToolRail: View {
                     Button {
                         selection.select(width: width)
                     } label: {
+                        // The selected cell is an ink fill, so the dot has to invert with it or
+                        // the one step you chose is the one you cannot see.
                         Circle()
-                            .fill(Modernist.ink)
+                            .fill(selection.width == width ? Modernist.paper : Modernist.ink)
                             .frame(width: width.dotSize, height: width.dotSize)
                     }
                     .buttonStyle(RailButtonStyle(selected: selection.width == width, size: hit))
@@ -366,32 +403,40 @@ struct ToolRail: View {
         }
     }
 
-    /// The four inks, always visible when there is room for them. A ring rather than a
-    /// fill marks the current one — the swatch itself has to stay pure colour.
+    /// The whole palette, always visible. Two columns rather than one: a single file of a dozen
+    /// swatches would be longer than the rest of the rail put together, and the point of showing
+    /// them at all is that a colour is one tap away. A ring rather than a fill marks the current
+    /// one — the swatch itself has to stay pure colour.
     private var swatches: some View {
-        VStack(spacing: 4) {
+        LazyVGrid(columns: Self.swatchColumns, spacing: 2) {
             ForEach(Modernist.inks) { ink in
                 Button {
                     selection.select(inkIndex: ink.id)
                 } label: {
                     Rectangle()
                         .fill(ink.color)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 24, height: 24)
                         .overlay(Rectangle().stroke(Modernist.neutral600, lineWidth: 1))
-                        .padding(3)
+                        .padding(2)
                         .overlay {
                             if selection.inkIndex == ink.id {
                                 Rectangle().stroke(Modernist.ink, lineWidth: 2)
                             }
                         }
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(ink.name)
                 .accessibilityIdentifier("editor.ink.\(ink.id)")
             }
         }
+        .padding(.top, 4)
         .padding(.bottom, 2)
     }
+
+    private static let swatchColumns = [
+        GridItem(.fixed(28), spacing: 2), GridItem(.fixed(28), spacing: 2),
+    ]
 
     /// Compact stand-in for the swatch column: the current ink, opening the rest.
     private var inkMenu: some View {
