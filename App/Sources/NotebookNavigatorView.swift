@@ -35,8 +35,15 @@ struct NotebookNavigatorView: View {
     /// feel like a detour.
     @AppStorage("navigator.tab") private var tab: Tab = .pages
     @State private var actionError: LibraryActionError?
+    @State private var outlineTitle = ""
+    @State private var showingOutlinePrompt = false
 
     private var manifest: NotebookManifest? { store.manifest(id: notebookId) }
+
+    private var isCurrentPageBookmarked: Bool {
+        guard let currentPageId else { return false }
+        return store.isBookmarked(notebookId: notebookId, pageId: currentPageId)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,6 +58,31 @@ struct NotebookNavigatorView: View {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Done") { dismiss() }
             }
+            // Starring and outlining are the two things this panel is *for*, and they used to live
+            // only in a page's long-press menu — which is to say they could not be found at all.
+            // They sit in the header on every tab now: the reader is looking at the page they mean
+            // when they reach for the panel, so "this page" is the useful subject.
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    toggleBookmark()
+                } label: {
+                    Image(systemName: isCurrentPageBookmarked ? "bookmark.fill" : "bookmark")
+                }
+                .disabled(currentPageId == nil)
+                .accessibilityLabel(
+                    isCurrentPageBookmarked ? "Remove bookmark" : "Bookmark this page")
+                .accessibilityIdentifier("navigator.bookmark")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    promptForOutlineEntry()
+                } label: {
+                    Image(systemName: "list.bullet.indent")
+                }
+                .disabled(currentPageId == nil)
+                .accessibilityLabel("Add this page to the outline")
+                .accessibilityIdentifier("navigator.addOutline")
+            }
             if tab == .pages {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -64,6 +96,22 @@ struct NotebookNavigatorView: View {
                     .accessibilityIdentifier("pages.add")
                 }
             }
+        }
+        .alert("Add to outline", isPresented: $showingOutlinePrompt) {
+            TextField("Section name", text: $outlineTitle)
+            Button("Add") {
+                guard let currentPageId else { return }
+                let trimmed = outlineTitle.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { return }
+                perform("Adding the outline entry", error: $actionError) {
+                    try store.addOutlineEntry(
+                        notebookId: notebookId, pageId: currentPageId, title: trimmed)
+                }
+                tab = .outline
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The entry jumps to this page. Nest it under another from the Outline tab.")
         }
         .libraryActionAlert($actionError)
     }
@@ -116,6 +164,27 @@ struct NotebookNavigatorView: View {
         openPage(pageId)
         dismiss()
     }
+
+    /// Seeded with the page's own name when it has one: an outline entry for a page called
+    /// "Method" almost always wants to be called "Method".
+    private func promptForOutlineEntry() {
+        outlineTitle = ""
+        if let currentPageId,
+           let page = try? store.loadPage(notebookId: notebookId, pageId: currentPageId),
+           let title = page.title {
+            outlineTitle = title
+        }
+        showingOutlinePrompt = true
+    }
+
+    private func toggleBookmark() {
+        guard let currentPageId else { return }
+        let bookmarked = isCurrentPageBookmarked
+        perform(bookmarked ? "Removing the bookmark" : "Bookmarking the page", error: $actionError) {
+            try store.setBookmark(
+                notebookId: notebookId, pageId: currentPageId, bookmarked: !bookmarked)
+        }
+    }
 }
 
 // MARK: - Outline
@@ -135,6 +204,8 @@ struct OutlineTabView: View {
     @State private var renamingId: String?
     @State private var renameTitle = ""
     @State private var showingRename = false
+    @State private var addTitle = ""
+    @State private var showingAdd = false
     @State private var actionError: LibraryActionError?
 
     private var entries: [CouchOutlineEntry] { store.outline(in: notebookId) }
@@ -146,11 +217,7 @@ struct OutlineTabView: View {
     var body: some View {
         Group {
             if entries.isEmpty {
-                NavigatorEmptyState(
-                    icon: "list.bullet.indent",
-                    title: "No outline yet",
-                    detail: "Add a page to the outline from its menu in the Pages tab. Swipe an "
-                        + "entry here to indent it, or hold it to rename and reorder.")
+                emptyState
             } else {
                 // Deliberately not an editable List. `onMove` only works in edit mode, and edit
                 // mode puts a red delete badge and a grabber on every row permanently — the exact
@@ -179,7 +246,49 @@ struct OutlineTabView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .alert("Add to outline", isPresented: $showingAdd) {
+            TextField("Section name", text: $addTitle)
+            Button("Add") {
+                guard let currentPageId else { return }
+                let trimmed = addTitle.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { return }
+                perform("Adding the outline entry", error: $actionError) {
+                    try store.addOutlineEntry(
+                        notebookId: notebookId, pageId: currentPageId, title: trimmed)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The entry jumps to the page you have open.")
+        }
         .libraryActionAlert($actionError)
+    }
+
+    private var emptyState: NavigatorEmptyState {
+        let hasPage = currentPageId != nil
+        var actionTitle: String?
+        var action: (() -> Void)?
+        if hasPage {
+            actionTitle = "Add this page"
+            action = { self.addCurrentPage() }
+        }
+        return NavigatorEmptyState(
+            icon: "list.bullet.indent",
+            title: "No outline yet",
+            detail: "Name a section and it becomes an entry pointing at that page. Swipe an entry "
+                + "to indent it, or hold it to rename and reorder.",
+            actionTitle: actionTitle,
+            action: action)
+    }
+
+    private func addCurrentPage() {
+        guard let currentPageId else { return }
+        addTitle = ""
+        if let page = try? store.loadPage(notebookId: notebookId, pageId: currentPageId),
+           let title = page.title {
+            addTitle = title
+        }
+        showingAdd = true
     }
 
     private func row(_ entry: CouchOutlineEntry, index: Int) -> some View {
@@ -307,11 +416,7 @@ struct BookmarksTabView: View {
     var body: some View {
         Group {
             if pageIds.isEmpty {
-                NavigatorEmptyState(
-                    icon: "bookmark",
-                    title: "No bookmarks yet",
-                    detail: "Bookmark a page from its menu in the Pages tab. Bookmarks sync, so a "
-                        + "page you star here is starred on the BOOX too.")
+                emptyState
             } else {
                 ScrollView {
                     LazyVGrid(
@@ -328,6 +433,30 @@ struct BookmarksTabView: View {
         }
         .background(Modernist.paper)
         .libraryActionAlert($actionError)
+    }
+
+    private var emptyState: NavigatorEmptyState {
+        let hasPage = currentPageId != nil
+        var actionTitle: String?
+        var action: (() -> Void)?
+        if hasPage {
+            actionTitle = "Bookmark this page"
+            action = { self.bookmarkCurrentPage() }
+        }
+        return NavigatorEmptyState(
+            icon: "bookmark",
+            title: "No bookmarks yet",
+            detail: "Star a page and it is listed here in page order. Bookmarks sync, so a page "
+                + "you star here is starred on the BOOX too.",
+            actionTitle: actionTitle,
+            action: action)
+    }
+
+    private func bookmarkCurrentPage() {
+        guard let currentPageId else { return }
+        perform("Bookmarking the page", error: $actionError) {
+            try store.setBookmark(notebookId: notebookId, pageId: currentPageId, bookmarked: true)
+        }
     }
 
     private func cell(_ pageId: String) -> some View {
@@ -381,10 +510,16 @@ struct BookmarksTabView: View {
 
 /// What a tab shows before the reader has put anything in it. Says what to do, not just that
 /// there is nothing — an empty outline is the normal starting state, not a fault.
+///
+/// It carries the action itself rather than describing where to find it. Prose that says "add one
+/// from the menu in the Pages tab" is a treasure map, and the reader who is looking at an empty tab
+/// is exactly the one who wants the button.
 struct NavigatorEmptyState: View {
     let icon: String
     let title: String
     let detail: String
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -399,6 +534,20 @@ struct NavigatorEmptyState: View {
                 .foregroundStyle(Modernist.neutral700)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
+            if let actionTitle, let action {
+                Button(action: action) {
+                    Text(actionTitle.uppercased())
+                        .font(Modernist.font(12, .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(Modernist.paper)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(Modernist.ink)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+                .accessibilityIdentifier("navigator.emptyState.action")
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(32)

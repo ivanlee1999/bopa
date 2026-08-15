@@ -47,6 +47,10 @@ struct PageOverviewView: View {
                 .padding(22)
             }
             .onAppear {
+                // Before the refresh, so the published snapshot picks the repair up: a notebook
+                // whose list has a repeated id draws one thumbnail for four pages until it is
+                // reconciled against the files on disk.
+                store.repairPageList(in: notebookId)
                 store.refresh()
                 if let currentPageId { proxy.scrollTo(currentPageId, anchor: .center) }
             }
