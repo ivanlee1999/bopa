@@ -219,4 +219,69 @@ final class NavigatorTests: XCTestCase {
         XCTAssertEqual(reopened.outline(in: notebookId).map(\.title), ["Intro"])
         XCTAssertEqual(reopened.outline(in: notebookId).first?.depth, 1)
     }
+
+    // MARK: Repairing the page list
+
+    /// A repeated id is what makes a four-page notebook draw one thumbnail: the editor's counter is
+    /// `pageIds.count` while the overview is a `ForEach` keyed by page id, and SwiftUI renders one
+    /// row for ids that collide. The two have to be able to disagree for the bug to exist, so the
+    /// repair is the thing that keeps them honest.
+    func testARepeatedPageIdIsCollapsedToOne() throws {
+        try addPages(3)
+        var manifest = try XCTUnwrap(store.manifest(id: notebookId))
+        let first = manifest.pageIds[0]
+        manifest.pageIds = [first, first, first, first]
+        try writeManifestDirectly(manifest)
+        store.refresh()
+
+        XCTAssertTrue(store.repairPageList(in: notebookId))
+
+        // The three real pages are still on disk, so they come back rather than being dropped with
+        // the duplicates — repairing must not cost the reader three pages.
+        let repaired = try XCTUnwrap(store.manifest(id: notebookId)).pageIds
+        XCTAssertEqual(repaired.count, 4)
+        XCTAssertEqual(Set(repaired).count, 4)
+        XCTAssertEqual(repaired.first, first)
+    }
+
+    /// A page file with no entry in `pageIds` is invisible in the app and, worse, the next upload's
+    /// orphan cleanup deletes it. Re-attaching it is the difference between a page being lost and
+    /// being out of order.
+    func testAnOrphanPageFileIsReattached() throws {
+        let pages = try addPages(2)
+        var manifest = try XCTUnwrap(store.manifest(id: notebookId))
+        manifest.pageIds = manifest.pageIds.filter { $0 != pages[1] }
+        try writeManifestDirectly(manifest)
+        store.refresh()
+
+        XCTAssertTrue(store.repairPageList(in: notebookId))
+
+        XCTAssertTrue(
+            try XCTUnwrap(store.manifest(id: notebookId)).pageIds.contains(pages[1]))
+    }
+
+    /// The counterpart, and the one that matters more: a page deleted here or on the BOOX leaves a
+    /// tombstone and its file may linger. Re-attaching it would walk a deleted page back in on the
+    /// next open, which is exactly the loop the merge's erasure-beats-drawing rule exists to stop.
+    func testATombstonedPageIsNotReattached() throws {
+        let pages = try addPages(2)
+        try store.deletePage(from: notebookId, pageId: pages[1])
+        store.refresh()
+
+        XCTAssertFalse(store.repairPageList(in: notebookId))
+        XCTAssertFalse(
+            try XCTUnwrap(store.manifest(id: notebookId)).pageIds.contains(pages[1]))
+    }
+
+    /// A healthy notebook must not be rewritten: the repair bumps `updatedAt`, which is the clock
+    /// the merge reads, so a no-op that still wrote would make every open look like an edit and
+    /// give the notebook a spurious win over the other device.
+    func testAHealthyNotebookIsLeftAlone() throws {
+        try addPages(3)
+        let before = try XCTUnwrap(store.manifest(id: notebookId))
+
+        XCTAssertFalse(store.repairPageList(in: notebookId))
+
+        XCTAssertEqual(try XCTUnwrap(store.manifest(id: notebookId)), before)
+    }
 }

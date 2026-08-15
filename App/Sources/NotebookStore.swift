@@ -247,6 +247,60 @@ final class NotebookStore: ObservableObject {
         return try? decoder.decode(NotebookManifest.self, from: data)
     }
 
+    /// Reconciles a notebook's `pageIds` with the page files actually on disk, and returns whether
+    /// anything had to be repaired.
+    ///
+    /// `pageIds` is the only record of page *order*, so it is authoritative — but it is a list of
+    /// ids kept in a separate file from the pages themselves, and the two can come apart. Two ways
+    /// that has been seen, both of which leave the notebook looking wrong rather than broken:
+    ///
+    /// - **A repeated id.** The page count is taken from `pageIds.count` while the overview is a
+    ///   `ForEach` keyed by page id, and SwiftUI collapses rows that share an id — so a notebook
+    ///   whose list reads `[A, A, A, A]` says "4" in the editor and draws a single thumbnail.
+    /// - **An orphan page file.** A page written to disk whose id never made it into the list is
+    ///   invisible everywhere and, worse, the next upload's orphan cleanup deletes it.
+    ///
+    /// Repairing on open rather than on every `refresh()` keeps it off the library's path, where it
+    /// would cost a directory listing per notebook. A tombstoned page is never re-attached: erasure
+    /// beats recovery, the same rule the merge uses, or a page deleted on the BOOX would walk back
+    /// in here on the next open.
+    @discardableResult
+    func repairPageList(in notebookId: String) -> Bool {
+        guard var manifest = readManifestFromDisk(notebookId) else { return false }
+
+        var seen = Set<String>()
+        var repaired = manifest.pageIds.filter { seen.insert($0).inserted }
+
+        let tombstoned = Set(manifest.deletedPageIds.map(\.id))
+        let pagesDir = notebookDir(notebookId).appendingPathComponent("pages", isDirectory: true)
+        let onDisk = (try? FileManager.default.contentsOfDirectory(atPath: pagesDir.path)) ?? []
+        let orphans = onDisk
+            .filter { $0.hasSuffix(".json") }
+            .map { String($0.dropLast(".json".count)) }
+            .filter { !seen.contains($0) && !tombstoned.contains($0) }
+            // A stable order, and the one that matches how they were made: the file's own
+            // `createdAt`, falling back to the id so the result never depends on directory order.
+            .sorted {
+                let left = readPageFromDisk(notebookId: notebookId, pageId: $0)?.createdAt ?? ""
+                let right = readPageFromDisk(notebookId: notebookId, pageId: $1)?.createdAt ?? ""
+                return (left, $0) < (right, $1)
+            }
+        repaired.append(contentsOf: orphans)
+
+        guard repaired != manifest.pageIds else { return false }
+        manifest.pageIds = repaired
+        // The repair has to travel: a peer holding the same damaged list would otherwise merge it
+        // straight back, and `updatedAt` is the clock the merge reads.
+        manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedBy = deviceID
+        if let openPageId = manifest.openPageId, !repaired.contains(openPageId) {
+            manifest.openPageId = repaired.first
+        }
+        try? writeManifest(manifest)
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+        return true
+    }
+
     /// Appends a page. Its paper follows the notebook's own default (what Notable does);
     /// `fallbackTemplate` applies only when that default is not a native template —
     /// a PDF-backed notebook's per-page PDF binding is not something we can invent here.
