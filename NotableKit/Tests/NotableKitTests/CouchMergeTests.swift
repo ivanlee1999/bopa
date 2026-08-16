@@ -14,9 +14,41 @@ final class CouchMergeVectorTests: XCTestCase {
         var name: String
         var kind: String
         var why: String?
-        var a: AnyDoc
-        var b: AnyDoc
+        // Merge vectors take two documents; a `split` vector takes one page and a sheet, so these
+        // are absent there rather than optional in spirit.
+        var a: AnyDoc?
+        var b: AnyDoc?
         var expected: AnyDoc
+        var page: AnyDoc?
+        var sheet: Sheet?
+        var now: String?
+    }
+
+    private struct Sheet: Decodable {
+        var width: Int
+        var height: Int
+    }
+
+    /// What a `split` vector asserts about each page the split produces: which page it is, what ink
+    /// it carries and where that ink now sits.
+    private struct ExpectedPage: Decodable {
+        var id: String
+        var strokes: [ExpectedStroke]
+        var images: [ExpectedImage]
+        var pageWidth: Int
+        var pageHeight: Int
+    }
+
+    private struct ExpectedStroke: Decodable {
+        var id: String
+        var top: Float
+        var bottom: Float
+        var pointsData: String
+    }
+
+    private struct ExpectedImage: Decodable {
+        var id: String
+        var y: Int
     }
 
     /// Raw JSON held until `kind` says which document type to decode it as.
@@ -80,7 +112,7 @@ final class CouchMergeVectorTests: XCTestCase {
         XCTAssertFalse(vectors.isEmpty)
         // Every merge rule with a branch of its own should have at least one vector.
         let kinds = Set(vectors.map(\.kind))
-        XCTAssertEqual(kinds, ["page", "notebook", "folder"])
+        XCTAssertEqual(kinds, ["page", "notebook", "folder", "split"])
     }
 
     func testVectors() throws {
@@ -92,6 +124,8 @@ final class CouchMergeVectorTests: XCTestCase {
                 try check(vector, as: CouchNotebook.self, merge: CouchMerge.merge)
             case "folder":
                 try check(vector, as: CouchFolder.self, merge: CouchMerge.merge)
+            case "split":
+                try checkSplit(vector)
             default:
                 XCTFail("vector \(vector.name): unknown kind \(vector.kind)")
             }
@@ -104,14 +138,70 @@ final class CouchMergeVectorTests: XCTestCase {
         _ vector: Vector, as type: T.Type, merge: (T, T) -> T
     ) throws {
         let decoder = JSONDecoder()
-        let a = try decoder.decode(T.self, from: vector.a.json)
-        let b = try decoder.decode(T.self, from: vector.b.json)
+        let a = try decoder.decode(T.self, from: XCTUnwrap(vector.a).json)
+        let b = try decoder.decode(T.self, from: XCTUnwrap(vector.b).json)
         let expected = try decoder.decode(T.self, from: vector.expected.json)
 
         XCTAssertEqual(merge(a, b), expected, "\(vector.name): merge(a,b)")
         XCTAssertEqual(merge(b, a), expected, "\(vector.name): merge(b,a) — not commutative")
         XCTAssertEqual(merge(expected, a), expected, "\(vector.name): merge(expected,a) — not idempotent")
         XCTAssertEqual(merge(expected, b), expected, "\(vector.name): merge(expected,b) — not idempotent")
+    }
+
+    /// Runs a `split` vector: divides the page and checks, page by page, that the same pages come
+    /// out — with the same ids, carrying the same ink, moved to the same place.
+    ///
+    /// Also runs the split a second time over its own output and requires nothing to change. A
+    /// split that is not idempotent files a fresh page every time a notebook is opened, and this is
+    /// the cheapest place to catch it.
+    private func checkSplit(_ vector: Vector) throws {
+        let decoder = JSONDecoder()
+        let sheetSpec = try XCTUnwrap(vector.sheet, "\(vector.name): split vector needs a sheet")
+        let sheet = PageSize(width: sheetSpec.width, height: sheetSpec.height)
+        let now = try XCTUnwrap(vector.now)
+        let source = try decoder.decode(CouchPage.self, from: XCTUnwrap(vector.page).json)
+        let sourceId = try XCTUnwrap(
+            decoder.decode([String: JSONValue].self, from: XCTUnwrap(vector.page).json)["id"]
+                .flatMap { if case .string(let value) = $0 { return value } else { return nil } })
+        let expected = try decoder.decode([ExpectedPage].self, from: vector.expected.json)
+
+        let produced = try PageSplit.split(
+            source, id: sourceId, sheet: sheet, now: now, updatedBy: "ipad")
+
+        XCTAssertEqual(
+            produced.map(\.id), expected.map(\.id), "\(vector.name): pages produced")
+        for (made, want) in zip(produced, expected) {
+            XCTAssertEqual(
+                made.page.strokes.map(\.id), want.strokes.map(\.id),
+                "\(vector.name): strokes on \(want.id)")
+            for (stroke, wantStroke) in zip(made.page.strokes, want.strokes) {
+                XCTAssertEqual(
+                    stroke.top, wantStroke.top, accuracy: 0.01,
+                    "\(vector.name): \(stroke.id) top on \(want.id)")
+                XCTAssertEqual(
+                    stroke.bottom, wantStroke.bottom, accuracy: 0.01,
+                    "\(vector.name): \(stroke.id) bottom on \(want.id)")
+                XCTAssertEqual(
+                    stroke.pointsData, wantStroke.pointsData,
+                    "\(vector.name): \(stroke.id) points on \(want.id) — the ink itself moved wrong")
+            }
+            XCTAssertEqual(
+                made.page.images.map(\.id), want.images.map(\.id),
+                "\(vector.name): images on \(want.id)")
+            for (image, wantImage) in zip(made.page.images, want.images) {
+                XCTAssertEqual(
+                    image.y, wantImage.y, "\(vector.name): \(image.id) y on \(want.id)")
+            }
+            XCTAssertEqual(made.page.pageWidth, want.pageWidth, "\(vector.name): \(want.id) sheet")
+            XCTAssertEqual(made.page.pageHeight, want.pageHeight, "\(vector.name): \(want.id) sheet")
+        }
+
+        for (id, page) in produced {
+            let again = try PageSplit.split(
+                page, id: id, sheet: sheet, now: now, updatedBy: "ipad")
+            XCTAssertEqual(again.count, 1, "\(vector.name): splitting \(id) again divided it further")
+            XCTAssertEqual(again[0].id, id, "\(vector.name): re-splitting \(id) renamed it")
+        }
     }
 }
 
