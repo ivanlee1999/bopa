@@ -685,6 +685,41 @@ A discard is applied only to ids that are in fact tombstones locally. The list t
 report and a user interface before it comes back, and "forget the local deletion of X" applied to a
 live document would silently drop a real edit out of the outbox.
 
+### 6.6 Dividing a page that outgrew its sheet
+
+A page is an endless vertical canvas in the file format, and both apps used to treat it as one when
+writing: the declared sheet was only where export divided it. So a reader who wrote to the bottom
+and carried on made the *page* taller, and everything below the first sheet became invisible to
+anything that works in pages — one thumbnail in the overview, one bookmark for the whole scroll, no
+way to reorder it. Both apps now divide such a page into one page per sheet.
+
+The division is a local repair, not a wire change: it produces ordinary pages, and a peer that has
+never run it sees nothing it cannot already read. But two devices can run it independently on the
+same page before either has seen the other, so the result MUST be a function of the page alone:
+
+1. **The sheet** is the page's declared `pageWidth`/`pageHeight`; failing that the notebook's
+   default; failing that `1404x1872`. It MUST NOT be the device's screen, which the two apps
+   disagree about for undeclared pages (§3.4) and which would divide the same page differently on
+   each. Every page produced declares its sheet, so the ambiguity is resolved once.
+2. **Sheet index** of a stroke or image is `floor(top / sheetHeight)`, where `top` is `top` for a
+   stroke and `y` for an image, clamped at 0. Content is never cut: a stroke crossing a boundary
+   belongs whole to the sheet it starts in.
+3. **The number of sheets** is one more than the highest sheet index of any content — counted from
+   where content *starts*, never from how far it reaches. Counting the extent instead is not
+   idempotent: an overhanging stroke would keep the page taller than a sheet, so every run would
+   find one sheet more than it fills and file an empty page, for ever.
+4. **Sheet 0 keeps the page's id.** Bookmarks (§3.2.1) and outline entries (§3.2.2) name a page id,
+   and renaming sheet 0 would strand every one of them.
+5. **Sheet `k > 0` takes the id** `uuid(sha256("notable-page-split:" + parentId + ":" + k)[0..16])`
+   — the first 16 bytes of the digest, lowercase hex, in UUID shape. Not a UUIDv5; the only
+   required property is that both implementations compute the same one. Derived rather than random
+   so that two devices dividing the same page produce the *same* pages: with random ids the merge
+   would take the union and the notebook would hold every page twice.
+6. Content moves with its sheet: `y`, `top`, `bottom` and every encoded point shift by
+   `-k * sheetHeight`. `createdAt` is the parent's — these are not new notes — and `scroll` is 0.
+
+Vectors: `split-*` in `docs/couch-sync-vectors/vectors.json`, which both suites run.
+
 ## 7. Transport
 
 | Step | Request |

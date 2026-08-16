@@ -301,6 +301,55 @@ final class NotebookStore: ObservableObject {
         return true
     }
 
+    /// Turns every sheet a notebook's pages had grown past into a page of its own, and returns how
+    /// many pages that added.
+    ///
+    /// Writing used to make a page taller rather than making a page, so a notebook can hold hours
+    /// of work below the first sheet where nothing that thinks in pages could reach it. This is the
+    /// one-time reconciliation of those notebooks with what a page now means. `PageSplit` decides
+    /// where the cuts fall; this puts the results on disk and in order.
+    ///
+    /// Safe to run on open and cheap to run again: a notebook already in single sheets does no
+    /// writes at all, so it neither churns the sync nor bumps a clock the merge reads.
+    @discardableResult
+    func splitOversizedPages(in notebookId: String) -> Int {
+        guard var manifest = readManifestFromDisk(notebookId) else { return 0 }
+        let now = NotableDate.format(Date())
+        var pageIds: [String] = []
+        var added = 0
+
+        for pageId in manifest.pageIds {
+            guard let page = readPageFromDisk(notebookId: notebookId, pageId: pageId) else {
+                pageIds.append(pageId)
+                continue
+            }
+            let sheet = PageSplit.sheet(
+                for: page, notebookDefault: manifest.declaredDefaultPageSize)
+            guard let divided = try? PageSplit.split(
+                page, sheet: sheet, now: now, updatedBy: deviceID), divided.count > 1
+            else {
+                pageIds.append(pageId)
+                continue
+            }
+            for produced in divided {
+                try? encoder.encode(produced)
+                    .write(
+                        to: pageURL(notebookId: notebookId, pageId: produced.id), options: .atomic)
+                pageIds.append(produced.id)
+            }
+            added += divided.count - 1
+        }
+
+        guard added > 0 else { return 0 }
+        manifest.pageIds = pageIds
+        manifest.updatedAt = now
+        manifest.updatedBy = deviceID
+        try? writeManifest(manifest)
+        refreshAfterLocalChange(
+            documents: [CouchDocID.notebook(notebookId)] + pageIds.map(CouchDocID.page))
+        return added
+    }
+
     /// Appends a page. Its paper follows the notebook's own default (what Notable does);
     /// `fallbackTemplate` applies only when that default is not a native template —
     /// a PDF-backed notebook's per-page PDF binding is not something we can invent here.

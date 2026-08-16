@@ -395,7 +395,7 @@
     {
       "name": "page-fractional-seconds-not-string-compared",
       "kind": "page",
-      "why": "REGRESSION: '…33.871Z' sorts BEFORE '…33Z' lexicographically but is later in time. A string compare would pick the wrong winner and silently drop the newer background.",
+      "why": "REGRESSION: '\u202633.871Z' sorts BEFORE '\u202633Z' lexicographically but is later in time. A string compare would pick the wrong winner and silently drop the newer background.",
       "a": {
         "type": "page",
         "schema": 1,
@@ -696,7 +696,7 @@
     {
       "name": "page-rename-cleared-lww",
       "kind": "page",
-      "why": "Clearing a page's name is an edit like any other, so the later write wins even though its value is null — a name removed on one device does not come back from the other.",
+      "why": "Clearing a page's name is an edit like any other, so the later write wins even though its value is null \u2014 a name removed on one device does not come back from the other.",
       "a": {
         "type": "page",
         "schema": 1,
@@ -897,7 +897,7 @@
     {
       "name": "page-two-sheets-later-write-wins",
       "kind": "page",
-      "why": "When both sides declare a sheet — which in practice means the size was changed, since it is fixed at creation — it resolves like any other scalar: the later write.",
+      "why": "When both sides declare a sheet \u2014 which in practice means the size was changed, since it is fixed at creation \u2014 it resolves like any other scalar: the later write.",
       "a": {
         "type": "page",
         "schema": 1,
@@ -1280,7 +1280,7 @@
     {
       "name": "notebook-later-edit-outlives-trash",
       "kind": "notebook",
-      "why": "deletedAt travels in the scalar envelope (§5.5), so an edit written after the trashing carries deletedAt=null with it and the notebook returns to the library — the same rule §6.4 applies to a real deletion, and the same known consequence.",
+      "why": "deletedAt travels in the scalar envelope (\u00a75.5), so an edit written after the trashing carries deletedAt=null with it and the notebook returns to the library \u2014 the same rule \u00a76.4 applies to a real deletion, and the same known consequence.",
       "a": {
         "type": "notebook",
         "schema": 1,
@@ -2091,7 +2091,7 @@
     {
       "name": "notebook-outline-entry-survives-its-pages-deletion",
       "kind": "notebook",
-      "why": "Unlike a bookmark, an outline entry whose page was deleted is kept by the merge. An entry is keyed by its own id but would be tested on pageId, and dropping it loses the record that stops the peer re-adding it on the next merge — so readers skip dangling entries instead, and deleting a page marks its entries removed as an ordinary edit.",
+      "why": "Unlike a bookmark, an outline entry whose page was deleted is kept by the merge. An entry is keyed by its own id but would be tested on pageId, and dropping it loses the record that stops the peer re-adding it on the next merge \u2014 so readers skip dangling entries instead, and deleting a page marks its entries removed as an ordinary edit.",
       "a": {
         "type": "notebook",
         "schema": 1,
@@ -2194,6 +2194,415 @@
         "updatedAt": "2026-08-10T06:06:00Z",
         "updatedBy": "boox"
       }
+    },
+    {
+      "name": "split-one-page-per-sheet",
+      "kind": "split",
+      "why": "Writing past the sheet made the page taller; each sheet becomes a page, in order.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-08-15T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-a",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "scroll": 0,
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 100,
+            "bottom": 200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+          },
+          {
+            "id": "s2",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 1100,
+            "bottom": 1200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF96dUVfcFIAgACA"
+          },
+          {
+            "id": "s3",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 2500,
+            "bottom": 2600,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF9oZ05fcFIAgACA"
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-a",
+          "strokes": [
+            {
+              "id": "s1",
+              "top": 100,
+              "bottom": 200,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+            }
+          ],
+          "images": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        },
+        {
+          "id": "82b2c548-bbc8-c002-5ea9-3e81ce812b9e",
+          "strokes": [
+            {
+              "id": "s2",
+              "top": 100,
+              "bottom": 200,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+            }
+          ],
+          "images": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        },
+        {
+          "id": "5365da7e-0b58-2d91-45c0-765a1823c6c8",
+          "strokes": [
+            {
+              "id": "s3",
+              "top": 500,
+              "bottom": 600,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF90YEJfcFIAgACA"
+            }
+          ],
+          "images": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        }
+      ]
+    },
+    {
+      "name": "split-page-within-its-sheet-is-untouched",
+      "kind": "split",
+      "why": "A page that fits its sheet must not be divided, or every open would file a page.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-08-15T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-b",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "scroll": 0,
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 900,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAG99QG95bEQAgACA"
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-b",
+          "strokes": [
+            {
+              "id": "s1",
+              "top": 10,
+              "bottom": 900,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAG99QG95bEQAgACA"
+            }
+          ],
+          "images": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        }
+      ]
+    },
+    {
+      "name": "split-stroke-crossing-the-boundary-stays-whole",
+      "kind": "split",
+      "why": "Ink belongs to the sheet it starts on and is never cut; counting sheets from where content starts is also what makes a second run a no-op.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-08-15T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-c",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "scroll": 0,
+        "strokes": [
+          {
+            "id": "straddler",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 950,
+            "bottom": 1050,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAG9weERfcFIAgACA"
+          },
+          {
+            "id": "below",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 1500,
+            "bottom": 1600,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF9+Y0hfcFIAgACA"
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-c",
+          "strokes": [
+            {
+              "id": "straddler",
+              "top": 950,
+              "bottom": 1050,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAG9weERfcFIAgACA"
+            }
+          ],
+          "images": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        },
+        {
+          "id": "6a6a9a3f-382f-fb76-ff04-3c6dce9852e9",
+          "strokes": [
+            {
+              "id": "below",
+              "top": 500,
+              "bottom": 600,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF90YEJfcFIAgACA"
+            }
+          ],
+          "images": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        }
+      ]
+    },
+    {
+      "name": "split-overhang-alone-makes-no-second-page",
+      "kind": "split",
+      "why": "Sheets are counted from where content begins, not how far it reaches \u2014 measuring the extent would file an empty page on every open, for ever.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-08-15T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-d",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "scroll": 0,
+        "strokes": [
+          {
+            "id": "straddler",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 950,
+            "bottom": 1400,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ACAAAAG9weERve3ZBAIAAgA=="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-d",
+          "strokes": [
+            {
+              "id": "straddler",
+              "top": 950,
+              "bottom": 1400,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ACAAAAG9weERve3ZBAIAAgA=="
+            }
+          ],
+          "images": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        }
+      ]
+    },
+    {
+      "name": "split-image-below-the-sheet-travels-with-it",
+      "kind": "split",
+      "why": "Images are placed by their top edge, by the same rule as ink.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-08-15T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-e",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "scroll": 0,
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAG99QG99QACAAIA="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [
+          {
+            "id": "img",
+            "x": 100,
+            "y": 1200,
+            "width": 300,
+            "height": 200,
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z"
+          }
+        ],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-e",
+          "strokes": [
+            {
+              "id": "s1",
+              "top": 10,
+              "bottom": 20,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAG99QG99QACAAIA="
+            }
+          ],
+          "images": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        },
+        {
+          "id": "38883ee5-8741-4ff7-9e60-40f5858e0e76",
+          "strokes": [],
+          "images": [
+            {
+              "id": "img",
+              "y": 200
+            }
+          ],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        }
+      ]
     }
   ]
 }
