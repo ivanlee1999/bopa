@@ -284,4 +284,75 @@ final class NavigatorTests: XCTestCase {
 
         XCTAssertEqual(try XCTUnwrap(store.manifest(id: notebookId)), before)
     }
+
+    // MARK: Dividing pages that outgrew their sheet
+
+    /// The migration a notebook written before pages were sheets needs: work that lived below the
+    /// first sheet becomes pages of its own, in order, and the notebook's page list says so.
+    func testANotebookOfEndlessPagesBecomesANotebookOfPages() throws {
+        let pageId = pageIds[0]
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        let sheet = try XCTUnwrap(page.pageHeight)
+        page.strokes = [
+            try makeStroke(id: "top", top: 10),
+            try makeStroke(id: "second-sheet", top: Float(sheet) + 100),
+            try makeStroke(id: "third-sheet", top: Float(sheet) * 2 + 100),
+        ]
+        try store.savePage(page)
+
+        let added = store.splitOversizedPages(in: notebookId)
+
+        XCTAssertEqual(added, 2)
+        let after = try XCTUnwrap(store.manifest(id: notebookId)).pageIds
+        XCTAssertEqual(after.count, 3)
+        XCTAssertEqual(after[0], pageId, "the first sheet keeps the page's id")
+        XCTAssertEqual(
+            try store.loadPage(notebookId: notebookId, pageId: after[1]).strokes.map(\.id),
+            ["second-sheet"])
+        XCTAssertEqual(
+            try store.loadPage(notebookId: notebookId, pageId: after[2]).strokes.map(\.id),
+            ["third-sheet"])
+    }
+
+    /// It runs on open, so a notebook that is already in sheets must be left completely alone —
+    /// not merely produce the same pages, but not be written at all. Writing would bump the clock
+    /// the merge reads and hand this device a spurious win over the BOOX on every open.
+    func testANotebookAlreadyInSheetsIsNotTouched() throws {
+        try addPages(2)
+        let before = try XCTUnwrap(store.manifest(id: notebookId))
+
+        XCTAssertEqual(store.splitOversizedPages(in: notebookId), 0)
+
+        XCTAssertEqual(try XCTUnwrap(store.manifest(id: notebookId)), before)
+    }
+
+    /// A bookmark names a page id. The first sheet keeps the page's, so a starred page is still
+    /// starred after the notebook is divided — anything else would quietly drop the reader's marks.
+    func testBookmarksSurviveTheDivision() throws {
+        let pageId = pageIds[0]
+        try store.setBookmark(notebookId: notebookId, pageId: pageId, bookmarked: true)
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        let sheet = try XCTUnwrap(page.pageHeight)
+        page.strokes = [
+            try makeStroke(id: "top", top: 10),
+            try makeStroke(id: "below", top: Float(sheet) + 100),
+        ]
+        try store.savePage(page)
+
+        store.splitOversizedPages(in: notebookId)
+
+        XCTAssertEqual(store.bookmarkedPageIds(in: notebookId), [pageId])
+    }
+
+    private func makeStroke(id: String, top: Float) throws -> StrokeDTO {
+        let points = [
+            NotableStrokePoint(x: 10, y: top, pressure: 0.5),
+            NotableStrokePoint(x: 20, y: top + 40, pressure: 0.5),
+        ]
+        return StrokeDTO(
+            id: id, size: 3, pen: .ballpen, color: -16_777_216,
+            top: top, bottom: top + 40, left: 10, right: 20,
+            pointsData: try SBStrokeCodec.encode(points).base64EncodedString(),
+            createdAt: "2026-08-15T00:00:00.000Z", updatedAt: "2026-08-15T00:00:00.000Z")
+    }
 }

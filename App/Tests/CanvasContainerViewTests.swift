@@ -10,6 +10,9 @@ import XCTest
 final class CanvasContainerViewTests: XCTestCase {
 
     private let portrait = CGRect(x: 0, y: 0, width: 834, height: 1210)
+    /// Ink reaching well past the sheet — the shape of a page written when writing made the page
+    /// taller, and the only shape that still scrolls once a page is one sheet.
+    private let deepInk = CGRect(x: 0, y: 0, width: 1000, height: 3000)
     private let landscape = CGRect(x: 0, y: 0, width: 1210, height: 834)
     /// Wider than the 1404pt page — an external display under Stage Manager. Every built-in
     /// iPad screen is narrower than the page, so this is the only way to reach the fit
@@ -164,7 +167,9 @@ final class CanvasContainerViewTests: XCTestCase {
 
     /// Re-fitting changes the scale, not the place: you stay on the line you were writing.
     func testFitToWidthKeepsThePagePosition() {
-        let container = makeContainer(portrait)
+        // Ink below the sheet, so there is something to scroll: fitted to width, a bare sheet is
+        // shorter than the screen and the only position it has is the top.
+        let container = makeContainer(portrait, ink: deepInk)
         container.canvas.zoomScale = 2
         container.canvasZoomDidChange()
         container.canvas.contentOffset.y = 1200 * 2
@@ -178,7 +183,7 @@ final class CanvasContainerViewTests: XCTestCase {
     // MARK: - Scroll position
 
     func testRotationKeepsThePagePosition() {
-        let container = makeContainer(portrait)
+        let container = makeContainer(portrait, ink: deepInk)
         let portraitZoom = container.canvas.zoomScale
         // Halfway down a page-space offset of 1200pt.
         container.canvas.contentOffset.y = 1200 * portraitZoom
@@ -191,7 +196,7 @@ final class CanvasContainerViewTests: XCTestCase {
     }
 
     func testPersistedScrollIsAppliedOnceLaidOut() {
-        let container = makeContainer()
+        let container = makeContainer(ink: deepInk)
         container.setInitialScroll(pageY: 900)
         rotate(container, to: portrait)
 
@@ -389,13 +394,43 @@ final class CanvasContainerViewTests: XCTestCase {
         }
     }
 
-    /// Opening a page gives it somewhere to write: two sheets tall, measured in the sheet the
-    /// page declares rather than a constant left over from another page size.
-    func testInitialHeightIsTwoSheets() {
+    /// Opening a page gives it exactly its sheet — measured in the sheet the page declares, not a
+    /// constant left over from another page size.
+    ///
+    /// It used to open at two sheets, which is why there was always a second screenful of blank
+    /// paper below the one being written on. It read as another page and was not one: the overview
+    /// drew a single thumbnail for the pair, because it was all one page.
+    func testAPageOpensExactlyOneSheetTall() {
         let container = makeContainer(portrait, pageSize: PageSizePreset.a3.size)
         XCTAssertEqual(
-            container.contentExtent.height, CGFloat(PageSizePreset.a3.size.height * 2),
+            container.contentExtent.height, CGFloat(PageSizePreset.a3.size.height),
             accuracy: 1)
+    }
+
+    /// Writing near the bottom must not push the bottom further away. This is what stops a page
+    /// growing into the endless scroll the split then has to undo.
+    func testWritingAtTheBottomDoesNotMakeThePageTaller() {
+        let container = makeContainer(portrait, pageSize: PageSizePreset.a4.size)
+        container.sheetHeight = CGFloat(PageSizePreset.a4.size.height)
+        let before = container.contentExtent.height
+
+        container.growContent(
+            toCover: CGRect(x: 100, y: CGFloat(PageSizePreset.a4.size.height) - 20,
+                            width: 50, height: 40))
+
+        XCTAssertEqual(container.contentExtent.height, before, accuracy: 1)
+    }
+
+    /// But a page that already reaches past its sheet keeps every bit of it reachable. Ink written
+    /// below the sheet before pages were sheets is still there until the split moves it, and an
+    /// area that refused to cover it would not park it off-page — it would strand it, with no
+    /// scroll or zoom that brings it back.
+    func testAPageThatAlreadyOverflowsItsSheetStaysReachable() {
+        let tall = CGRect(x: 0, y: 0, width: 1000, height: 4000)
+        let container = makeContainer(portrait, ink: tall)
+        container.sheetHeight = CGFloat(PageSize.legacyUndeclared.height)
+
+        XCTAssertGreaterThan(container.contentExtent.height, 4000)
     }
 
     // MARK: - The sheet arriving after the canvas

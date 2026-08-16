@@ -188,14 +188,21 @@ struct EditorView: View {
             .accessibilityLabel("All pages")
             .accessibilityIdentifier("editor.pages")
 
+            // Never disabled: on the last page it makes the next one. A page ends at its sheet
+            // now, so "keep writing" has to be one tap and not a detour through the panel — this
+            // is the turn of the page that carrying on down the canvas used to be.
             Button {
-                openPage(at: pageIndex + 1)
+                if pageIndex >= manifest.pageIds.count - 1 {
+                    addPage()
+                } else {
+                    openPage(at: pageIndex + 1)
+                }
             } label: {
                 Image(systemName: "chevron.right").font(.system(size: 15, weight: .semibold))
             }
             .buttonStyle(RailButtonStyle(selected: false, size: 34))
-            .disabled(pageIndex >= manifest.pageIds.count - 1)
-            .accessibilityLabel("Next page")
+            .accessibilityLabel(
+                pageIndex >= manifest.pageIds.count - 1 ? "New page" : "Next page")
 
             Button {
                 addPage()
@@ -292,7 +299,11 @@ struct EditorView: View {
     }
 
     private func openInitialPage() {
-        guard let manifest else { return }
+        // Before the manifest is read, not after: a notebook written when a page was an endless
+        // scroll can hold most of its work below the first sheet, and opening it at "page 1 of 1"
+        // would show a fraction of what is there. Does nothing to a notebook already in sheets.
+        store.splitOversizedPages(in: notebookId)
+        guard let manifest = store.manifest(id: notebookId) else { return }
         let initial = manifest.openPageId ?? manifest.pageIds.first
         if let initial { open(pageId: initial) }
     }
@@ -545,8 +556,18 @@ struct EditorCanvasView: UIViewRepresentable {
 
     /// The scroll extent a freshly opened page starts with: two sheets, so there is somewhere
     /// to write before the first stroke grows it.
+    /// A page opens exactly one sheet tall.
+    ///
+    /// It used to open at two, which is why there was always another screenful of blank paper
+    /// below the one being written on: it read as a second page that never appeared in the
+    /// overview, because it was not a page at all — just more of this one. A page is a sheet now,
+    /// and the way to keep writing is the next page.
+    ///
+    /// This is a floor, not a ceiling. `setContentExtent` still covers whatever a page already
+    /// holds, so ink written below the sheet before this changed stays reachable until the split
+    /// moves it onto a page of its own.
     static func minimumHeight(for pageSize: PageSize) -> CGFloat {
-        CGFloat(pageSize.height) * 2
+        CGFloat(pageSize.height)
     }
 
     func makeUIView(context: Context) -> CanvasContainerView {

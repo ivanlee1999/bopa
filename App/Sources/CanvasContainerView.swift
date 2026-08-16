@@ -331,10 +331,23 @@ final class CanvasContainerView: UIView {
     /// Grows the scrollable area to keep covering content that is being added to. Grow-only: the
     /// extent a page opened with is a floor, so writing near an edge never yanks the scroll
     /// position around.
+    ///
+    /// **It no longer grows downward past the sheet.** Writing to the bottom and carrying on used
+    /// to make the page taller, which is how a notebook ended up with hours of work below the first
+    /// sheet where nothing that thinks in pages could reach it — the overview drew one thumbnail
+    /// for all of it. The page ends where the sheet ends; the way to keep writing is the next page.
+    ///
+    /// Sideways growth is untouched, and so is whatever height the page opened at. Content can
+    /// legitimately sit outside the sheet — written on a wider BOOX screen, or on a page from
+    /// before sheets were agreed — and an area that refused to cover it would not merely park it
+    /// off-page, it would make it unreachable. This stops the page *growing*; it never shrinks one.
     func growContent(toCover rect: CGRect) {
         guard Self.isReachable(rect) else { return }
         let current = contentExtent
-        let needed = contentSize(floor: current, covering: [rect])
+        var needed = contentSize(floor: current, covering: [rect])
+        if sheetHeight > 0 {
+            needed.height = min(needed.height, max(current.height, sheetHeight))
+        }
         guard needed != current else { return }
         contentExtent = needed
         updateContentGeometry()
