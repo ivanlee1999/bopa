@@ -16,6 +16,34 @@ extension NativeTemplate {
     }
 }
 
+/// Which way you move from one page to the next.
+///
+/// A page is a sheet, so it has an end — and the gesture that carries you over that end is a
+/// preference, not a fact. Reading down a long document wants the next page below this one;
+/// working through a notebook the way you would a paper one wants it to the side.
+enum PageTurn: String, CaseIterable, Identifiable, Sendable {
+    /// Drag past the bottom for the next page, past the top for the previous.
+    case vertical
+    /// Swipe sideways, and vertical dragging only moves within the page.
+    case horizontal
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .vertical: "Up and down"
+        case .horizontal: "Side to side"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .vertical: "Drag past the bottom of a page for the next one."
+        case .horizontal: "Swipe sideways for the next page."
+        }
+    }
+}
+
 /// What an Apple Pencil gesture (double-tap, or squeeze on Pencil Pro) does.
 enum PencilAction: String, CaseIterable, Identifiable, Sendable {
     /// Leave the gesture to PencilKit / the system-wide Settings › Apple Pencil preference.
@@ -80,6 +108,9 @@ struct HandwritingConfig: Equatable, Sendable {
     /// Freezes panning/zooming so a stray drag cannot shift the page mid-sentence.
     var scrollLocked = false
     var pageFit: PageFit = .fitWidth
+    /// Which way a page turn goes. Vertical by default: it is the direction the page
+    /// already scrolls, and the one writing runs in.
+    var pageTurn: PageTurn = .vertical
     var doubleTapAction: PencilAction = .system
     var squeezeAction: PencilAction = .system
     /// Paper for newly created notebooks and pages. Existing pages keep the template
@@ -95,6 +126,7 @@ struct HandwritingConfig: Equatable, Sendable {
         /// Keeps its original name: the setting grew from "zoom applied on open" into the
         /// sticky page fit, and renaming the key would silently reset everyone's choice.
         static let pageFit = "handwriting.zoomOnOpen"
+        static let pageTurn = "handwriting.pageTurn"
         static let doubleTapAction = "handwriting.pencilDoubleTap"
         static let squeezeAction = "handwriting.pencilSqueeze"
         static let defaultTemplate = "handwriting.defaultTemplate"
@@ -115,6 +147,10 @@ struct HandwritingConfig: Equatable, Sendable {
         }
         if let raw = defaults.string(forKey: Key.pageFit), let value = PageFit(rawValue: raw) {
             config.pageFit = value
+        }
+        if let raw = defaults.string(forKey: Key.pageTurn),
+           let value = PageTurn(rawValue: raw) {
+            config.pageTurn = value
         }
         if let raw = defaults.string(forKey: Key.doubleTapAction),
            let value = PencilAction.stored(raw) {
@@ -142,6 +178,7 @@ struct HandwritingConfig: Equatable, Sendable {
         defaults.set(fingerDrawing, forKey: Key.fingerDrawing)
         defaults.set(scrollLocked, forKey: Key.scrollLocked)
         defaults.set(pageFit.rawValue, forKey: Key.pageFit)
+        defaults.set(pageTurn.rawValue, forKey: Key.pageTurn)
         defaults.set(doubleTapAction.rawValue, forKey: Key.doubleTapAction)
         defaults.set(squeezeAction.rawValue, forKey: Key.squeezeAction)
         defaults.set(defaultTemplate.name, forKey: Key.defaultTemplate)
@@ -228,6 +265,19 @@ struct HandwritingSettingsSections: View {
         } footer: {
             Text("Squeeze needs an Apple Pencil Pro. “System setting” keeps whatever "
                 + "Settings › Apple Pencil is set to.")
+        }
+
+        Section {
+            Picker("Turn the page", selection: config.pageTurn) {
+                ForEach(PageTurn.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .accessibilityIdentifier("settings.pageTurn")
+        } header: {
+            Text("Pages")
+        } footer: {
+            Text(config.pageTurn.wrappedValue.detail)
         }
 
         Section {

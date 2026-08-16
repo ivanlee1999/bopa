@@ -285,6 +285,7 @@ struct EditorView: View {
                     undoController: undoController,
                     liveState: liveState,
                     viewport: viewport,
+                    turnPage: turnPage,
                     onChanged: scheduleSave,
                     onIdle: foldInRemoteInk)
 
@@ -306,6 +307,21 @@ struct EditorView: View {
         guard let manifest = store.manifest(id: notebookId) else { return }
         let initial = manifest.openPageId ?? manifest.pageIds.first
         if let initial { open(pageId: initial) }
+    }
+
+    /// Moves one page in [direction], and on the forward edge of the last page makes the next one.
+    ///
+    /// The same rule as the next-page button, because it is the same act: a page ends at its sheet,
+    /// so running off the end of the last one is how you ask for more paper. Backwards it simply
+    /// stops — there is nothing before the first page and inventing one would be a surprise.
+    private func turnPage(_ direction: Int) {
+        guard let manifest else { return }
+        let target = pageIndex + direction
+        if target >= manifest.pageIds.count {
+            addPage()
+        } else if target >= 0 {
+            openPage(at: target)
+        }
     }
 
     private func openPage(at index: Int) {
@@ -550,6 +566,9 @@ struct EditorCanvasView: UIViewRepresentable {
     var undoController: CanvasUndoController = CanvasUndoController()
     var liveState: CanvasLiveState = CanvasLiveState()
     var viewport: CanvasViewportController = CanvasViewportController()
+    /// Asked for the page before (-1) or after (+1) when a drag carries past the edge of this one.
+    /// The editor decides whether there is one, and whether to make it.
+    var turnPage: (Int) -> Void = { _ in }
     var onChanged: () -> Void
     /// The pencil lifted. The editor uses it to retry work it would not do mid-stroke.
     var onIdle: () -> Void = {}
@@ -683,6 +702,12 @@ struct EditorCanvasView: UIViewRepresentable {
 
             canvas.drawingPolicy = config.fingerDrawing ? .anyInput : .pencilOnly
             canvas.isScrollEnabled = !config.scrollLocked
+            // A page now fits the screen, so there is nothing to scroll and nothing to drag past
+            // unless the axis is allowed to give. Bounce is the gesture: it is what lets a page
+            // that fits exactly still be pulled off the end, and it is enabled only on the axis
+            // the reader turns pages on, so the other one stays still.
+            canvas.alwaysBounceVertical = config.pageTurn == .vertical && !config.scrollLocked
+            canvas.alwaysBounceHorizontal = config.pageTurn == .horizontal && !config.scrollLocked
             container.keepsFitToWidth = config.pageFit == .fitWidth
             // Switching the preference on acts on the page you are looking at, rather than
             // waiting for the next one to be opened.
@@ -823,6 +848,39 @@ struct EditorCanvasView: UIViewRepresentable {
             parent.liveState.pageY =
                 scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
         }
+
+        /// Turning the page by dragging past the end of this one.
+        ///
+        /// Read on release rather than while dragging: a page turn mid-gesture would fire on the
+        /// way past a boundary the reader was only scrolling through, and on an e-ink panel every
+        /// one of those costs a full refresh. Distance decides it, not velocity — a flick and a
+        /// slow deliberate pull should both turn exactly one page.
+        func scrollViewDidEndDragging(
+            _ scrollView: UIScrollView, willDecelerate decelerate: Bool
+        ) {
+            let axis = parent.config.pageTurn
+            let overshoot: CGFloat
+            switch axis {
+            case .vertical:
+                let maxY = max(scrollView.contentSize.height - scrollView.bounds.height, 0)
+                overshoot =
+                    scrollView.contentOffset.y > maxY
+                    ? scrollView.contentOffset.y - maxY
+                    : min(scrollView.contentOffset.y, 0)
+            case .horizontal:
+                let maxX = max(scrollView.contentSize.width - scrollView.bounds.width, 0)
+                overshoot =
+                    scrollView.contentOffset.x > maxX
+                    ? scrollView.contentOffset.x - maxX
+                    : min(scrollView.contentOffset.x, 0)
+            }
+            guard abs(overshoot) >= Self.pageTurnThreshold else { return }
+            parent.turnPage(overshoot > 0 ? 1 : -1)
+        }
+
+        /// How far past the edge counts as asking for the next page. Generous enough that the
+        /// rubber-banding of an ordinary scroll to the bottom does not turn a page by itself.
+        private static let pageTurnThreshold: CGFloat = 120
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             container?.canvasZoomDidChange()
