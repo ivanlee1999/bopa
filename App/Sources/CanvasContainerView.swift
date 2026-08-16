@@ -123,8 +123,20 @@ final class CanvasContainerView: UIView {
         return viewWidth / pageWidth
     }
 
+    /// Fit the whole sheet on screen rather than just its width.
+    ///
+    /// What "the page fits" means depends on which way you turn it, and the two established
+    /// answers are the ones reMarkable, the Kindle Scribe and GoodNotes all land on: turning
+    /// sideways shows one whole page at a time, because a page you cannot see all of is not a page
+    /// you can turn past; scrolling down fits the width and lets the page run off the bottom,
+    /// because that is the direction you are about to travel in.
+    var fitsWholePage = false
+
     private var fitWidthZoom: CGFloat {
-        Self.fitZoom(viewWidth: bounds.width, pageWidth: pageWidth)
+        let widthFit = Self.fitZoom(viewWidth: bounds.width, pageWidth: pageWidth)
+        guard fitsWholePage, sheetHeight > 0, bounds.height > 0 else { return widthFit }
+        // The smaller of the two, so neither edge is cut off.
+        return min(widthFit, bounds.height / sheetHeight)
     }
 
     /// Widens the scroll view's zoom range so the fit is actually reachable — the fit can

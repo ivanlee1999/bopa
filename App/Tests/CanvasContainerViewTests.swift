@@ -475,4 +475,34 @@ final class CanvasContainerViewTests: XCTestCase {
         container.setPageWidth(CGFloat(PageSizePreset.a3.size.width))
         XCTAssertEqual(container.canvas.zoomScale, 1, accuracy: 0.001)
     }
+
+    // MARK: - The fit follows the direction the page turns
+
+    /// Turning sideways shows a whole page; turning downward fits the width and lets the page run
+    /// off the bottom. A sideways fit that cut the page off would be the worst of both — nothing
+    /// scrolls in that mode, so what is off screen cannot be reached at all.
+    func testTurningSidewaysFitsTheWholeSheet() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet)
+        container.sheetHeight = CGFloat(sheet.height)
+        container.fitsWholePage = true
+        rotate(container, to: portrait)
+
+        let onScreenHeight = CGFloat(sheet.height) * container.canvas.zoomScale
+        XCTAssertLessThanOrEqual(onScreenHeight, portrait.height + 1)
+    }
+
+    /// The counterpart: fitted to width, a page taller than the screen is meant to overflow —
+    /// that is the direction you are about to scroll in.
+    func testTurningDownwardFitsTheWidthAndLetsThePageOverflow() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet)
+        container.sheetHeight = CGFloat(sheet.height)
+        container.fitsWholePage = false
+        rotate(container, to: portrait)
+
+        XCTAssertEqual(
+            container.canvas.zoomScale,
+            portrait.width / CGFloat(sheet.width), accuracy: 0.001)
+    }
 }

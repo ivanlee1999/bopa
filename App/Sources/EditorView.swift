@@ -599,6 +599,7 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.accessibilityValue = "strokes:0"
         container.pageWidth = CGFloat(pageSize.width)
         container.sheetHeight = declaredSheet.map { CGFloat($0.height) } ?? 0
+        container.fitsWholePage = config.pageTurn == .horizontal
         container.setContentExtent(
             pageSize: pageSize, ink: drawing.bounds,
             minimumHeight: Self.minimumHeight(for: pageSize))
@@ -640,6 +641,7 @@ struct EditorCanvasView: UIViewRepresentable {
         // canvas was created, and on a page switch it can differ from the page just closed.
         container.setPageWidth(CGFloat(pageSize.width))
         container.sheetHeight = declaredSheet.map { CGFloat($0.height) } ?? 0
+        container.fitsWholePage = config.pageTurn == .horizontal
         // Background and images may arrive/change without a page switch; both setters are
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)
@@ -709,6 +711,9 @@ struct EditorCanvasView: UIViewRepresentable {
             canvas.alwaysBounceVertical = config.pageTurn == .vertical && !config.scrollLocked
             canvas.alwaysBounceHorizontal = config.pageTurn == .horizontal && !config.scrollLocked
             container.keepsFitToWidth = config.pageFit == .fitWidth
+            // Sideways turning shows one whole page; downward turning fits the width and lets the
+            // page run off the bottom, which is the way you are about to travel.
+            container.fitsWholePage = config.pageTurn == .horizontal
             // Switching the preference on acts on the page you are looking at, rather than
             // waiting for the next one to be opened.
             if let previousFit, previousFit != config.pageFit, config.pageFit == .fitWidth {
