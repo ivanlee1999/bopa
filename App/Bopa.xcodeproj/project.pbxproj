@@ -35,6 +35,7 @@
 		612A95F1BE606CBF723DF683 /* RotationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7CA46ABC2CDD559A3FFAECE /* RotationUITests.swift */; };
 		6282E4AF4D9D4C81DBA588C4 /* EraserUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 007E2190A23B0021DB3B5752 /* EraserUITests.swift */; };
 		669C9BEFB7448981118F2DB1 /* ServerBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7079102757F82D89F8EECEAE /* ServerBrowserView.swift */; };
+		6F928AC9D7F948C991F81591 /* EditorPageModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DCE8EE06C7B861F1AAEA8DC /* EditorPageModelTests.swift */; };
 		6FDBE320E06856B13AC03D2A /* LibrarySort.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82D99ACFA8F3954E67039180 /* LibrarySort.swift */; };
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
 		7D6787E436578AEE47D227E6 /* NotebookStoreCouchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */; };
@@ -105,6 +106,7 @@
 		3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridgeTests.swift; sourceTree = "<group>"; };
 		3CB3BE8AC3CF7FB2EFDDF2DB /* LibraryActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryActions.swift; sourceTree = "<group>"; };
 		3D8D206021F65D447A23CFD5 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		3DCE8EE06C7B861F1AAEA8DC /* EditorPageModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPageModelTests.swift; sourceTree = "<group>"; };
 		467920EDEC849CD5B59CA33B /* NotableKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NotableKit; path = ../NotableKit; sourceTree = SOURCE_ROOT; };
 		4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		51065DC8A1BE9070F3A77ADB /* Bopa.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bopa.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -280,6 +282,7 @@
 				85494F72E1F1F68C7031176B /* CouchAppLayerEndToEndTests.swift */,
 				65F089A838509BF507244D0C /* CouchEndToEndTests.swift */,
 				C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */,
+				3DCE8EE06C7B861F1AAEA8DC /* EditorPageModelTests.swift */,
 				B4DCC26BCFF1AC7545A93B68 /* HandwritingSettingsTests.swift */,
 				B340F9F70E3CA45974E8C544 /* LibrarySearchTests.swift */,
 				513AE03C724D18B26E321FE0 /* NavigatorTests.swift */,
@@ -446,6 +449,7 @@
 				FA0CD3225E87C852D0FA1FD3 /* CouchAppLayerEndToEndTests.swift in Sources */,
 				D8C4C444C3B3A5512C710E4D /* CouchEndToEndTests.swift in Sources */,
 				02EAE8E446983D5557B4FD8B /* CouchSyncControllerTests.swift in Sources */,
+				6F928AC9D7F948C991F81591 /* EditorPageModelTests.swift in Sources */,
 				3BF381E0797979BCF00AEE38 /* HandwritingSettingsTests.swift in Sources */,
 				FF7C044CA7FDF7E6EB768057 /* LibrarySearchTests.swift in Sources */,
 				116307D46B9DC083022797B1 /* NavigatorTests.swift in Sources */,

@@ -169,14 +169,22 @@ final class EditorPageModel: NSObject, ObservableObject {
         // repeated saves: an untouched stroke keeps its id and its exact bytes.
         page.strokes = PencilKitBridge.strokeDTOs(from: drawing, source: page.strokes)
         page.scroll = scroll
-        canvasStrokeIDs = Set(page.strokes.map(\.id))
-        self.page = page
         do {
+            let written = try store.savePage(page, baselineStrokeIDs: baseline)
+            // Only now that the write landed. The baseline has to keep naming what the canvas
+            // held at the last save that *worked*: advancing it before the `try` meant a failed
+            // save still consumed an erasure — the erased stroke was no longer in the baseline,
+            // so the successful retry derived no tombstone for it and the fold against the file
+            // resurrected it. The exported canvas set, deliberately not `written.strokes` — the
+            // mismatch between the two is how `foldInRemoteInk` detects ink that arrived from
+            // the other device underneath this save.
+            canvasStrokeIDs = Set(page.strokes.map(\.id))
             // Take back what was written rather than what was offered: `savePage` reconciles
             // against the file, so only the returned copy matches what is now on disk. That is
             // what `page` is supposed to be, and `page.strokes` is the `source:` the next export
-            // re-identifies against.
-            self.page = try store.savePage(page, baselineStrokeIDs: baseline)
+            // re-identifies against. On failure `self.page` stays untouched for the same reason:
+            // it still carries the last truly-written DTOs.
+            self.page = written
             dirty = false
         } catch {
             // Leave `dirty` set so the next flush retries. Clearing it on a failed write — which
