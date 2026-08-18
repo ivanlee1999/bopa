@@ -29,9 +29,20 @@ UUIDs are lowercase and stable for the lifetime of the object. Titles never appe
 
 The `sync-meta:` prefix is reserved for protocol bookkeeping and carries no user content. A client
 **must not** enumerate, merge, conflict-copy, or present these documents as library items, and
-**must not** treat one arriving on the change feed as an unknown schema. Only `sync-meta:database`
-(§1.2) is defined; a client encountering another `sync-meta:` id records its revision, ignores it,
-and checkpoints past it.
+**must not** treat one arriving on the change feed as an unknown schema. `sync-meta:database`
+(§1.2) and `sync-meta:asset-gc:<deviceId>` (§3.5) are defined; a client encountering any other
+`sync-meta:` id records its revision, ignores it, and checkpoints past it.
+
+That last rule is what lets this namespace grow. A bookkeeping document added by a later release
+reaches a peer that has never heard of it and is *already* handled correctly — recorded, skipped,
+checkpointed past — so no staged rollout is needed for the peer's sake, only for the writer's.
+
+**A `sync-meta:` id ending in a `deviceId` is single-writer.** Only the device named may write it;
+every other device reads it and never merges it. None of §5's merge functions apply, and no
+tiebreak is needed, because two writers never meet on one such document. This is the reason
+§3.5's ledger is keyed by device rather than shared: bookkeeping several devices must agree about
+is far easier to reason about as several documents each with one author than as one document with
+a merge rule.
 
 ### 1.2 `sync-meta:database` — database identity
 
@@ -254,6 +265,33 @@ turning one immutable upload into two requests that can half-fail. Reading is th
 the change feed renders an attachment as a `{"stub": true}` placeholder, so a reader that needs
 the bytes fetches them from `GET /{db}/asset:<sha>/blob`.
 
+**What bounds an asset's size — and what does not.** `max_document_size` (default `8000000`) is
+measured against the document body **with attachment data removed**. Inline
+`_attachments.blob.data` is exempt from it. Measured against stock CouchDB 3.3.3 and 3.5.2, no
+config overrides, using exactly the document above: a 4 MiB asset, a 12 MiB asset and a **60 MiB
+PDF** are all accepted, and the last reads back through `GET /{db}/asset:<sha>/blob` with a
+matching SHA-256. A 4 MiB attachment beside a 7.9 MB ordinary field is accepted; the *same*
+attachment beside an 8.1 MB ordinary field is refused. The limit follows the ordinary fields
+alone.
+
+Two consequences are normative:
+
+- **CouchDB never refuses an asset document for its size.** Everything outside `_attachments` in
+  the schema above is a couple of hundred bytes. The only document this protocol defines that can
+  reach `max_document_size` is a **page**, whose `strokes[].pointsData` are ordinary fields.
+- **What actually bounds an asset is the smallest request-body cap on the path**, which is
+  normally a reverse proxy and not CouchDB at all. nginx's `client_max_body_size` defaults to
+  **1 MB** — which, after base64 inflates the bytes by 4/3, rejects any asset above roughly
+  768 KiB. That is every photograph a phone takes, not merely large PDFs, and it is why a
+  deployment behind a proxy can appear to sync notes perfectly while no picture ever arrives.
+
+A client therefore **MUST NOT** read a `413` as a statement about this protocol or about the
+asset's content until it has checked which hop produced it — see §7, which makes the two cases
+distinguishable and requires different handling for each. In particular, an implementation that
+suppresses a refused document until its content changes must not apply that to a proxy's refusal:
+the fix for that one happens on the server, and no local edit will ever arrive to lift the
+suppression.
+
 **Assets are fetched on demand, not followed.** An `asset:` row on the feed is recorded and
 skipped. A device downloads a blob when one of its own pages places it and it does not hold the
 bytes — which keeps it from pulling every picture in the library, and makes a failed download a
@@ -269,6 +307,147 @@ downloaded blob under its hash (bopa in the notebook's `images/`, notable in its
 folder), which lets either recover the asset id from the filename in the window between a page
 arriving and its pictures being fetched — so a page pushed in that window still names the images
 it places instead of dropping references to bytes that are on their way.
+
+### 3.5 Collecting assets nobody references
+
+Everything else in this protocol has a way to stop existing. An asset did not: content-addressed
+and immutable, it was written once and never deleted, on the server or on either device. Erasing
+the picture removes the `images[]` entry and leaves the bytes; deleting the notebook that held it
+leaves them too. The largest objects in the system — PDF backgrounds, routinely tens of megabytes
+— were the ones that accumulated fastest, on a server and on a BOOX whose storage is not
+generous. This section is how they are reclaimed.
+
+**Why deleting an asset is not like deleting a page.** A page tombstone is irreversible: the
+content is gone and no device can reconstruct it. An asset's name *is* a description of its
+content, so a device still holding the bytes can put them back under the identical id, and the
+peer that was missing the picture then finds it. Deleting an asset is therefore recoverable, and
+the worst outcome of sweeping one too eagerly is a picture that is briefly absent on one device
+before the next sync restores it. That is what makes a sweep sound without reference counting,
+which CouchDB cannot give us — there is no transaction spanning a page and the asset it names.
+
+**The rule that makes recovery real, and it is normative.** An implementation caches the
+revisions of documents it has uploaded, and uses "I have a revision for this asset" as "this asset
+is on the server, never send it again". Once assets can be swept, that reading is wrong and
+silently so. A client **MUST** treat an asset it cannot fetch as one it has not uploaded: a `404`
+from `GET /{db}/asset:<sha>/blob`, or from the asset document itself, **MUST** discard any cached
+revision for that id and re-queue the asset for push if this device holds the bytes. Without this,
+a swept asset that is still referenced is never repaired by the one device that could repair it.
+
+#### 3.5.1 The referenced set
+
+An asset is **referenced** if any **live** document names it:
+
+- a page's `images[].assetId`, or its `background`;
+- a notebook's `defaultBackground`.
+
+**Live** means not a `_deleted` tombstone. A **trashed** document — one carrying `deletedAt`
+(§3.2) — is live and its references count, because trashing is not deleting and its pages are
+still merging normally. A page whose notebook is absent counts too: §6.4 leaves orphan pages
+inert rather than deleted, and an asset must not be swept because the only document naming it was
+one this device declines to file.
+
+A `null` `assetId` names nothing and is not a reference (§3.4).
+
+#### 3.5.2 `sync-meta:asset-gc:<deviceId>` — one ledger per device
+
+```json
+{ "_id": "sync-meta:asset-gc:boox", "type": "sync-asset-gc", "schema": 1,
+  "enumeratedAt": "2026-08-18T04:11:02Z",
+  "enumeratedThroughSeq": "1849-g1AAAA…",
+  "unreferenced": [ { "assetId": "asset:9f2c…", "sinceAt": "2026-07-02T18:40:11Z" } ],
+  "updatedAt": "…", "updatedBy": "boox" }
+```
+
+| Field | Meaning |
+|---|---|
+| `enumeratedAt` | When this device last completed a **full** enumeration. Its freshness is what earns the device a vote. |
+| `enumeratedThroughSeq` | The server's `update_seq` at the start of that enumeration, so a reader can see what the device had actually caught up to. |
+| `unreferenced` | Every asset this device found referenced by nothing, with the instant it *first* found so. |
+
+Single-writer by §1.1: only `boox` writes `sync-meta:asset-gc:boox`. Nothing merges it, and a
+device that has never heard of asset collection records it and skips it like any other unknown
+`sync-meta:` id.
+
+**Enumerating.** A device may enumerate only when it is **caught up** — its checkpoint is at the
+server's current `update_seq` — and its **outbox is empty**. A device with unpushed work holds
+references the server cannot see, and its vote would be a lie. It then walks every document,
+builds the referenced set of §3.5.1, and rewrites its ledger:
+
+- an asset in the referenced set is **removed** from `unreferenced`, which revives it completely;
+- an asset not in it **keeps** its existing `sinceAt` if it has one, and is stamped with now if it
+  does not;
+- an asset that no longer exists on the server at all is **dropped** from the ledger. Without this
+  the ledger is the one thing in the system that still grows without bound, which would be a poor
+  result for the section that exists to stop that.
+
+Carrying `sinceAt` forward is the whole clock. Re-stamping it on every sweep would keep every
+asset permanently young and nothing would ever be collected — the same mistake §6.6 ("Producing
+tombstones") warns against when it forbids re-stamping a `deletedAt`, for the mirror-image reason.
+
+#### 3.5.3 When an asset may be deleted
+
+**Which devices get a vote.** The enumeration already reads every live document, and every one
+carries `updatedBy` (§2). The devices that count are exactly the `updatedBy` values it observed —
+no registry, no heartbeat, nothing to keep in step. A device is **active** if any live document it
+wrote carries an `updatedAt` within the **freshness window, 30 days**; otherwise it is **dormant**
+and neither votes nor blocks.
+
+Dormancy is the same bargain §6.6 ("Producing tombstones") already strikes with the device that
+stopped syncing: past the horizon it loses its guarantees, and returning is allowed to cost
+something. Here that cost is small and self-healing — a device that returns after a year may find
+an asset it still references has been swept, and re-uploads it from its own copy under the
+identical id (§3.5).
+
+A device deletes `asset:X` only when **all** of these hold:
+
+1. Every **active** device has a `sync-meta:asset-gc:<deviceId>` document, **and there is at least
+   one** — the deleting device's own always counts, so the set is never empty. A device that has
+   written to this database but publishes no ledger **blocks the sweep entirely**: it is running a
+   build that does not know about collection, and it cannot agree to something it has never been
+   asked. This is what makes §3.5.5's rollout self-enforcing rather than a switch to remember.
+2. Every **active** device's ledger lists `X` in `unreferenced` and carries an `enumeratedAt`
+   within the freshness window. A dormant device's stale ledger is ignored, not consulted. An
+   active device that is behind on enumerating **blocks the sweep** until it catches up: it may be
+   holding a page it has not pushed, and the cost of waiting is disk, while the cost of not
+   waiting is a picture vanishing from a device that was merely switched off for a fortnight.
+3. The greatest `sinceAt` across those ledgers is at least the **grace period, 30 days**, in the
+   past. Taking the greatest rather than the earliest means the clock starts when the *last*
+   device agreed, not the first.
+4. The deleting device's own enumeration, just completed, still agrees.
+5. `asset:X`'s own `createdAt` is older than the grace period. This is what covers the in-flight
+   case: assets are pushed before the page that places them (§3.4), so an asset uploaded seconds
+   ago is legitimately unreferenced and must never be swept for it.
+
+The grace period matches the 30-day tombstone horizon of §6.6 ("Producing tombstones"), and for
+the same reason: it is the point past which a device that stopped syncing is already re-offering
+content everyone else has moved on from.
+
+Deletion is the ordinary `_deleted` tombstone of §6.4, written over the asset's current `_rev`.
+An asset carries no `deletedAt` and needs none: nothing merges an asset (§5.4), so no rule ever
+compares its deletion against an edit.
+
+#### 3.5.4 Sweeping local bytes
+
+A device also reclaims its own blobs, and here it may be stricter than the server because it is
+deciding alone. Delete a local blob only when:
+
+- nothing on this device references it, by §3.5.1 applied to local documents;
+- it has been so for the grace period; **and**
+- the **server still holds the asset document**, so the bytes are re-downloadable.
+
+The last condition is the one that matters. Without it a device that imported a PDF, drew on it,
+and deleted those pages before ever syncing would delete the only copy in existence. With it, the
+local sweep is strictly safer than the server sweep and needs no agreement from anyone.
+
+#### 3.5.5 Rollout
+
+Same shape as §1.2, and for the same reason — a client must not require what a peer of the
+previous release cannot provide:
+
+1. Write your own ledger; delete nothing.
+2. Once **both** apps are writing ledgers, deletion may begin — and by rule 1 of §3.5.3 it cannot
+   begin sooner, since a peer that publishes no ledger is not a peer that agrees. The gate is
+   therefore self-enforcing rather than a switch someone has to remember to throw.
 
 ## 4. Ordering primitives
 
@@ -458,6 +637,11 @@ them can conflict.
 ### 5.4 mergeAsset(a, b)
 
 Assets are immutable; return either (they are equal by construction).
+
+An asset **tombstone** is applied, never resurrected. §6.4's delete-versus-edit rule has nothing
+to weigh here — an asset carries no `deletedAt` and is never edited, so there is no later work to
+outlive the deletion. A sweep (§3.5) is undone by re-uploading the bytes under the same id when
+some page turns out to still need them, not by a merge arguing with the tombstone.
 
 ### 5.1 Page geometry is picked, but a declaration is never dropped
 
@@ -810,8 +994,8 @@ Auth is HTTP Basic over TLS. `since` checkpoints are persisted locally per devic
 one is safe (replay from `0` is idempotent), only slower.
 
 Failure classes clients must distinguish: `401/403` (credentials — surface, stop),
-`409` (merge, retry), `412/404` (absent — treat as create), `5xx`/timeout/offline
-(backoff, keep dirty).
+`409` (merge, retry), `412/404` (absent — treat as create), `413` (two different answers —
+see §7.2), `5xx`/timeout/offline (backoff, keep dirty).
 
 ### 7.1 Clock skew (advisory)
 
@@ -884,6 +1068,45 @@ wrong for ever. Past **300 seconds** the warning is therefore **persistent and p
 sync settings, not a clause appended to a status line: at that scale no latency explains it, the
 damage reads as anything but a clock (a notebook that will not stay out of the Trash, a rename that
 will not stick), and the only repair is on the device itself.
+### 7.2 `413` is two different answers
+
+A `413` can come from CouchDB, meaning *this document's ordinary fields exceed
+`max_document_size`*, or from an intermediary — almost always a reverse proxy — meaning *this
+request's body exceeds a cap I was configured with, and I never showed it to CouchDB*. They call
+for opposite handling, and a client that conflates them tells the user to fix the wrong thing.
+
+They are cleanly distinguishable, and a client **MUST** distinguish them:
+
+| | CouchDB refused the document | A hop refused the request |
+|---|---|---|
+| `Content-Type` | `application/json` | anything else (`text/html` from nginx) |
+| Body | `{"error":"document_too_large","reason":""}` | an HTML error page, or nothing |
+| What is too big | the document's **ordinary fields** | the whole **request body**, attachments included |
+| Which documents | only pages, in practice (§3.4) | any document, most often an asset |
+| Retrying helps? | not until the content changes | **yes — after the server is reconfigured** |
+
+**The test is the body, not the status.** A `413` whose body parses as JSON with
+`error == "document_too_large"` is CouchDB's. Everything else — including a body that fails to
+parse, which is what a proxy in an unexpected configuration produces — **MUST** be treated as the
+intermediary case, because that is the assumption whose failure mode is recoverable.
+
+Required handling:
+
+- **CouchDB's.** Terminal for that content. An implementation MAY suppress the document until its
+  `updatedAt` changes, and MAY hold back documents that name it so a reader never sees a manifest
+  pointing at something the server refused. The message names the **page** and says its ink needs
+  splitting.
+- **An intermediary's.** Configuration, not content, and it **MUST NOT** be suppressed until the
+  content changes. Nothing about the document will ever change — the user fixes the server, and no
+  local edit follows to lift a suppression keyed on `updatedAt`, so the item would stay stuck
+  forever after the problem was solved. Such a refusal **MUST** be re-armed on reconnect, on any
+  change to the sync configuration, and on an explicit user-initiated sync. The message says a
+  proxy is capping uploads, gives the size that was refused, and names `client_max_body_size` —
+  because "too large" without that is not actionable, and §3.4 records that the default cap
+  rejects most photographs.
+
+Both messages carry the measured request size. It is the one number that tells the user whether
+they are looking at a 900 KB photograph or a 60 MB book.
 
 ## 8. Test vectors
 

@@ -59,6 +59,84 @@ if curl -fsS "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null 2>&1; then
 fi
 echo "anonymous access correctly refused"
 
+# ---------------------------------------------------------------------------
+# Upload ceiling. Pictures and PDF backgrounds travel as one document with the
+# bytes inlined as a base64 attachment, so the largest request the apps ever
+# make is an asset upload. CouchDB does not limit that — max_document_size is
+# measured with attachment data removed — but anything in front of it does, and
+# nginx's client_max_body_size defaults to 1 MB. That rejects any asset over
+# roughly 768 KiB once base64 has inflated it: every photograph a phone takes.
+#
+# The failure is invisible from the CouchDB side, which is why this probes
+# through COUCHDB_URL — the same path the apps use, proxy included.
+# ---------------------------------------------------------------------------
+echo
+echo "== upload ceiling (asset-shaped PUTs through ${COUCHDB_URL}) =="
+probe_doc=/tmp/couch-provision-asset.json
+probe_id="asset:provision-probe"
+ceiling=0
+
+for mib in ${COUCHDB_ASSET_PROBE_MIB:-1 8 32}; do
+  # Same wire shape as a real asset: bytes inlined at _attachments.blob.data.
+  # base64 wraps by default on both GNU and BSD, and a newline inside a JSON
+  # string is invalid, so the wrapping is stripped rather than switched off
+  # with a flag the two implementations spell differently.
+  b64=$(dd if=/dev/zero bs=1048576 count="$mib" 2>/dev/null | base64 | tr -d '\n')
+  printf '{"type":"asset","schema":1,"contentType":"application/octet-stream",'      > "$probe_doc"
+  printf '"_attachments":{"blob":{"content_type":"application/octet-stream",'       >> "$probe_doc"
+  printf '"data":"%s"}}}' "$b64"                                                    >> "$probe_doc"
+  unset b64
+
+  rev=$(curl -sS "${admin[@]}" "${COUCHDB_URL}/${COUCHDB_DATABASE}/${probe_id}" \
+        | sed -n 's/.*"_rev":"\([^"]*\)".*/\1/p')
+  code=$(curl -sS -o /tmp/couch-provision-body -w '%{http_code}' -X PUT "${admin[@]}" \
+         -H 'Content-Type: application/json' --data-binary @"$probe_doc" \
+         "${COUCHDB_URL}/${COUCHDB_DATABASE}/${probe_id}${rev:+?rev=$rev}")
+
+  if [ "$code" = 201 ] || [ "$code" = 202 ] || [ "$code" = 200 ]; then
+    printf '  %3s MiB asset -> %s ok\n' "$mib" "$code"
+    ceiling=$mib
+    continue
+  fi
+
+  printf '  %3s MiB asset -> %s\n' "$mib" "$code"
+  if [ "$code" = 413 ]; then
+    if grep -q document_too_large /tmp/couch-provision-body 2>/dev/null; then
+      echo "  CouchDB itself refused it. That is unexpected for an asset — raise" >&2
+      echo "  [couchdb] max_document_size in config/10-sync.ini." >&2
+    else
+      echo "  Something in front of CouchDB refused it before CouchDB saw it —" >&2
+      echo "  the response is not CouchDB's JSON error. Raise the body limit on" >&2
+      echo "  the reverse proxy (nginx: client_max_body_size 128m; Synology:" >&2
+      echo "  Control Panel > Login Portal > Advanced > Reverse Proxy > Custom" >&2
+      echo "  Header, or the nginx snippet in README.md)." >&2
+    fi
+    echo "  Until then, assets of ${mib} MiB and above will never sync." >&2
+  else
+    echo "  Unexpected status; body: $(head -c 200 /tmp/couch-provision-body)" >&2
+  fi
+  break
+done
+
+# Remove the probe document whatever happened, so it never reaches a client.
+rev=$(curl -sS "${admin[@]}" "${COUCHDB_URL}/${COUCHDB_DATABASE}/${probe_id}" \
+      | sed -n 's/.*"_rev":"\([^"]*\)".*/\1/p')
+if [ -n "$rev" ]; then
+  curl -sS -o /dev/null -X DELETE "${admin[@]}" \
+    "${COUCHDB_URL}/${COUCHDB_DATABASE}/${probe_id}?rev=${rev}"
+fi
+rm -f "$probe_doc"
+
+if [ "$ceiling" -gt 0 ]; then
+  echo "  largest asset accepted: ${ceiling} MiB"
+else
+  # Same standing as the anonymous-access check above: the deployment is up and
+  # will look healthy, while a whole class of content silently never arrives.
+  echo "  WARNING: even the smallest probe was refused — no picture will ever sync." >&2
+  rm -f /tmp/couch-provision-body
+  exit 1
+fi
+
 rm -f /tmp/couch-provision-body
 echo
 echo "Done. Point both apps at ${COUCHDB_URL}, database '${COUCHDB_DATABASE}',"
