@@ -533,6 +533,56 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(onDisk.pageIds, downloaded.pageIds + [added.id])
     }
 
+    /// A save prunes stroke tombstones past the protocol's 30-day horizon (§6.6, "Pruning") and
+    /// keeps everything younger — otherwise a much-erased page's document grows for ever.
+    func testSavePrunesTombstonesPastTheHorizonAndKeepsTheRest() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        var seeded = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        seeded.deletedStrokes = [
+            CouchTombstone(id: "ancient", deletedAt: "2026-01-01T00:00:00.000Z"),
+            CouchTombstone(id: "recent", deletedAt: NotableDate.format(Date())),
+            CouchTombstone(id: "unreadable", deletedAt: "not-a-timestamp"),
+        ]
+        try writePageDirectly(seeded, notebookId: notebook.notebookId)
+
+        let page = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        try store.savePage(page)
+
+        let after = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        XCTAssertEqual(
+            after.deletedStrokes.map(\.id).sorted(), ["recent", "unreadable"],
+            "past the horizon goes; fresh stays; unparseable cannot be shown old enough to drop")
+    }
+
+    /// An image tombstone lands on disk while the page is open — the BOOX erased the image — and
+    /// the next autosave must carry it forward and drop the image, not push back a page that
+    /// still shows the image and has forgotten it was ever erased.
+    func testSaveKeepsAnImageTombstoneThatArrivedWhileThePageWasOpen() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        let held = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+
+        var arrived = held
+        arrived.images = []
+        arrived.deletedImages = [
+            CouchTombstone(id: "img-1", deletedAt: NotableDate.format(Date()))
+        ]
+        try writePageDirectly(arrived, notebookId: notebook.notebookId)
+
+        var stale = held
+        stale.images = [
+            ImageDTO(
+                id: "img-1", x: 10, y: 10, width: 100, height: 100, uri: nil,
+                createdAt: held.createdAt, updatedAt: held.createdAt)
+        ]
+        try store.savePage(stale)
+
+        let after = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        XCTAssertEqual(after.deletedImages.map(\.id), ["img-1"])
+        XCTAssertTrue(after.images.isEmpty, "an erased image must not ride back in on an autosave")
+    }
+
     /// Writes straight to disk, bypassing the store — standing in for the sync engine.
     private func writeManifestDirectly(_ manifest: NotebookManifest) throws {
         let encoder = JSONEncoder()

@@ -26,11 +26,17 @@ public enum CouchTombstones {
         return (existing + added).sorted { $0.id < $1.id }
     }
 
-    /// Drops tombstones older than `maxAge` and no longer referenced by any live id.
+    /// Drops tombstones whose `deletedAt` is older than `maxAge` — protocol §6.6, "Pruning".
     ///
-    /// Safe only once every device has synced past them — a tombstone dropped while a peer still
-    /// holds the stroke lets that stroke come back. Thirty days is far beyond any plausible gap
-    /// between two devices that sync in seconds when both are open.
+    /// Age is the whole test. A writer prunes only documents it is rewriting anyway, so the next
+    /// push carries the shorter list; a peer that still holds the longer one unions the pruned
+    /// tombstones straight back, which is harmless — they are pruned again on the next local
+    /// write, and gone for good once every writer is past the horizon. What the horizon actually
+    /// bounds is the peer that *stopped syncing*: one that last pulled before the erasure and
+    /// returns after the horizon can resurrect the stroke. Thirty days is far beyond any
+    /// plausible gap between two devices that sync in seconds when both are open — and only
+    /// stroke and image tombstones are ever pruned; page tombstones, bookmarks, and removed
+    /// outline entries carry structural identity the merge needs indefinitely.
     public static func prune(
         _ tombstones: [CouchTombstone],
         now: Date,

@@ -236,11 +236,13 @@ final class NotebookStore: ObservableObject {
         // Whatever the caller *had* and no longer has was erased. Recording it is what stops the
         // other device's copy of an erased stroke from coming back on the next merge — absence
         // alone cannot be told apart from "that stroke has not reached this device yet".
-        page.deletedStrokes = CouchTombstones.derive(
-            previousIDs: baseline,
-            currentIDs: saved,
-            existing: onDisk?.deletedStrokes ?? [],
-            deletedAt: now)
+        page.deletedStrokes = CouchTombstones.prune(
+            CouchTombstones.derive(
+                previousIDs: baseline,
+                currentIDs: saved,
+                existing: onDisk?.deletedStrokes ?? [],
+                deletedAt: now),
+            now: Date())
         let erased = Set(page.deletedStrokes.map(\.id))
 
         // Erasure beats drawing: a stroke the other device tombstoned goes, even though this
@@ -252,10 +254,21 @@ final class NotebookStore: ObservableObject {
         page.strokes += (onDisk?.strokes ?? []).filter {
             !saved.contains($0.id) && !baseline.contains($0.id) && !erased.contains($0.id)
         }
-        // Images travel the same way and the editor never removes them, so an add-wins union is
-        // the whole rule (the page format carries no image tombstones).
+        // Image tombstones only ever arrive from the other device (nothing here deletes an
+        // image), so the file's are at least as fresh as the caller's load-time copy — union
+        // them, or an autosave would strip an erasure that landed while the page was open and
+        // push the stripped list back to the server. Then honour them, same as the strokes.
+        page.deletedImages = CouchTombstones.prune(
+            CouchMerge.unionTombstones(page.deletedImages, onDisk?.deletedImages ?? []),
+            now: Date())
+        let erasedImages = Set(page.deletedImages.map(\.id))
+        page.images.removeAll { erasedImages.contains($0.id) }
+        // Live images travel the same way the strokes do and the editor never removes them, so
+        // an add-wins union over the tombstones is the whole rule.
         let savedImages = Set(page.images.map(\.id))
-        page.images += (onDisk?.images ?? []).filter { !savedImages.contains($0.id) }
+        page.images += (onDisk?.images ?? []).filter {
+            !savedImages.contains($0.id) && !erasedImages.contains($0.id)
+        }
 
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
