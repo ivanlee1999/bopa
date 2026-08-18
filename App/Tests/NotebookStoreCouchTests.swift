@@ -90,7 +90,9 @@ final class NotebookStoreCouchTests: XCTestCase {
         let saved = try store.loadPage(
             notebookId: manifest.notebookId, pageId: manifest.pageIds[0])
         XCTAssertEqual(saved.updatedBy, "ipad")
-        XCTAssertEqual(store.manifest(id: manifest.notebookId)?.updatedBy, "ipad")
+        // The page alone: stamping the manifest too would rewrite the envelope the merge
+        // decides renames and moves by, which is how ink used to undo a peer's rename.
+        XCTAssertEqual(store.manifest(id: manifest.notebookId)?.updatedBy, manifest.updatedBy)
     }
 
     // MARK: Sync writing underneath an open page
@@ -246,16 +248,17 @@ final class NotebookStoreCouchTests: XCTestCase {
         ])
     }
 
-    func testSavingAPageNamesThePageAndItsNotebook() throws {
+    /// The page alone — the notebook document did not change, and offering it anyway meant
+    /// pushing an envelope whose clock the save had just bumped, which is how ink used to undo
+    /// a rename arriving from the other device.
+    func testSavingAPageNamesThePageAlone() throws {
         let manifest = try store.createNotebook(title: "notes")
         let page = try store.loadPage(
             notebookId: manifest.notebookId, pageId: manifest.pageIds[0])
         changed = []
         try store.savePage(page)
 
-        XCTAssertEqual(changed.last, [
-            CouchDocID.page(page.id), CouchDocID.notebook(manifest.notebookId),
-        ])
+        XCTAssertEqual(changed.last, [CouchDocID.page(page.id)])
     }
 
     func testRenamingNamesOnlyTheNotebook() throws {

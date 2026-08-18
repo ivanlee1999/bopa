@@ -92,11 +92,13 @@ final class NotebookStore: ObservableObject {
     func refresh() {
         let notebooksDir = rootURL.appendingPathComponent("notebooks", isDirectory: true)
         let ids = (try? FileManager.default.contentsOfDirectory(atPath: notebooksDir.path)) ?? []
-        notebooks = ids.compactMap { id in
+        notebooks = ids.compactMap { id -> NotebookManifest? in
             guard let data = try? Data(contentsOf: manifestURL(id)) else { return nil }
             return try? decoder.decode(NotebookManifest.self, from: data)
         }
-        .sorted { ($0.updatedAt, $0.title) > ($1.updatedAt, $1.title) }
+        .map { (activity: lastActivity($0), manifest: $0) }
+        .sorted { ($0.activity, $0.manifest.title) > ($1.activity, $1.manifest.title) }
+        .map(\.manifest)
 
         folders = ((try? Data(contentsOf: foldersURL))
             .flatMap { try? decoder.decode(FoldersFile.self, from: $0) }?.folders ?? [])
@@ -108,6 +110,22 @@ final class NotebookStore: ObservableObject {
         trash = LocalTrash.load(root: rootURL)
 
         remoteIndex = RemoteIndex.load(root: rootURL)
+    }
+
+    /// When this notebook last changed, for the recency sort: its envelope clock or the pages
+    /// directory's, whichever is later.
+    ///
+    /// The envelope alone stopped being enough when `savePage` stopped bumping it (drawing must
+    /// not rewrite the record the merge decides renames and moves by). Every page save replaces a
+    /// directory entry atomically, which moves the directory's own modification date — including
+    /// for ink arriving from the other device, which never floated the notebook before and
+    /// should have.
+    private func lastActivity(_ manifest: NotebookManifest) -> Date {
+        let envelope = NotableDate.parse(manifest.updatedAt) ?? .distantPast
+        let pagesDir = notebookDir(manifest.notebookId).appendingPathComponent("pages")
+        let attributes = try? FileManager.default.attributesOfItem(atPath: pagesDir.path)
+        guard let inked = attributes?[.modificationDate] as? Date else { return envelope }
+        return max(envelope, inked)
     }
 
     /// - Parameter pageSize: the sheet every page here is laid out on, recorded on the notebook
@@ -175,7 +193,8 @@ final class NotebookStore: ObservableObject {
         return String(date.timeIntervalSinceReferenceDate)
     }
 
-    /// Persists a page and bumps the notebook's `updatedAt` (the sync conflict clock).
+    /// Persists a page — and only the page. The notebook's envelope is deliberately left alone;
+    /// see the note at the end of this method.
     ///
     /// The manifest is re-read from disk rather than taken from `notebooks`: that array is only as
     /// fresh as the last `refresh()`, and sync writes manifests from another thread throughout a
@@ -272,11 +291,12 @@ final class NotebookStore: ObservableObject {
 
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
-        manifest.updatedAt = now
-        manifest.updatedBy = deviceID
-        try writeManifest(manifest)
-        refreshAfterLocalChange(
-            documents: [CouchDocID.page(page.id), CouchDocID.notebook(notebookId)])
+        // The manifest is deliberately not touched. Ink lives in the page document, which carries
+        // its own clock; bumping the notebook's `updatedAt` here made every autosave rewrite the
+        // envelope the merge decides renames, moves and page order by — so drawing on this device
+        // silently undid a rename arriving from the other one, every time the ink was later.
+        // Sorting by recency reads the pages directory's own clock instead (see `refresh`).
+        refreshAfterLocalChange(documents: [CouchDocID.page(page.id)])
         return page
     }
 
