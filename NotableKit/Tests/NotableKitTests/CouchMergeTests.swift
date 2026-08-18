@@ -37,6 +37,15 @@ final class CouchMergeVectorTests: XCTestCase {
         var images: [ExpectedImage]
         var pageWidth: Int
         var pageHeight: Int
+        // The parent's memory of the ink that moved to its children — §6.6. Pinned because both
+        // apps must emit the same tombstones or the peer's tall copy never converges.
+        var deletedStrokes: [ExpectedTombstone]?
+        var deletedImages: [ExpectedTombstone]?
+    }
+
+    private struct ExpectedTombstone: Decodable {
+        var id: String
+        var deletedAt: String
     }
 
     private struct ExpectedStroke: Decodable {
@@ -194,6 +203,14 @@ final class CouchMergeVectorTests: XCTestCase {
             }
             XCTAssertEqual(made.page.pageWidth, want.pageWidth, "\(vector.name): \(want.id) sheet")
             XCTAssertEqual(made.page.pageHeight, want.pageHeight, "\(vector.name): \(want.id) sheet")
+            XCTAssertEqual(
+                made.page.deletedStrokes.map { [$0.id, $0.deletedAt] },
+                (want.deletedStrokes ?? []).map { [$0.id, $0.deletedAt] },
+                "\(vector.name): stroke tombstones on \(want.id)")
+            XCTAssertEqual(
+                made.page.deletedImages.map { [$0.id, $0.deletedAt] },
+                (want.deletedImages ?? []).map { [$0.id, $0.deletedAt] },
+                "\(vector.name): image tombstones on \(want.id)")
         }
 
         for (id, page) in produced {

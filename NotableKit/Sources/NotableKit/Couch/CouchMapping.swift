@@ -32,7 +32,7 @@ public enum CouchMapping {
             images: file.images.map {
                 couchImage(from: $0, notebookDir: notebookDir, sha256: sha256)
             },
-            deletedImages: [],
+            deletedImages: file.deletedImages,
             createdAt: file.createdAt,
             updatedAt: file.updatedAt,
             updatedBy: file.updatedBy.isEmpty ? deviceID : file.updatedBy)
@@ -83,6 +83,7 @@ public enum CouchMapping {
                     heldAt: $0.assetId.flatMap { held[$0] })
             },
             deletedStrokes: page.deletedStrokes,
+            deletedImages: page.deletedImages,
             updatedBy: page.updatedBy)
     }
 
