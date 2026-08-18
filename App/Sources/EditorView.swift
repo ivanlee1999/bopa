@@ -15,40 +15,24 @@ struct EditorView: View {
     var onClose: (() -> Void)?
 
     @StateObject private var toolSelection = ToolSelection()
-    @State private var pageId: String?
-    @State private var page: PageFile?
-    @State private var drawing = PKDrawing()
-    @State private var pageBackground: UIImage?
-    @State private var pageImages: [PageImage] = []
-    /// The ids of the strokes the canvas is currently showing — what was loaded into it, or what
-    /// was last exported out of it. Two jobs: it is the baseline `savePage` derives tombstones
-    /// from, and it is how "the file holds ink the canvas does not" is decided.
-    @State private var canvasStrokeIDs: Set<String> = []
-    /// Bumped whenever `drawing` is replaced from outside the canvas, which is the only cue
-    /// `EditorCanvasView` has to reload it without a page switch.
-    @State private var contentRevision = 0
-    /// Sync wrote something and the canvas has not caught up. Survives until it is safe to act on.
-    @State private var remoteInkPending = false
-    @State private var dirty = false
-    @State private var saveTask: Task<Void, Never>?
-    @State private var loadError: String?
-    @State private var saveError: String?
+    /// Everything about the open page — what is loaded, what the canvas holds, when it is
+    /// saved. A model rather than `@State` so those rules are unit-testable; see its header.
+    @StateObject private var model = EditorPageModel()
     @State private var actionError: LibraryActionError?
     @State private var showingPageOverview = false
     @StateObject private var undoController = CanvasUndoController()
-    @State private var liveState = CanvasLiveState()
     @State private var viewport = CanvasViewportController()
 
     private var manifest: NotebookManifest? { store.manifest(id: notebookId) }
     private var pageIndex: Int {
-        guard let manifest, let pageId else { return 0 }
+        guard let manifest, let pageId = model.pageId else { return 0 }
         return manifest.pageIds.firstIndex(of: pageId) ?? 0
     }
 
     /// The current page's native paper. PDF- and image-backed pages draw no template:
     /// their background image already carries the paper.
     private var pageTemplate: NativeTemplate {
-        guard let page else { return .blank }
+        guard let page = model.page else { return .blank }
         let background = PageBackground(background: page.background, backgroundType: page.backgroundType)
         guard case .native(let template) = background, template.isDrawable else { return .blank }
         return template
@@ -57,7 +41,7 @@ struct EditorView: View {
     /// Only native-backed pages can switch template; changing a PDF-backed page would
     /// throw away the link to its PDF (which the BOOX side also relies on).
     private var canChangeTemplate: Bool {
-        guard let page else { return false }
+        guard let page = model.page else { return false }
         let background = PageBackground(background: page.background, backgroundType: page.backgroundType)
         if case .native = background { return true }
         return false
@@ -70,28 +54,25 @@ struct EditorView: View {
         chrome
             .background(Modernist.canvas)
             .toolbar(.hidden, for: .navigationBar)
-            .onAppear { if pageId == nil { openInitialPage() } }
-            .onDisappear { saveNow() }
+            .onAppear {
+                model.attach(store: store, notebookId: notebookId)
+                // The model asks to close when its notebook vanishes underneath it — deleted
+                // locally or by a merge — because an editor over nothing has nothing to show.
+                model.requestClose = { onClose?() }
+                if model.pageId == nil { model.openInitialPage() }
+            }
+            .onDisappear { model.saveNow() }
             // Leaving the app does not pop the editor, so the debounced save has to be flushed
             // here too — otherwise switching apps or locking the iPad within two seconds of the
             // last stroke loses it.
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { saveNow() }
-            }
-            // The CouchDB pull loop rewrites page files with no regard for what is open, so the
-            // editor has to hear about it or it would keep drawing on a stale copy.
-            .onReceive(
-                NotificationCenter.default.publisher(
-                    for: NotebookStore.didApplyRemoteChangesNotification)
-            ) { _ in
-                remoteInkPending = true
-                foldInRemoteInk()
+                if phase != .active { model.saveNow() }
             }
             .alert(
-                "Couldn’t save this page", isPresented: .constant(saveError != nil),
-                presenting: saveError
+                "Couldn’t save this page", isPresented: .constant(model.saveError != nil),
+                presenting: model.saveError
             ) { _ in
-                Button("OK") { saveError = nil }
+                Button("OK") { model.saveError = nil }
             } message: { error in
                 Text("Your strokes are still here and bopa will try again. \(error)")
             }
@@ -100,8 +81,8 @@ struct EditorView: View {
                 NavigationStack {
                     NotebookNavigatorView(
                         notebookId: notebookId,
-                        currentPageId: pageId,
-                        openPage: { open(pageId: $0) })
+                        currentPageId: model.pageId,
+                        openPage: { model.open(pageId: $0) })
                         .environmentObject(store)
                 }
             }
@@ -263,31 +244,31 @@ struct EditorView: View {
     /// same five native templates the BOOX renders, so the caption is also a promise.
     private var canvasArea: some View {
         ZStack(alignment: .bottomTrailing) {
-            if let loadError {
+            if let loadError = model.loadError {
                 ContentUnavailableView(
                     "Could not open page", systemImage: "exclamationmark.triangle",
                     description: Text(loadError))
             } else {
                 EditorCanvasView(
-                    pageId: pageId,
-                    contentRevision: contentRevision,
-                    background: pageBackground,
-                    images: pageImages,
-                    pageScroll: page?.scroll ?? 0,
+                    pageId: model.pageId,
+                    contentRevision: model.contentRevision,
+                    background: model.pageBackground,
+                    images: model.pageImages,
+                    pageScroll: model.page?.scroll ?? 0,
                     template: pageTemplate,
-                    pageSize: page?.pageSize ?? .legacyUndeclared,
+                    pageSize: model.page?.pageSize ?? .legacyUndeclared,
                     // The *declared* sheet, not the fallback: an undeclared page has no
                     // agreed sheet, so there is no break to promise and none is drawn.
-                    declaredSheet: page?.declaredPageSize,
-                    drawing: $drawing,
+                    declaredSheet: model.page?.declaredPageSize,
+                    drawing: $model.drawing,
                     config: handwriting.config,
                     toolSelection: toolSelection,
                     undoController: undoController,
-                    liveState: liveState,
+                    liveState: model.liveState,
                     viewport: viewport,
                     turnPage: turnPage,
-                    onChanged: scheduleSave,
-                    onIdle: foldInRemoteInk)
+                    onChanged: model.scheduleSave,
+                    onIdle: model.foldInRemoteInk)
 
                 if canChangeTemplate {
                     Kicker("\(pageTemplate.displayName) · native", color: Modernist.neutral600)
@@ -297,16 +278,6 @@ struct EditorView: View {
                 }
             }
         }
-    }
-
-    private func openInitialPage() {
-        // Before the manifest is read, not after: a notebook written when a page was an endless
-        // scroll can hold most of its work below the first sheet, and opening it at "page 1 of 1"
-        // would show a fraction of what is there. Does nothing to a notebook already in sheets.
-        store.splitOversizedPages(in: notebookId)
-        guard let manifest = store.manifest(id: notebookId) else { return }
-        let initial = manifest.openPageId ?? manifest.pageIds.first
-        if let initial { open(pageId: initial) }
     }
 
     /// Moves one page in [direction], and on the forward edge of the last page makes the next one.
@@ -326,69 +297,8 @@ struct EditorView: View {
 
     private func openPage(at index: Int) {
         guard let manifest, manifest.pageIds.indices.contains(index) else { return }
-        saveNow()
-        open(pageId: manifest.pageIds[index])
-    }
-
-    /// - Returns: whether the page loaded. Callers that are retrying something use it; the
-    ///   ordinary ones do not, because `loadError` already puts the failure on screen.
-    @discardableResult
-    private func open(pageId newPageId: String) -> Bool {
-        do {
-            let loaded = try store.loadPage(notebookId: notebookId, pageId: newPageId)
-            page = loaded
-            pageId = newPageId
-            drawing = PencilKitBridge.drawing(from: loaded.strokes)
-            let notebookDir = store.notebookDirURL(notebookId)
-            pageBackground = BackgroundRenderer.image(
-                for: loaded,
-                notebookDir: notebookDir,
-                storeRoot: store.rootURL)
-            pageImages = BackgroundRenderer.pageImages(for: loaded, notebookDir: notebookDir)
-            canvasStrokeIDs = Set(loaded.strokes.map(\.id))
-            contentRevision += 1
-            // Seed with the persisted offset so a save before any scroll preserves it.
-            liveState.pageY = CGFloat(max(loaded.scroll, 0))
-            dirty = false
-            loadError = nil
-            return true
-        } catch {
-            loadError = String(describing: error)
-            return false
-        }
-    }
-
-    /// Puts ink sync wrote underneath the editor onto the canvas.
-    ///
-    /// Never while a stroke is being drawn: replacing `drawing` reloads the canvas, and that
-    /// cancels the stroke in flight — losing exactly the kind of ink this exists to protect. The
-    /// flag keeps until the pencil lifts, which `onIdle` reports.
-    ///
-    /// The reconciling itself is `savePage`'s: flushing first leaves the file holding the union of
-    /// both copies, so this only has to decide whether the canvas is now out of date and reload.
-    ///
-    /// The flag is cleared only once that has actually happened. Sync writes these files while this
-    /// reads them, so a read here can lose a race it will win a moment later — and dropping the
-    /// flag on the way past would leave the canvas stale until some *other* document happened to
-    /// arrive. Retries are driven by pencil-lifts and further applies, so a page that cannot be
-    /// read at all costs a file read, not a spin.
-    private func foldInRemoteInk() {
-        guard remoteInkPending, !liveState.isDrawing, let pageId else { return }
-        saveNow()
-        guard let onDisk = try? store.loadPage(notebookId: notebookId, pageId: pageId) else {
-            return  // a torn or missing read is not a reason to drop what is on the canvas
-        }
-
-        let erased = Set(onDisk.deletedStrokes.map(\.id))
-        let arrived = onDisk.strokes.contains { !canvasStrokeIDs.contains($0.id) }
-        let erasedElsewhere = canvasStrokeIDs.contains { erased.contains($0) }
-        // Most applied documents are some other page, or this page's own echo. Reloading for those
-        // would throw away the undo stack for nothing.
-        guard arrived || erasedElsewhere else {
-            remoteInkPending = false  // the canvas already matches the file
-            return
-        }
-        if open(pageId: pageId) { remoteInkPending = false }
+        model.saveNow()
+        model.open(pageId: manifest.pageIds[index])
     }
 
     /// Adding a page is the one editor action that used to be able to fail in silence: a disk that
@@ -397,11 +307,11 @@ struct EditorView: View {
     /// missed. It reports through the same alert a failed save does, because it is the same kind
     /// of news.
     private func addPage() {
-        saveNow()
+        model.saveNow()
         do {
             let newPage = try store.addPage(
                 to: notebookId, fallbackTemplate: handwriting.config.defaultTemplate)
-            open(pageId: newPage.id)
+            model.open(pageId: newPage.id)
         } catch {
             actionError = LibraryActionError(action: "Adding a page", underlying: error)
         }
@@ -411,56 +321,12 @@ struct EditorView: View {
         Binding(get: { pageTemplate }, set: { setTemplate($0) })
     }
 
-    /// Writes the template into the page file (`backgroundType: "native"`), which is what
-    /// the BOOX reads back after a sync.
+    /// The *whether* of changing paper lives here — only native-backed pages may — and the
+    /// writing lives in the model, which is what the BOOX reads back after a sync.
     private func setTemplate(_ template: NativeTemplate) {
-        guard var page, canChangeTemplate else { return }
+        guard canChangeTemplate else { return }
         let fields = TemplateApplication.pageFields(for: .native(template))
-        guard fields.background != page.background || fields.backgroundType != page.backgroundType
-        else { return }
-        page.background = fields.background
-        page.backgroundType = fields.backgroundType
-        self.page = page
-        dirty = true
-        saveNow()
-    }
-
-    private func scheduleSave() {
-        dirty = true
-        saveTask?.cancel()
-        saveTask = Task {
-            try? await Task.sleep(for: .seconds(2))
-            if !Task.isCancelled { saveNow() }
-        }
-    }
-
-    private func saveNow() {
-        saveTask?.cancel()
-        guard var page else { return }
-        let scroll = max(0, Int(liveState.pageY.rounded()))
-        guard dirty || scroll != page.scroll else { return }
-        // What the canvas held going into this save. `savePage` needs it to tell ink the user
-        // erased from ink that arrived from the BOOX while this page was open — the file cannot
-        // answer that, because sync may have rewritten it since.
-        let baseline = canvasStrokeIDs
-        // `page.strokes` is the set we last loaded or wrote, so identity chains forward across
-        // repeated saves: an untouched stroke keeps its id and its exact bytes.
-        page.strokes = PencilKitBridge.strokeDTOs(from: drawing, source: page.strokes)
-        page.scroll = scroll
-        canvasStrokeIDs = Set(page.strokes.map(\.id))
-        self.page = page
-        do {
-            // Take back what was written rather than what was offered: `savePage` reconciles
-            // against the file, so only the returned copy matches what is now on disk. That is
-            // what `page` is supposed to be, and `page.strokes` is the `source:` the next export
-            // re-identifies against.
-            self.page = try store.savePage(page, baselineStrokeIDs: baseline)
-            dirty = false
-        } catch {
-            // Leave `dirty` set so the next flush retries. Clearing it on a failed write — which
-            // is what `try?` did — silently discarded the strokes that failed to land.
-            saveError = String(describing: error)
-        }
+        model.setPaper(background: fields.background, backgroundType: fields.backgroundType)
     }
 }
 
@@ -863,29 +729,52 @@ struct EditorCanvasView: UIViewRepresentable {
         func scrollViewDidEndDragging(
             _ scrollView: UIScrollView, willDecelerate decelerate: Bool
         ) {
-            let axis = parent.config.pageTurn
+            let inset = scrollView.adjustedContentInset
             let overshoot: CGFloat
-            switch axis {
+            switch parent.config.pageTurn {
             case .vertical:
-                let maxY = max(scrollView.contentSize.height - scrollView.bounds.height, 0)
-                overshoot =
-                    scrollView.contentOffset.y > maxY
-                    ? scrollView.contentOffset.y - maxY
-                    : min(scrollView.contentOffset.y, 0)
+                overshoot = Self.overshoot(
+                    offset: scrollView.contentOffset.y,
+                    contentLength: scrollView.contentSize.height,
+                    boundsLength: scrollView.bounds.height,
+                    leadingInset: inset.top,
+                    trailingInset: inset.bottom)
             case .horizontal:
-                let maxX = max(scrollView.contentSize.width - scrollView.bounds.width, 0)
-                overshoot =
-                    scrollView.contentOffset.x > maxX
-                    ? scrollView.contentOffset.x - maxX
-                    : min(scrollView.contentOffset.x, 0)
+                overshoot = Self.overshoot(
+                    offset: scrollView.contentOffset.x,
+                    contentLength: scrollView.contentSize.width,
+                    boundsLength: scrollView.bounds.width,
+                    leadingInset: inset.left,
+                    trailingInset: inset.right)
             }
             guard abs(overshoot) >= Self.pageTurnThreshold else { return }
             parent.turnPage(overshoot > 0 ? 1 : -1)
         }
 
+        /// How far a released drag pulled past where the axis can actually rest, signed —
+        /// positive past the end, negative before the start, zero anywhere the scroll view would
+        /// settle on its own.
+        ///
+        /// The resting range comes from the insets, not from zero. A page narrower than the
+        /// viewport — every 'Side to side' page on a landscape iPad — is centred with contentInset
+        /// slack and rests at offset `-slack`. Measured against zero, that rest position read as
+        /// a full-slack pull backwards: 'previous page' fired on every release (a guarded no-op
+        /// on page 1, so turning simply never worked), and a forward turn needed the slack *plus*
+        /// the threshold of rubber-banding.
+        static func overshoot(
+            offset: CGFloat, contentLength: CGFloat, boundsLength: CGFloat,
+            leadingInset: CGFloat, trailingInset: CGFloat
+        ) -> CGFloat {
+            let minOffset = -leadingInset
+            let maxOffset = max(contentLength - boundsLength + trailingInset, minOffset)
+            if offset > maxOffset { return offset - maxOffset }
+            if offset < minOffset { return offset - minOffset }
+            return 0
+        }
+
         /// How far past the edge counts as asking for the next page. Generous enough that the
         /// rubber-banding of an ordinary scroll to the bottom does not turn a page by itself.
-        private static let pageTurnThreshold: CGFloat = 120
+        static let pageTurnThreshold: CGFloat = 120
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             container?.canvasZoomDidChange()

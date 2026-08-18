@@ -10,7 +10,7 @@ import Foundation
 /// it. This turns each of those sheets into a page of its own.
 ///
 /// The rules are shared with the BOOX (`PageSplit.kt`) and pinned by the conformance vectors in
-/// `docs/couch-sync-vectors/`. Three of them carry the weight:
+/// `docs/couch-sync-vectors/`. Four of them carry the weight:
 ///
 /// - **The first sheet keeps the page's own id.** Bookmarks and outline entries name a page id, so
 ///   giving sheet 0 a new one would strand every entry that pointed at the page.
@@ -19,6 +19,16 @@ import Foundation
 ///   would then keep both of. This is the whole reason the id is a hash and not a UUID.
 /// - **Ink is never cut.** A stroke belongs to the sheet its top edge falls in and travels whole,
 ///   so a descender crossing the boundary stays in one piece rather than being severed.
+/// - **The parent remembers what left it.** The first sheet carries a tombstone for every stroke
+///   and image that moved to a child. Without them, a peer still holding the tall copy unions the
+///   moved ink straight back into the parent on merge — the page re-grows on every pull, each side
+///   pushes its own version back, and the notebook never converges. The tombstones are scoped to
+///   the parent *document*, so the same ink living on a child under the same id is untouched, and
+///   a peer on an older build converges too, because every merge already honours `deletedStrokes`.
+///   The children start with no tombstones at all: one handed down could name ink that already
+///   lives on that child — moved there by an earlier division of the same page, before it re-grew
+///   under a peer's push — and would erase it on the next merge. Erasures made while the page was
+///   tall stay recorded on sheet 0, whose id is the page's own.
 public enum PageSplit {
 
     /// The sheet a page is divided by: what it declares, else the notebook's default, else the
@@ -96,6 +106,15 @@ public enum PageSplit {
         let count = sheetCount(of: page, sheet: sheet)
         guard count > 1 else { return [declaring(sheet, on: page)] }
 
+        // What the first sheet has to remember leaving it — see the type doc. Stamped with the
+        // split's own clock: the tombstone must outrank the copy a peer's tall page still holds.
+        let movedStrokes = page.strokes
+            .filter { sheetIndex(ofTop: $0.top, sheetHeight: sheet.height) > 0 }
+            .map { CouchTombstone(id: $0.id, deletedAt: now) }
+        let movedImages = page.images
+            .filter { sheetIndex(ofTop: Float($0.y), sheetHeight: sheet.height) > 0 }
+            .map { CouchTombstone(id: $0.id, deletedAt: now) }
+
         let height = Float(sheet.height)
         var pages: [PageFile] = []
         for index in 0..<count {
@@ -118,6 +137,8 @@ public enum PageSplit {
                 first.scroll = 0
                 first.updatedAt = now
                 first.updatedBy = updatedBy
+                first.deletedStrokes = page.deletedStrokes + movedStrokes
+                first.deletedImages = page.deletedImages + movedImages
                 pages.append(first)
             } else {
                 pages.append(
@@ -138,6 +159,10 @@ public enum PageSplit {
                         updatedAt: now,
                         strokes: strokes,
                         images: images,
+                        // None at all — see the type doc: a tombstone handed down could name ink
+                        // already alive on this child and erase it on the next merge.
+                        deletedStrokes: [],
+                        deletedImages: [],
                         updatedBy: updatedBy))
             }
         }
@@ -185,6 +210,15 @@ public enum PageSplit {
         let count = sheetCount(tops: tops, sheetHeight: sheet.height)
         guard count > 1 else { return [(id, declaring(sheet, on: page))] }
 
+        // The parent's memory of the moved ink. The children start clean — `declaring` copies the
+        // page, so their inherited lists are cleared below.
+        let movedStrokes = page.strokes
+            .filter { sheetIndex(ofTop: $0.top, sheetHeight: sheet.height) > 0 }
+            .map { CouchTombstone(id: $0.id, deletedAt: now) }
+        let movedImages = page.images
+            .filter { sheetIndex(ofTop: Float($0.y), sheetHeight: sheet.height) > 0 }
+            .map { CouchTombstone(id: $0.id, deletedAt: now) }
+
         let height = Float(sheet.height)
         var pages: [(id: String, page: CouchPage)] = []
         for index in 0..<count {
@@ -200,6 +234,13 @@ public enum PageSplit {
                     moved.y -= Int(offset)
                     return moved
                 }
+            if index == 0 {
+                divided.deletedStrokes = page.deletedStrokes + movedStrokes
+                divided.deletedImages = page.deletedImages + movedImages
+            } else {
+                divided.deletedStrokes = []
+                divided.deletedImages = []
+            }
             divided.updatedAt = now
             divided.updatedBy = updatedBy
             pages.append((childId(parentId: id, sheet: index), divided))

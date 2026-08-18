@@ -148,7 +148,7 @@ public struct PageFile: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case version, id, notebookId, title, background, backgroundType, parentFolderId, scroll
         case pageWidth, pageHeight
-        case createdAt, updatedAt, strokes, images, deletedStrokes, updatedBy
+        case createdAt, updatedAt, strokes, images, deletedStrokes, deletedImages, updatedBy
     }
 
     public var version: Int
@@ -178,6 +178,11 @@ public struct PageFile: Codable, Equatable, Sendable {
     /// next merge (`docs/couch-sync-protocol.md` §6.6). Absent from files written before CouchDB
     /// sync and ignored by WebDAV readers, which parse with unknown keys allowed.
     public var deletedStrokes: [CouchTombstone]
+    /// The image half of [deletedStrokes]. This field existed on the wire (the BOOX records and
+    /// publishes image erasures) long before this file carried it — dropping it here meant every
+    /// bopa push stripped the peer's image tombstones from the server, and the two sides
+    /// ping-ponged the document for ever. Same decoding tolerance as the strokes.
+    public var deletedImages: [CouchTombstone]
     /// Which device last wrote this page. Breaks scalar ties in the merge.
     public var updatedBy: String
 
@@ -197,6 +202,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         strokes: [StrokeDTO] = [],
         images: [ImageDTO] = [],
         deletedStrokes: [CouchTombstone] = [],
+        deletedImages: [CouchTombstone] = [],
         updatedBy: String = ""
     ) {
         self.version = version
@@ -214,6 +220,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         self.strokes = strokes
         self.images = images
         self.deletedStrokes = deletedStrokes
+        self.deletedImages = deletedImages
         self.updatedBy = updatedBy
     }
 
@@ -237,6 +244,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         strokes = try c.decodeIfPresent([StrokeDTO].self, forKey: .strokes) ?? []
         images = try c.decodeIfPresent([ImageDTO].self, forKey: .images) ?? []
         deletedStrokes = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedStrokes) ?? []
+        deletedImages = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedImages) ?? []
         updatedBy = try c.decodeIfPresent(String.self, forKey: .updatedBy) ?? ""
     }
 
@@ -257,6 +265,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         try c.encode(strokes, forKey: .strokes)
         try c.encode(images, forKey: .images)
         try c.encode(deletedStrokes, forKey: .deletedStrokes)
+        try c.encode(deletedImages, forKey: .deletedImages)
         try c.encode(updatedBy, forKey: .updatedBy)
     }
 }

@@ -717,8 +717,28 @@ same page before either has seen the other, so the result MUST be a function of 
    would take the union and the notebook would hold every page twice.
 6. Content moves with its sheet: `y`, `top`, `bottom` and every encoded point shift by
    `-k * sheetHeight`. `createdAt` is the parent's — these are not new notes — and `scroll` is 0.
+7. **Sheet 0 records what left it.** Its `deletedStrokes`/`deletedImages` gain a tombstone
+   `(id, deletedAt: now)` for every stroke and image that moved to a child, appended after the
+   tombstones the page already carried. Without them a peer still holding the tall copy unions
+   the moved ink straight back into the parent on merge; the page re-grows on every pull, each
+   side pushes its own version back, and the notebook never converges. Tombstones are scoped to
+   the document they ride in ("Producing tombstones", above), so the same ink living on a child
+   under the same id is untouched — and a peer that has not learned this rule converges anyway,
+   because its merge already honours the lists.
+8. **Sheets `k > 0` start with empty tombstone lists.** A tombstone handed to a child could name
+   ink that already lives there — moved by an earlier division of the same page, before a peer's
+   push re-grew the parent — and would erase it on the next merge. Erasures made while the page
+   was tall stay recorded on sheet 0, whose id is the page's own; the one race this concedes (an
+   erase-while-tall against a peer's *independent* division, both before either has synced) is
+   confined to the migration a divided notebook only goes through once.
+9. **A division never overwrites an existing child.** A page can re-grow after it was divided — a
+   peer's tall copy merged back in is the usual way — and rebuilding its children from the parent
+   alone would discard every stroke drawn on them since. The produced child is folded into the
+   existing one through the ordinary page merge (§5) instead.
 
-Vectors: `split-*` in `docs/couch-sync-vectors/vectors.json`, which both suites run.
+Vectors: `split-*` in `docs/couch-sync-vectors/vectors.json`, which both suites run —
+`split-children-start-clean` pins rules 7 and 8, and the merge vector
+`page-split-parent-beats-its-tall-past` pins the convergence they exist for.
 
 ## 7. Transport
 
