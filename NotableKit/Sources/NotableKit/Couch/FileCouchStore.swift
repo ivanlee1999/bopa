@@ -74,6 +74,21 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
 
     // MARK: CouchLocalStore
 
+    /// §6.4's liveness: the newest page clock held here for a notebook — ink no longer moves the
+    /// envelope, so "was there work after the deletion" is answered by the pages, where the work
+    /// actually lands. Reads each listed page file; deletions are rare enough that this is never
+    /// on a hot path.
+    public func contentClock(_ documentID: String) -> String? {
+        guard let (type, id) = CouchDocID.split(documentID),
+              type == CouchDocType.notebook,
+              let manifest = readManifest(id)
+        else { return nil }
+        let clocks = manifest.pageIds.compactMap { readPage(notebookId: id, pageId: $0)?.updatedAt }
+        guard var newest = clocks.first else { return nil }
+        for clock in clocks.dropFirst() { newest = CouchMerge.later(newest, clock) }
+        return newest
+    }
+
     public func load(_ documentID: String) throws -> CouchDocBody? {
         guard let (type, id) = CouchDocID.split(documentID) else { return nil }
 
