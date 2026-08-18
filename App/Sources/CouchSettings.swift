@@ -163,7 +163,15 @@ enum CouchSyncStack {
         store.didApplyChanges = onChange
 
         let stateURL = rootURL.appendingPathComponent(stateFileName(for: settings))
-        let initialState = loadState(stateURL)
+        var initialState = loadState(stateURL)
+        // Recorded deletions re-enter the outbox on every launch. A deletion is written to
+        // `.bopa-couch-deletions.json` synchronously, but its dirty mark travels through an async
+        // Task (see `SyncBackendHost`) — an app killed between the two held a tombstone nothing
+        // would ever push, forever, because nothing else re-read that file. Seeding here heals
+        // the window each launch: the read is one small JSON file, re-marking an already-dirty
+        // id changes nothing, and an id leaves the file only when its tombstone reaches the
+        // server (or the user declines to publish it).
+        initialState.dirty.formUnion(store.pendingDeletionIDs())
         onState?(initialState)
         let engine = CouchSyncEngine(
             client: client, store: store, deviceID: settings.deviceID,

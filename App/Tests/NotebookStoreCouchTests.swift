@@ -461,6 +461,29 @@ final class NotebookStoreCouchTests: XCTestCase {
             sink.reported.first?.revs[CouchDocID.notebook(notebook.notebookId)], "1-abc")
     }
 
+    /// A deletion is recorded durably the moment it happens, but its dirty mark used to travel
+    /// only through an async Task — an app killed between the two held a tombstone nothing would
+    /// ever push, because nothing re-read the deletions file at startup. Building the stack now
+    /// seeds the outbox from it, so every launch heals that window.
+    func testTheStackSeedsTheOutboxWithRecordedDeletions() async throws {
+        FileCouchStore(rootURL: rootURL, deviceID: "ipad")
+            .recordDeletion(CouchDocID.notebook("stranded"))
+        let settings = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+
+        let sink = StateSink()
+        let stack = try XCTUnwrap(CouchSyncStack.make(
+            settings: settings, rootURL: rootURL, onChange: {},
+            onState: { state in sink.reported.append(state) }))
+
+        XCTAssertTrue(
+            sink.reported.first?.dirty.contains(CouchDocID.notebook("stranded")) ?? false,
+            "the recorded deletion never re-entered the outbox")
+        let engineState = await stack.engine.currentState
+        XCTAssertTrue(engineState.dirty.contains(CouchDocID.notebook("stranded")))
+    }
+
     /// A checkpoint describes one server's change feed and one server's revisions. Kept in a single
     /// file, it was handed to whichever endpoint the user pointed at next: a foreign `since` skips
     /// changes instead of failing loudly, and foreign revisions suppress real updates as echoes.
