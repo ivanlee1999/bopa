@@ -197,7 +197,6 @@ private final class ScenarioDevice {
             page.updatedBy = deviceID
             store.set(docID(op), .page(page))
             markDirty(docID(op))
-            bumpOwningNotebook(of: page, at: at)
 
         case "erase":
             var page = try page(op)
@@ -410,25 +409,11 @@ private final class ScenarioDevice {
         if !persisted.dirty.contains(documentID) { persisted.dirty.append(documentID) }
     }
 
-    /// Saving ink also touches the notebook that owns the page, exactly as the real save paths do
-    /// (bopa `NotebookStore.savePage` writes the manifest; notable `PageDataManager` bumps the
-    /// same timestamps). Without this the runner's `draw` was a page-only write, which made it
-    /// impossible to express in a scenario the thing §5.5 warns about: a notebook's `updatedAt`
-    /// does double duty, and it is the ink bump that resurrects a notebook the peer deleted while
-    /// this device was drawing in it. A runner that models the save less faithfully than the app
-    /// cannot pin the app's behaviour, which is the gap `ink-only-edit-resurrects` closes.
-    ///
-    /// Only a notebook this device holds *live* is bumped. Drawing into one it has already applied
-    /// a deletion for would otherwise un-delete it locally with no peer involved at all.
-    private func bumpOwningNotebook(of page: CouchPage, at: String) {
-        guard let notebookID = page.notebookId else { return }
-        let notebookDocID = CouchDocID.notebook(notebookID)
-        guard case .notebook(var notebook)? = try? store.load(notebookDocID) else { return }
-        notebook.updatedAt = at
-        notebook.updatedBy = deviceID
-        store.set(notebookDocID, .notebook(notebook))
-        markDirty(notebookDocID)
-    }
+    // There is deliberately no notebook bump on a draw any more. The apps stopped advancing the
+    // notebook's envelope on ink (the envelope decides renames and moves, and ink used to clobber
+    // them), and the runner must model that faithfully — §6.4's liveness now comes from
+    // `ScenarioStore.contentClock`, the newest page clock, exactly as the real stores answer it.
+    // `ink-only-edit-resurrects` passes through that mechanism or not at all.
 
     private func save() {
         persisted.docs = store.snapshot().compactMapValues { body in
@@ -511,6 +496,18 @@ private final class ScenarioStore: CouchLocalStore, @unchecked Sendable {
     var conflictCopies: [String] { lock.withLock { copies } }
 
     func load(_ documentID: String) throws -> CouchDocBody? { lock.withLock { docs[documentID] } }
+
+    /// The same answer the real store computes from its page files: the newest page clock of the
+    /// notebook's pages held here — §6.4's liveness, now that ink never moves the envelope.
+    func contentClock(_ documentID: String) -> String? {
+        guard let (type, id) = CouchDocID.split(documentID), type == CouchDocType.notebook
+        else { return nil }
+        return lock.withLock {
+            docs.values
+                .compactMap { if case .page(let page) = $0, page.notebookId == id { page.updatedAt } else { nil } }
+                .max(by: { CouchMerge.millis($0) < CouchMerge.millis($1) })
+        }
+    }
 
     func apply(_ documentID: String, _ body: CouchDocBody, basedOn: CouchDocBody?) throws {
         lock.withLock { docs[documentID] = body }

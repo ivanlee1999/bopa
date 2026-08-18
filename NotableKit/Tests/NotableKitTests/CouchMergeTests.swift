@@ -477,6 +477,40 @@ final class CouchMergePropertyTests: XCTestCase {
             .applyDeletion)
     }
 
+    /// §6.4 liveness: ink no longer moves a notebook's envelope, so the deletion comparison reads
+    /// the newest page clock too — and a survival the envelope does not show stamps the envelope
+    /// to that instant, so the refusal travels to peers that never consult a content clock (every
+    /// build before this one).
+    func testADeletionYieldsToNewerInkTheEnvelopeDoesNotShow() {
+        let tombstone = CouchDeletedDoc(
+            type: "notebook", deletedAt: "2026-08-10T06:05:00Z", updatedBy: "ipad")
+        let notebook = CouchNotebook(
+            title: "Field notes", pageIds: ["p1"],
+            createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-10T06:00:00Z",
+            updatedBy: "boox")
+
+        // Ink at 06:10 outlives the 06:05 deletion even though the envelope says 06:00.
+        let survived = CouchMerge.merge(
+            .deleted(tombstone), .notebook(notebook), contentClock: "2026-08-10T06:10:00Z")
+        guard case .notebook(let stamped)? = survived else {
+            return XCTFail("the notebook must survive: \(String(describing: survived))")
+        }
+        XCTAssertEqual(
+            stamped.updatedAt, "2026-08-10T06:10:00Z",
+            "the envelope is stamped to the instant that justified survival")
+
+        // Without the clock the old envelope loses — the regression this guards against.
+        XCTAssertEqual(
+            CouchMerge.merge(.deleted(tombstone), .notebook(notebook)),
+            .deleted(tombstone))
+
+        // Ink older than the deletion does not resurrect: liveness is a fact, not a veto.
+        XCTAssertEqual(
+            CouchMerge.merge(
+                .deleted(tombstone), .notebook(notebook), contentClock: "2026-08-10T06:02:00Z"),
+            .deleted(tombstone))
+    }
+
     // MARK: - Page geometry
 
     /// The rule that keeps a notebook readable: a page's sheet describes how the ink already on it

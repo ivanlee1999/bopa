@@ -497,26 +497,28 @@ done is merging `deletedAt` like a tombstone (earliest-wins union, §4): that ma
 inexpressible, because the peer still holding the trashed copy re-buries the item on the next
 merge, forever.
 
-**Do not "fix" this by dropping the notebook `updatedAt` bump on an ink-only save.** That is the
-obvious mitigation — bopa bumps it in `NotebookStore.savePage`, notable in
-`PageDataManager.bumpEditTimestamps` — and it would indeed stop an ink save from beating a
-concurrent rename. It also breaks something worse, silently: a notebook's `updatedAt` does double
-duty. §6.4 reads it as *liveness* — "this notebook was alive more recently than your deletion" —
-so it is also what resurrects a notebook the peer deleted while this device was drawing in it.
-Remove the bump and an ink-only edit after a deletion no longer resurrects anything: the work is
-destroyed by a delete it outlived, with no error anywhere.
+**An ink-only save does not move the notebook's envelope — and §6.4 no longer needs it to.** The
+envelope once did double duty: it decided renames and moves (this section) *and* served as §6.4's
+liveness ("this notebook was alive more recently than your deletion"). The ink-save bump kept the
+liveness half true at the cost of the first half — drawing on one device silently undid a rename
+arriving from the other whenever the ink was later. Both apps have since dropped the bump, and
+liveness comes from where the work actually lands instead:
 
-Scenario 12 of §8.1, `delete-vs-later-edit-resurrects`, pins that rule — but it exercises it with
-a *rename*, whose own `updatedAt` write would survive the change, so on its own it would not catch
-the regression. Scenario 23, `ink-only-edit-resurrects`, closes that hole: the peer's later edit is
-a single stroke and nothing else, so the notebook survives only by way of the bump. Remove the bump
-and that scenario fails loudly, which is the whole reason it exists.
+- **The applier of a notebook deletion consults its content clock** — the newest `updatedAt`
+  among the pages it holds for that notebook (`CouchLocalStore.contentClock`). The §6.4
+  comparison reads `max(envelope updatedAt, content clock)`.
+- **A survival the envelope does not show stamps the envelope** to the instant that justified it
+  — the resurrection edit. The refused deletion then loses on every peer by the ordinary
+  envelope comparison, including peers that never consult a content clock (every build before
+  this rule), and the stamp happens only on a deletion refusal, so it cannot re-open the
+  rename-clobber this section exists to prevent.
 
-Because the bump is what the scenario turns on, the runners have to model it. A `draw` op **MUST**
-also set the owning notebook's `updatedAt`/`updatedBy` and queue it, exactly as the real save paths
-do (bopa `NotebookStore.savePage` writes the manifest; notable bumps the same timestamps). A runner
-whose `draw` writes only the page models the app less faithfully than the app behaves, and would
-report this scenario as a failure while the product is correct.
+Scenario 12 of §8.1, `delete-vs-later-edit-resurrects`, pins the rename shape; scenario 23,
+`ink-only-edit-resurrects`, pins the ink shape — the peer's later edit is a single stroke and
+nothing else, so the notebook survives only by way of the content clock. A runner's `draw` op
+**MUST** write only the page (bumping the notebook would model a save path neither app has), and
+its scenario store **MUST** answer `contentClock` from the page documents it holds, exactly as
+the real stores answer it from Room and from the notebook directory.
 
 Two future protocol changes could give independent scalar edits their own answer. Both are future
 work; neither is part of this version:
@@ -573,9 +575,18 @@ sequential, not alternatives — an object is trashed, and later purged.
 
 When one side holds a live document and the other a tombstone:
 
-- `millis(live.updatedAt) > millis(tomb.deletedAt)` → **resurrect**: the live document wins
+- `millis(liveness) > millis(tomb.deletedAt)` → **resurrect**: the live document wins
   and is written over the tombstone's `_rev`.
 - otherwise → **apply the deletion** locally.
+
+**Liveness** is the live document's `updatedAt` — or, for a notebook, the newest `updatedAt`
+among the pages the applier holds for it, whichever is later. Ink deliberately does not move a
+notebook's envelope (§5.5), so the envelope alone can no longer answer "was there work after the
+deletion"; the pages can. When the survival was justified by a page clock the envelope does not
+show, the merged result carries the envelope **stamped to that instant** — the resurrection edit
+— so the refusal travels: every peer, on any build, then resolves the same conflict by the
+ordinary envelope comparison. The stamp happens only on a deletion refusal, never on a plain
+merge, so it cannot hand ink the power over renames that §5.5 removed.
 
 Pages have no independent lifecycle: they live and die with their notebook's `pageIds` /
 `deletedPageIds`.

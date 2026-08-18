@@ -130,7 +130,18 @@ extension CouchMerge {
     ///
     /// Mismatched shapes (a page against a notebook) cannot arise from a well-formed database —
     /// the id prefix fixes the type — so they are reported rather than guessed at.
-    public static func merge(_ a: CouchDocBody, _ b: CouchDocBody) -> CouchDocBody? {
+    ///
+    /// `contentClock` is the newest content instant the *store* holds for this document beyond
+    /// its envelope — for a notebook, the newest `updatedAt` among its local pages (see
+    /// `CouchLocalStore.contentClock`). §6.4's delete-vs-edit question is "was there work after
+    /// the deletion", and since an ink save deliberately no longer advances the notebook's
+    /// envelope (the envelope is what renames and moves are decided by, and ink used to clobber
+    /// them), the envelope alone can no longer answer it: ink drawn after a peer's purge would be
+    /// destroyed by a deletion it outlived. The clock restores the signal without touching the
+    /// envelope semantics.
+    public static func merge(
+        _ a: CouchDocBody, _ b: CouchDocBody, contentClock: String? = nil
+    ) -> CouchDocBody? {
         switch (a, b) {
         case (.page(let x), .page(let y)): return .page(merge(x, y))
         case (.notebook(let x), .notebook(let y)): return .notebook(merge(x, y))
@@ -154,11 +165,24 @@ extension CouchMerge {
                     ? x.updatedBy : y.updatedBy))
 
         case (.deleted(let tomb), let live), (let live, .deleted(let tomb)):
-            // An edit made after the deletion resurrects the document; otherwise the delete stands.
+            // An edit made after the deletion resurrects the document; otherwise the delete
+            // stands. Liveness is the envelope or the store's content clock, whichever is later —
+            // ink no longer moves a notebook's envelope, so the envelope alone would let a
+            // deletion destroy pages written after it.
+            let liveness = contentClock.map { later(live.updatedAt, $0) } ?? live.updatedAt
             switch resolveDeletion(
-                liveUpdatedAt: live.updatedAt,
+                liveUpdatedAt: liveness,
                 tombstoneDeletedAt: tomb.deletedAt.isEmpty ? nil : tomb.deletedAt) {
-            case .resurrect: return live
+            case .resurrect:
+                if case .notebook(var notebook) = live, millis(notebook.updatedAt) < millis(liveness) {
+                    // The survival was justified by content the envelope does not show. Stamp the
+                    // envelope to that instant — the resurrection edit — so the refusal travels: a
+                    // peer that already applied the deletion compares this envelope against its
+                    // tombstone and resurrects too, whatever build it runs.
+                    notebook.updatedAt = liveness
+                    return .notebook(notebook)
+                }
+                return live
             case .applyDeletion: return .deleted(tomb)
             }
 
@@ -175,6 +199,16 @@ extension CouchMerge {
 public protocol CouchLocalStore: Sendable {
     /// Current local content, or nil when this device has never held the document.
     func load(_ documentID: String) throws -> CouchDocBody?
+
+    /// The newest content instant this device holds for the document *beyond* its envelope — for
+    /// a notebook, the newest `updatedAt` among its local pages; nil for every other type and for
+    /// a notebook with no pages here.
+    ///
+    /// Read only by §6.4's delete-vs-edit comparison (see `CouchMerge.merge(_:_:contentClock:)`).
+    /// Deliberately not folded into `load`'s envelope: what `load` returns is what gets pushed,
+    /// and inflating a pushed envelope with ink time would hand ink the power to overwrite
+    /// renames again — the exact defect removing the ink-save bump fixed.
+    func contentClock(_ documentID: String) -> String?
     /// Replaces local content with the merged result.
     ///
     /// `basedOn` is the local copy the merge actually consumed — nil when this device held none.
@@ -219,6 +253,9 @@ public protocol CouchLocalStore: Sendable {
 public extension CouchLocalStore {
     /// A store that holds no images has none to fetch. Saves every test double from restating it.
     func missingAssetIDs() throws -> [String] { [] }
+
+    /// A store with no content beyond envelopes — most test doubles — has no liveness to add.
+    func contentClock(_ documentID: String) -> String? { nil }
 
     /// A store that cannot enumerate itself reports nothing, which makes §6.7's guard *more*
     /// cautious rather than less: with no library to compare against, any large batch of deletions
@@ -695,7 +732,9 @@ public actor CouchSyncEngine {
                     continue
                 }
                 state.revs[documentID] = remote.rev
-                guard let merged = CouchMerge.merge(local, remote.body) else {
+                guard let merged = CouchMerge.merge(
+                    local, remote.body, contentClock: store.contentClock(documentID))
+                else {
                     // Shapes disagree — do not overwrite either side.
                     if let raw = try await client.getRaw(documentID) {
                         try store.applyConflictCopy(documentID, json: raw.json)
@@ -1116,7 +1155,9 @@ public actor CouchSyncEngine {
             let local = try store.load(row.id)
             let merged: CouchDocBody
             if let local {
-                guard let result = CouchMerge.merge(local, incoming) else {
+                guard let result = CouchMerge.merge(
+                    local, incoming, contentClock: store.contentClock(row.id))
+                else {
                     // Nothing to preserve when the body never arrived; the tombstone is the fact,
                     // and the revision still has to be recorded so the next push builds on it.
                     if let json = row.json {
