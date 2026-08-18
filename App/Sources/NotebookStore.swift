@@ -333,6 +333,10 @@ final class NotebookStore: ObservableObject {
         var added = 0
 
         for pageId in manifest.pageIds {
+            // A child a previous split filed can be listed here in its own right; when its parent
+            // re-divides in the same pass (below), the child's entry is already placed and this
+            // one would be a duplicate.
+            guard !pageIds.contains(pageId) else { continue }
             guard let page = readPageFromDisk(notebookId: notebookId, pageId: pageId) else {
                 pageIds.append(pageId)
                 continue
@@ -346,10 +350,26 @@ final class NotebookStore: ObservableObject {
                 continue
             }
             for produced in divided {
-                try? encoder.encode(produced)
-                    .write(
-                        to: pageURL(notebookId: notebookId, pageId: produced.id), options: .atomic)
-                pageIds.append(produced.id)
+                // Never write over a child that already exists: the split rebuilds children from
+                // the parent alone, and a page that re-grew after an earlier division — a peer's
+                // tall copy merged back in, most likely — would otherwise have its children
+                // regenerated over every stroke drawn on them since. Folding through the ordinary
+                // page merge keeps both: the moved ink by its stable ids, and the child's own.
+                let target = pageURL(notebookId: notebookId, pageId: produced.id)
+                let written: PageFile
+                if produced.id != pageId,
+                   let existing = readPageFromDisk(notebookId: notebookId, pageId: produced.id) {
+                    let dir = notebookDir(notebookId)
+                    let merged = CouchMerge.merge(
+                        CouchMapping.couchPage(from: existing, deviceID: deviceID, notebookDir: dir),
+                        CouchMapping.couchPage(from: produced, deviceID: deviceID, notebookDir: dir))
+                    written = CouchMapping.pageFile(
+                        from: merged, id: produced.id, existing: existing, notebookDir: dir)
+                } else {
+                    written = produced
+                }
+                try? encoder.encode(written).write(to: target, options: .atomic)
+                if !pageIds.contains(produced.id) { pageIds.append(produced.id) }
             }
             added += divided.count - 1
         }

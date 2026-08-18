@@ -344,6 +344,68 @@ final class NavigatorTests: XCTestCase {
         XCTAssertEqual(store.bookmarkedPageIds(in: notebookId), [pageId])
     }
 
+    /// The division must leave the parent a record of the ink it moved — §6.6 rule 7. Without it
+    /// a peer still holding the tall copy unions the moved strokes back into the parent on every
+    /// merge, and the notebook never converges.
+    func testTheParentRemembersTheInkThatLeftIt() throws {
+        let pageId = pageIds[0]
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        let sheet = try XCTUnwrap(page.pageHeight)
+        page.strokes = [
+            try makeStroke(id: "top", top: 10),
+            try makeStroke(id: "below", top: Float(sheet) + 100),
+        ]
+        try store.savePage(page)
+
+        store.splitOversizedPages(in: notebookId)
+
+        let parent = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        XCTAssertEqual(parent.deletedStrokes.map(\.id), ["below"])
+        let childId = try XCTUnwrap(pageIds.last)
+        let child = try store.loadPage(notebookId: notebookId, pageId: childId)
+        XCTAssertEqual(child.strokes.map(\.id), ["below"])
+        XCTAssertTrue(
+            child.deletedStrokes.isEmpty,
+            "the child must carry no tombstone for the ink now alive on it")
+    }
+
+    /// A page can re-grow after its division — a peer that has not learned the split pushes new
+    /// below-sheet ink, most plausibly — and the re-division used to rebuild every child from the
+    /// parent alone, over whatever had been drawn on the child since. The produced child is folded
+    /// into the existing one through the ordinary page merge instead, and the page list gains no
+    /// duplicate entries on the way.
+    func testARegrownParentDoesNotRebuildItsChildren() throws {
+        let pageId = pageIds[0]
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        let sheet = try XCTUnwrap(page.pageHeight)
+        page.strokes = [
+            try makeStroke(id: "top", top: 10),
+            try makeStroke(id: "below", top: Float(sheet) + 100),
+        ]
+        try store.savePage(page)
+        store.splitOversizedPages(in: notebookId)
+        let childId = try XCTUnwrap(pageIds.last)
+
+        // Ink drawn on the child after the division…
+        var child = try store.loadPage(notebookId: notebookId, pageId: childId)
+        child.strokes.append(try makeStroke(id: "child-ink", top: 50))
+        try store.savePage(child)
+        // …and the parent re-grown underneath it, the way an old peer's push arrives.
+        var regrown = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        regrown.strokes.append(try makeStroke(id: "regrown", top: Float(sheet) + 300))
+        try store.savePage(regrown)
+
+        store.splitOversizedPages(in: notebookId)
+
+        let after = try store.loadPage(notebookId: notebookId, pageId: childId)
+        XCTAssertEqual(
+            Set(after.strokes.map(\.id)), ["below", "child-ink", "regrown"],
+            "the child keeps its own ink and gains the moved ink — nothing is rebuilt away")
+        let ids = pageIds
+        XCTAssertEqual(ids.count, Set(ids).count, "no page is listed twice")
+        XCTAssertEqual(ids, [pageId, childId])
+    }
+
     private func makeStroke(id: String, top: Float) throws -> StrokeDTO {
         let points = [
             NotableStrokePoint(x: 10, y: top, pressure: 0.5),
