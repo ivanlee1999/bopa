@@ -1,4 +1,5 @@
 import NotableKit
+import PencilKit
 import UIKit
 import XCTest
 
@@ -504,5 +505,113 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertEqual(
             container.canvas.zoomScale,
             portrait.width / CGFloat(sheet.width), accuracy: 0.001)
+    }
+
+    // MARK: - Ink lands on the paper
+
+    /// The page point under a point on screen: what a zooming scroll view puts beneath a touch —
+    /// how far it has scrolled, plus where the touch landed, in the content's own unzoomed units.
+    /// The drawing *is* this scroll view's content, so these are the coordinates PencilKit hands
+    /// back for a stroke drawn there, and the ones it is stored in.
+    private func pagePoint(_ onScreen: CGPoint, in container: CanvasContainerView) -> CGPoint {
+        let canvas = container.canvas
+        // `convert` carries the scroll offset (a scroll view scrolls by its bounds origin); the
+        // zoom is the content view's own and has to be taken off here.
+        let scrolled = canvas.convert(onScreen, from: container)
+        let scale = max(canvas.zoomScale, 0.01)
+        return CGPoint(x: scrolled.x / scale, y: scrolled.y / scale)
+    }
+
+    /// Where the ink goes is settled by the canvas's own coordinate space, and by nothing else.
+    ///
+    /// A stroke is stored in page units, and PencilKit reports its points in the canvas's content
+    /// coordinates — which *are* page units, because the view scrolls and zooms the scroll view
+    /// around the drawing rather than moving the drawing. So wherever the reader has scrolled or
+    /// zoomed to, the corner of the paper they can see is page (0, 0), and a nib put down on it
+    /// leaves ink there.
+    ///
+    /// Worth pinning rather than assuming, because the sibling Android app had exactly this go
+    /// wrong: it files ink by converting screen pixels through a scroll and a zoom it reads for
+    /// itself, and a view that moved while the pen was down stored a line of a synced note on top
+    /// of the line above it. Nothing here reads a scroll offset to place ink — and this test is
+    /// what says so out loud. Centring the page by moving views instead of by `contentInset`, or
+    /// converting exported points through `contentOffset`, would both fail it.
+    private func assertPaperIsPageSpace(
+        _ container: CanvasContainerView, _ message: String, line: UInt = #line
+    ) {
+        let corner = container.pageSheet.frame.origin
+        let origin = pagePoint(corner, in: container)
+        XCTAssertEqual(origin.x, 0, accuracy: 0.5, "\(message): paper's left edge", line: line)
+        XCTAssertEqual(origin.y, 0, accuracy: 0.5, "\(message): paper's top edge", line: line)
+
+        // And the far edge of the drawn paper is the far edge of the sheet, so ink cannot be
+        // stored past a page boundary it never crossed on screen.
+        let farEdge = pagePoint(
+            CGPoint(x: container.pageSheet.frame.maxX, y: corner.y), in: container)
+        XCTAssertEqual(
+            farEdge.x, container.pageWidth, accuracy: 0.5, "\(message): paper's right edge",
+            line: line)
+    }
+
+    func testInkLandsOnThePaperWhereverTheViewIsLooking() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet, ink: deepInk)
+        container.sheetHeight = CGFloat(sheet.height)
+        rotate(container, to: portrait)
+        assertPaperIsPageSpace(container, "fitted to the width")
+
+        // Scrolled a screenful down the page — the state the misplaced line was written in.
+        container.canvas.contentOffset.y = container.canvas.bounds.height
+        container.updateContentGeometry()
+        assertPaperIsPageSpace(container, "scrolled down")
+
+        // Zoomed in past the fit, and scrolled again under the new scale.
+        container.canvas.zoomScale = container.canvas.zoomScale * 2
+        container.canvas.contentOffset.y = container.canvas.bounds.height * 3
+        container.updateContentGeometry()
+        assertPaperIsPageSpace(container, "zoomed in and scrolled")
+
+        // Zoomed out until the paper is narrower than the view, which is the case that centres
+        // it: the slack is an inset, so page (0, 0) is still the corner of the paper.
+        container.canvas.zoomScale = container.canvas.minimumZoomScale
+        rotate(container, to: wide)
+        assertPaperIsPageSpace(container, "centred in a window wider than the paper")
+    }
+
+    /// The rotation case on its own: the page is re-fitted to the new width, and the paper and
+    /// the ink space are re-fitted together or ink written after a rotation lands beside the nib.
+    func testInkLandsOnThePaperAcrossARotation() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet, ink: deepInk)
+        container.sheetHeight = CGFloat(sheet.height)
+        rotate(container, to: portrait)
+        container.canvas.contentOffset.y = container.canvas.bounds.height
+        container.updateContentGeometry()
+
+        rotate(container, to: landscape)
+        assertPaperIsPageSpace(container, "after a rotation")
+    }
+
+    /// The other half of the same invariant, on the way out: a stroke exports the page
+    /// coordinates it holds, and nothing about the view is allowed into that arithmetic.
+    func testExportedInkKeepsThePageCoordinatesItWasDrawnAt() throws {
+        let drawnAt = CGPoint(x: 300, y: 1500)
+        let controlPoints = (0...4).map { i -> PKStrokePoint in
+            PKStrokePoint(
+                location: CGPoint(x: drawnAt.x + CGFloat(i) * 10, y: drawnAt.y),
+                timeOffset: TimeInterval(i) * 0.01,
+                size: CGSize(width: 5, height: 5),
+                opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        let stroke = PKStroke(
+            ink: PKInk(.pen, color: .black),
+            path: PKStrokePath(controlPoints: controlPoints, creationDate: Date()))
+
+        let dto = try XCTUnwrap(PencilKitBridge.dto(from: stroke))
+        let points = try dto.decodedPoints()
+
+        XCTAssertEqual(Double(points[0].x), Double(drawnAt.x), accuracy: 0.02)
+        XCTAssertEqual(Double(points[0].y), Double(drawnAt.y), accuracy: 0.02)
+        XCTAssertEqual(Double(points.last!.x), Double(drawnAt.x) + 40, accuracy: 0.02)
     }
 }
