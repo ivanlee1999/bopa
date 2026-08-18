@@ -384,6 +384,12 @@ Carrying `sinceAt` forward is the whole clock. Re-stamping it on every sweep wou
 asset permanently young and nothing would ever be collected — the same mistake §6.6 ("Producing
 tombstones") warns against when it forbids re-stamping a `deletedAt`, for the mirror-image reason.
 
+`enumeratedAt` and `sinceAt` are **sync-relevant stamps and read the corrected clock** (§7.1a).
+They are compared across devices — one device's `sinceAt` against another's freshness window — so a
+device an hour fast would age its candidates an hour early and sweep bytes its peer still counts as
+recent. This is precisely the "every sync-relevant stamp or none of them" rule, applied to the two
+instants this section invents.
+
 #### 3.5.3 When an asset may be deleted
 
 **Which devices get a vote.** The enumeration already reads every live document, and every one
