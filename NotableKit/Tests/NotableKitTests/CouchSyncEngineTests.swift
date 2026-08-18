@@ -794,42 +794,115 @@ final class CouchSyncEngineTests: XCTestCase {
     /// The other half of "keep them on the server": they have to actually come back. Dropping the
     /// tombstones alone would leave the notebooks gone here, present there, and unreachable —
     /// `_changes` never re-announces a document that has not changed, and declining to publish a
-    /// deletion changes nothing. The discard rewinds the checkpoint and forgets the ids' revisions
-    /// so the feed replays them, which is what makes the promise in the UI true.
+    /// deletion changes nothing. The discard rewinds the checkpoint and forgets the recorded
+    /// revisions so the feed replays them, which is what makes the promise in the UI true.
+    ///
+    /// The notebooks carry pages, deliberately: only the notebooks are tombstoned by a wipe — a
+    /// page whose file is gone just falls out of the outbox, its recorded revision untouched —
+    /// so a discard that forgot only the notebook revisions replayed the pages into the echo
+    /// check and restored every notebook as an empty shell. The *whole* rev map has to go.
     func testDiscardingHeldDeletionsBringsTheNotebooksBackOnTheNextPull() async throws {
         // The device had a library and so does the server: the state a wiped database starts from.
         let ids = (0..<12).map { CouchDocID.notebook("nb\($0)") }
+        let pageIDs = (0..<12).map { CouchDocID.page("nb\($0)-p1") }
         for (index, id) in ids.enumerated() {
             ipadStore.set(id, .notebook(CouchNotebook(
-                title: "notebook \(index)", pageIds: [], createdAt: stamp(0),
+                title: "notebook \(index)", pageIds: ["nb\(index)-p1"], createdAt: stamp(0),
                 updatedAt: stamp(1), updatedBy: "ipad")))
+            ipadStore.set(pageIDs[index], .page(CouchPage(
+                notebookId: "nb\(index)",
+                strokes: [stroke("s\(index)", at: 1, device: "ipad")],
+                createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "ipad")))
         }
-        await ipad.markDirty(ids)
+        await ipad.markDirty(ids + pageIDs)
         _ = await ipad.flush()
         // Caught up, the way a device that has been syncing normally would be.
         _ = try await ipad.pull()
 
-        // Now the local library vanishes and every notebook turns into a tombstone.
+        // Now the local library vanishes: the pages' files are simply gone, and every notebook
+        // turns into a tombstone — the shape a wipe leaves behind.
+        for id in pageIDs { ipadStore.remove(id) }
         for id in ids {
             ipadStore.set(id, .deleted(CouchDeletedDoc(
                 type: CouchDocType.notebook, deletedAt: stamp(10), updatedBy: "ipad")))
         }
-        await ipad.markDirty(ids)
+        await ipad.markDirty(ids + pageIDs)
         let held = await ipad.flush()
         XCTAssertEqual(held.heldDeletions.sorted(), ids.sorted())
 
         await ipad.discardHeldDeletions(held.heldDeletions)
         let pull = try await ipad.pull()
 
-        XCTAssertEqual(pull.applied.sorted(), ids.sorted(), "the whole library should have replayed")
+        XCTAssertEqual(pull.applied.sorted(), (ids + pageIDs).sorted(),
+                       "the whole library, pages included, should have replayed")
         XCTAssertTrue(pull.skippedEchoes.isEmpty,
                       "the recorded revisions must not make the replay look like this device's echo")
         for (index, id) in ids.enumerated() {
             XCTAssertEqual(ipadStore.notebook(id)?.title, "notebook \(index)",
                            "the notebook should be live again, with its title")
+            XCTAssertEqual(ipadStore.page(pageIDs[index])?.strokes.map(\.id), ["s\(index)"],
+                           "and its page must come back with its ink, not as an empty shell")
         }
         XCTAssertTrue(ids.allSatisfy { !server.isDeleted($0) },
                       "and nothing should have been deleted on the server")
+    }
+
+    /// The wipe that tombstones the notebooks takes the folder tree in the same stroke. A guard
+    /// that held only the notebooks pushed the folder tombstones immediately — deleting the
+    /// peer's folders behind the very question it was asking — so a folder tombstone must be
+    /// held with the batch and approvable like a notebook's.
+    func testAFolderTombstoneIsHeldWithTheBatchAndApprovable() async throws {
+        let notebooks = deleteTwelveNotebooks()
+        let folder = CouchDocID.folder("f1")
+        ipadStore.set(folder, .deleted(CouchDeletedDoc(
+            type: CouchDocType.folder, deletedAt: stamp(10), updatedBy: "ipad")))
+        await ipad.markDirty(notebooks + [folder])
+
+        let held = await ipad.flush()
+
+        XCTAssertTrue(held.blockedByDeletionGuard)
+        XCTAssertTrue(held.heldDeletions.contains(folder),
+                      "the folder tombstone from the same purge must be held, not pushed")
+        XCTAssertTrue(server.documentIDs().isEmpty, "nothing should have reached the server")
+
+        // "Delete them on the server too" covers the folder the same way it covers a notebook.
+        await ipad.approveHeldDeletions(held.heldDeletions)
+        let approved = await ipad.flush()
+
+        XCTAssertTrue(approved.pushed.contains(folder))
+        XCTAssertTrue(server.isDeleted(folder), "the approved folder deletion should have gone out")
+        let pending = await ipad.pendingCount
+        XCTAssertEqual(pending, 0)
+    }
+
+    /// And the other answer: a discarded folder tombstone is dropped unpublished, and the
+    /// server's copy of the folder comes back on the replay exactly as a notebook's does.
+    func testADiscardedFolderTombstoneComesBackOnTheNextPull() async throws {
+        let folder = CouchDocID.folder("f1")
+        ipadStore.set(folder, .folder(CouchFolder(
+            title: "school", createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "ipad")))
+        await ipad.markDirty([folder])
+        _ = await ipad.flush()
+        _ = try await ipad.pull()
+
+        let notebooks = deleteTwelveNotebooks()
+        ipadStore.set(folder, .deleted(CouchDeletedDoc(
+            type: CouchDocType.folder, deletedAt: stamp(10), updatedBy: "ipad")))
+        await ipad.markDirty(notebooks + [folder])
+        let held = await ipad.flush()
+        XCTAssertTrue(held.heldDeletions.contains(folder))
+
+        await ipad.discardHeldDeletions(held.heldDeletions)
+        let pull = try await ipad.pull()
+
+        XCTAssertTrue(pull.applied.contains(folder), "the folder should have replayed")
+        guard case .folder(let restored)? = ipadStore.body(folder) else {
+            return XCTFail("the folder should be live again")
+        }
+        XCTAssertEqual(restored.title, "school")
+        XCTAssertFalse(server.isDeleted(folder), "the server's copy must be untouched")
+        let pending = await ipad.pendingCount
+        XCTAssertEqual(pending, 0, "nothing left queued to delete it later")
     }
 
     /// One tap must not disarm the guard. An approval is consumed by the flush that acts on it and
