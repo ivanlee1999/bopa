@@ -117,6 +117,11 @@ final class EditorPageModel: NSObject, ObservableObject {
     func foldInRemoteInk() {
         guard remoteInkPending, !liveState.isDrawing, let pageId, let store else { return }
         saveNow()
+        // A failed flush leaves `dirty` set, and reloading now would replace the drawing with
+        // the file and clear it — throwing away exactly the strokes the save alert just promised
+        // were safe, and cancelling their retry with them. `remoteInkPending` stays set, so the
+        // fold runs again at the next pencil-lift or apply, once a save has landed.
+        guard !dirty else { return }
         guard let onDisk = try? store.loadPage(notebookId: notebookId, pageId: pageId) else {
             return  // a torn or missing read is not a reason to drop what is on the canvas
         }

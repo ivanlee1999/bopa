@@ -103,6 +103,66 @@ final class EditorPageModelTests: XCTestCase {
             "without a tombstone the peer resurrects the stroke on the next merge")
     }
 
+    // MARK: Folding in remote ink must not cost local ink
+
+    /// The fold flushes, then reloads from the file. When the flush *fails*, the reload used to
+    /// run anyway — replacing the drawing with the file and clearing `dirty`, which discarded the
+    /// very strokes the save alert had just promised were safe and cancelled their retry. The
+    /// fold now waits until a save has landed; `remoteInkPending` stays set so it still happens.
+    func testARemoteApplyDoesNotReloadOverInkAFailedSaveStillOwes() throws {
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        let s1 = try makeStroke(id: "s1", second: 0)
+        page.strokes = [s1]
+        try store.savePage(page)
+
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+
+        // The user draws a second stroke; it is not saved yet.
+        let unsaved = PencilKitBridge.drawing(from: [try makeStroke(id: "s2", second: 2)])
+        model.drawing = PKDrawing(strokes: model.drawing.strokes + unsaved.strokes)
+        model.scheduleSave()
+
+        // The BOOX's stroke lands in the file underneath the open page...
+        var onDisk = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        onDisk.strokes.append(try makeStroke(id: "from-boox", second: 4))
+        try writePageDirectly(onDisk)
+
+        // ...and sync announces it while the store cannot take the flush.
+        let heal = try breakTheStore()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertEqual(
+            model.drawing.strokes.count, 2,
+            "the reload threw away the unsaved stroke the save alert promised was safe")
+        XCTAssertTrue(model.dirty, "clearing dirty here cancels the retry")
+        XCTAssertTrue(model.remoteInkPending, "the fold still owes the canvas the BOOX's stroke")
+        XCTAssertNotNil(model.saveError)
+
+        // Once the store heals, the next apply folds everything together: the local stroke is
+        // flushed first, so the reload holds both devices' ink.
+        try heal.write(to: manifestURL)
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertEqual(model.drawing.strokes.count, 3)
+        XCTAssertFalse(model.dirty)
+        XCTAssertFalse(model.remoteInkPending)
+        let final = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        XCTAssertEqual(final.strokes.count, 3)
+    }
+
+    /// Writes straight to disk, bypassing the store — standing in for the sync engine.
+    private func writePageDirectly(_ page: PageFile) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        try encoder.encode(page).write(
+            to: rootURL.appendingPathComponent(
+                "notebooks/\(notebookId)/pages/\(page.id).json"),
+            options: .atomic)
+    }
+
     /// The ordinary path still works: drawing, saving, and the baseline following the save.
     func testASuccessfulSaveAdvancesTheBaseline() throws {
         var page = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
