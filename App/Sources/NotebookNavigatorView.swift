@@ -467,8 +467,7 @@ struct BookmarksTabView: View {
                 ZStack {
                     Rectangle().fill(.white)
                     if let image = ThumbnailRenderer.thumbnail(
-                        notebookId: notebookId, pageId: pageId,
-                        revision: store.manifest(id: notebookId)?.updatedAt ?? "", store: store) {
+                        notebookId: notebookId, pageId: pageId, store: store) {
                         Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
                     }
                 }
