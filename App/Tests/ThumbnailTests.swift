@@ -106,4 +106,86 @@ final class ThumbnailTests: XCTestCase {
         XCTAssertNotNil(first)
         XCTAssertTrue(first === second, "an untouched page was re-rendered")
     }
+
+    // MARK: What the card shows
+
+    /// Puts a tiny red PNG at `images/<name>` in the notebook dir, the way the sync engine's
+    /// asset download does.
+    private func installImageFile(named name: String) throws {
+        let imagesDir = rootURL.appendingPathComponent(
+            "notebooks/\(notebookId)/images", isDirectory: true)
+        try FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4), format: format)
+            .pngData { ctx in
+                UIColor.systemRed.setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+            }
+        try png.write(to: imagesDir.appendingPathComponent(name))
+    }
+
+    private func makeImageDTO(uri: String, x: Int, y: Int, width: Int, height: Int) -> ImageDTO {
+        let now = NotableDate.format(Date())
+        return ImageDTO(
+            id: UUID().uuidString.lowercased(), x: x, y: y, width: width, height: height,
+            uri: uri, createdAt: now, updatedAt: now)
+    }
+
+    /// Reads one pixel, in point coordinates measured from the top-left, the way the frames are.
+    private func pixel(of image: UIImage, x: Int, y: Int) throws -> (r: UInt8, g: UInt8, b: UInt8) {
+        let width = Int(image.size.width)
+        let height = Int(image.size.height)
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(
+            data: &data, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(
+            try XCTUnwrap(image.cgImage),
+            in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+        let offset = (y * width + x) * 4
+        return (data[offset], data[offset + 1], data[offset + 2])
+    }
+
+    private func isWhite(_ p: (r: UInt8, g: UInt8, b: UInt8)) -> Bool {
+        p.r > 240 && p.g > 240 && p.b > 240
+    }
+
+    /// An image-heavy page used to render as a blank card: the composite was paper + PDF
+    /// background + strokes, and the images the editor draws never appeared in it.
+    func testAPageImageAppearsInTheThumbnail() throws {
+        try installImageFile(named: "pix.png")
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        page.images = [makeImageDTO(uri: "images/pix.png", x: 100, y: 200, width: 800, height: 800)]
+        page.strokes = [try makeStroke(id: "s1")]
+        try store.savePage(page)
+
+        let thumb = try XCTUnwrap(
+            ThumbnailRenderer.thumbnail(notebookId: notebookId, pageId: pageIds[0], store: store))
+
+        let scale = ThumbnailRenderer.size.width / CGFloat(page.pageSize.width)
+        let center = try pixel(
+            of: thumb, x: Int((100 + 400) * scale), y: Int((200 + 400) * scale))
+        XCTAssertFalse(isWhite(center), "the image region rendered as blank paper")
+        XCTAssertGreaterThan(center.r, center.g, "the red picture should render red")
+
+        let paper = try pixel(of: thumb, x: Int(ThumbnailRenderer.size.width) - 20, y: 20)
+        XCTAssertTrue(isWhite(paper), "paper beside the image must stay white")
+    }
+
+    /// An image whose file has not arrived yet (or is gone) is skipped, the way the editor
+    /// skips it — never a crash, never a hole drawn over the page.
+    func testAMissingImageFileLeavesTheThumbnailRenderable() throws {
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        page.images = [makeImageDTO(uri: "images/gone.png", x: 100, y: 200, width: 800, height: 800)]
+        try store.savePage(page)
+
+        let thumb = try XCTUnwrap(
+            ThumbnailRenderer.thumbnail(notebookId: notebookId, pageId: pageIds[0], store: store))
+        let scale = ThumbnailRenderer.size.width / CGFloat(page.pageSize.width)
+        let center = try pixel(
+            of: thumb, x: Int((100 + 400) * scale), y: Int((200 + 400) * scale))
+        XCTAssertTrue(isWhite(center), "a missing file must render as paper, not as a hole")
+    }
 }

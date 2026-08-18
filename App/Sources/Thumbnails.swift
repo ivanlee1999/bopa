@@ -3,8 +3,8 @@ import PencilKit
 import SwiftUI
 import UIKit
 
-/// Renders notebook cover thumbnails (first page: paper + PDF background + ink) for the
-/// library grid. Cached by notebook id + page id + the page file's own revision, so a card
+/// Renders notebook cover thumbnails (first page: paper + PDF background + page images + ink)
+/// for the library grid. Cached by notebook id + page id + the page file's own revision, so a card
 /// refreshes when its page changes and only then.
 @MainActor
 enum ThumbnailRenderer {
@@ -40,6 +40,10 @@ enum ThumbnailRenderer {
         let notebookDir = store.notebookDirURL(notebookId)
         let background = BackgroundRenderer.image(
             for: page, notebookDir: notebookDir, storeRoot: store.rootURL)
+        // The same loading the editor uses (uri resolution included), so a picture that shows on
+        // the canvas shows on the card; one whose file is missing is skipped there, not drawn as
+        // a hole here.
+        let pageImages = BackgroundRenderer.pageImages(for: page, notebookDir: notebookDir)
         let drawing = PencilKitBridge.drawing(from: page.strokes)
 
         let image = UIGraphicsImageRenderer(size: size).image { context in
@@ -49,6 +53,17 @@ enum ThumbnailRenderer {
             if let background {
                 let height = size.width * background.size.height / background.size.width
                 background.draw(in: CGRect(x: 0, y: 0, width: size.width, height: height))
+            }
+            // Above the background, below the ink — the z-order CanvasContainerView installs
+            // them in. An image-heavy page used to render as a blank card: the composite was
+            // paper + background + strokes, and the images the editor draws never appeared.
+            for pageImage in pageImages {
+                let frame = pageImage.frame
+                pageImage.image.draw(in: CGRect(
+                    x: frame.origin.x * scale,
+                    y: frame.origin.y * scale,
+                    width: frame.width * scale,
+                    height: frame.height * scale))
             }
             if !drawing.strokes.isEmpty {
                 drawing.image(from: pageRect, scale: scale)
