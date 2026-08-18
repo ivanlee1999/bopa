@@ -729,29 +729,52 @@ struct EditorCanvasView: UIViewRepresentable {
         func scrollViewDidEndDragging(
             _ scrollView: UIScrollView, willDecelerate decelerate: Bool
         ) {
-            let axis = parent.config.pageTurn
+            let inset = scrollView.adjustedContentInset
             let overshoot: CGFloat
-            switch axis {
+            switch parent.config.pageTurn {
             case .vertical:
-                let maxY = max(scrollView.contentSize.height - scrollView.bounds.height, 0)
-                overshoot =
-                    scrollView.contentOffset.y > maxY
-                    ? scrollView.contentOffset.y - maxY
-                    : min(scrollView.contentOffset.y, 0)
+                overshoot = Self.overshoot(
+                    offset: scrollView.contentOffset.y,
+                    contentLength: scrollView.contentSize.height,
+                    boundsLength: scrollView.bounds.height,
+                    leadingInset: inset.top,
+                    trailingInset: inset.bottom)
             case .horizontal:
-                let maxX = max(scrollView.contentSize.width - scrollView.bounds.width, 0)
-                overshoot =
-                    scrollView.contentOffset.x > maxX
-                    ? scrollView.contentOffset.x - maxX
-                    : min(scrollView.contentOffset.x, 0)
+                overshoot = Self.overshoot(
+                    offset: scrollView.contentOffset.x,
+                    contentLength: scrollView.contentSize.width,
+                    boundsLength: scrollView.bounds.width,
+                    leadingInset: inset.left,
+                    trailingInset: inset.right)
             }
             guard abs(overshoot) >= Self.pageTurnThreshold else { return }
             parent.turnPage(overshoot > 0 ? 1 : -1)
         }
 
+        /// How far a released drag pulled past where the axis can actually rest, signed —
+        /// positive past the end, negative before the start, zero anywhere the scroll view would
+        /// settle on its own.
+        ///
+        /// The resting range comes from the insets, not from zero. A page narrower than the
+        /// viewport — every 'Side to side' page on a landscape iPad — is centred with contentInset
+        /// slack and rests at offset `-slack`. Measured against zero, that rest position read as
+        /// a full-slack pull backwards: 'previous page' fired on every release (a guarded no-op
+        /// on page 1, so turning simply never worked), and a forward turn needed the slack *plus*
+        /// the threshold of rubber-banding.
+        static func overshoot(
+            offset: CGFloat, contentLength: CGFloat, boundsLength: CGFloat,
+            leadingInset: CGFloat, trailingInset: CGFloat
+        ) -> CGFloat {
+            let minOffset = -leadingInset
+            let maxOffset = max(contentLength - boundsLength + trailingInset, minOffset)
+            if offset > maxOffset { return offset - maxOffset }
+            if offset < minOffset { return offset - minOffset }
+            return 0
+        }
+
         /// How far past the edge counts as asking for the next page. Generous enough that the
         /// rubber-banding of an ordinary scroll to the bottom does not turn a page by itself.
-        private static let pageTurnThreshold: CGFloat = 120
+        static let pageTurnThreshold: CGFloat = 120
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             container?.canvasZoomDidChange()
