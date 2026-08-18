@@ -25,6 +25,19 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
     var isOffline = false
     /// Forces a status for documents whose id is listed, for failure injection.
     var failingDocumentIDs: [String: Int] = [:]
+    /// The body served with a forced status, for documents that need one.
+    ///
+    /// A 413's body is not decoration: it is how a client tells CouchDB refusing a document apart
+    /// from a proxy refusing the request (protocol §7.2), and the two demand opposite handling. A
+    /// forced status with no entry here keeps its empty body, which is exactly what an intermediary
+    /// that answers with nothing looks like.
+    var failingDocumentBodies: [String: Data] = [:]
+
+    /// What CouchDB itself answers when a document's ordinary fields exceed the limit.
+    static let couchDBTooLarge = Data(#"{"error":"document_too_large","reason":""}"#.utf8)
+    /// What nginx answers when the request body exceeds `client_max_body_size`.
+    static let proxyTooLarge = Data(
+        "<html>\r\n<head><title>413 Request Entity Too Large</title></head>\r\n</html>".utf8)
     /// The `Date` header every response carries, RFC 9110 IMF-fixdate. Nil by default so most
     /// tests keep saying nothing about clocks; set to model a server whose clock disagrees with
     /// this device's (protocol §7).
@@ -48,7 +61,10 @@ final class MockCouchServer: HTTPTransport, @unchecked Sendable {
             let tail = components.dropFirst().joined(separator: "/")
 
             if tail == "_changes" { return changes(request) }
-            if let status = failingDocumentIDs[tail] { return HTTPResponse(status: status) }
+            if let status = failingDocumentIDs[tail] {
+                return HTTPResponse(
+                    status: status, body: failingDocumentBodies[tail] ?? Data())
+            }
 
             switch request.method {
             case "GET" where components.count > 2 && components.last == CouchAssetID.blobName:

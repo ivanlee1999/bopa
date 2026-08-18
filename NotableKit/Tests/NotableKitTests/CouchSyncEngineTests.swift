@@ -1122,6 +1122,7 @@ final class CouchSyncEngineTests: XCTestCase {
             updatedBy: "ipad")))
         ipadStore.set(pageID, .page(page(updatedAt: 5, by: "ipad")))
         server.failingDocumentIDs[pageID] = 413
+        server.failingDocumentBodies[pageID] = MockCouchServer.couchDBTooLarge
         await ipad.markDirty([pageID, notebookID])
 
         let report = await ipad.flush()
@@ -1129,7 +1130,7 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertEqual(server.documentIDs(), [],
                        "the manifest must not land while its page was refused")
         XCTAssertEqual(report.failures[pageID],
-                       "A page is too large for the sync server to accept.")
+                       "A page is too large for the sync server\'s document limit.")
         XCTAssertNotNil(report.failures[notebookID], "the held-back manifest says why it waited")
         XCTAssertFalse(report.hasRetriableFailure, "waiting does not shrink the page")
         let pending = await ipad.pendingCount
