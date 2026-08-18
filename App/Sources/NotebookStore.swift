@@ -704,7 +704,22 @@ final class NotebookStore: ObservableObject {
         refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
     }
 
+    /// Thrown when a move names a folder no listing shows — trashed, inside a trashed subtree,
+    /// or gone. A notebook filed there is unreachable from every surface, and emptying the Trash
+    /// purges it along with the folder; refusing is what keeps every caller honest, not just the
+    /// menu that happens to filter its offerings today.
+    struct FolderUnavailableError: LocalizedError {
+        var errorDescription: String? {
+            "That folder is in the Trash or no longer exists."
+        }
+    }
+
     func moveNotebook(id: String, toFolder folderId: String?) throws {
+        if let folderId {
+            guard liveFolders.contains(where: { $0.id == folderId }) else {
+                throw FolderUnavailableError()
+            }
+        }
         guard var manifest = manifest(id: id) else { throw CocoaError(.fileNoSuchFile) }
         manifest.parentFolderId = folderId
         manifest.updatedAt = NotableDate.format(Date())
@@ -1115,6 +1130,33 @@ final class NotebookStore: ObservableObject {
         folders.first { $0.id == id }
     }
 
+    /// Folders a notebook can actually be filed into: in the library and visible — not in the
+    /// Trash, and not inside a trashed subtree. `folders` itself is the whole published set,
+    /// trashed subtrees included, and offering one of those as a destination files the notebook
+    /// somewhere no listing shows, where emptying the Trash purges it.
+    var liveFolders: [FolderDTO] {
+        let trashed = trash.folderIDs
+        return folders.filter {
+            !trashed.contains($0.id) && isInLiveSubtree($0.parentFolderId, trashed: trashed)
+        }
+    }
+
+    /// Whether a chain of parents climbs to the root without passing through the Trash — the
+    /// same reachability rule the listings and search apply. A parent that does not exist counts
+    /// as reachable, because the root adopts orphans (see `folders(in:)`); a cycle reaches no
+    /// root and so is not live.
+    private func isInLiveSubtree(_ parentFolderId: String?, trashed: Set<String>) -> Bool {
+        var seen: Set<String> = []
+        var cursor = parentFolderId
+        while let id = cursor {
+            guard seen.insert(id).inserted else { return false }
+            guard let folder = folders.first(where: { $0.id == id }) else { return true }
+            if trashed.contains(id) { return false }
+            cursor = folder.parentFolderId
+        }
+        return true
+    }
+
     /// Everything in the library whose name answers [query], wherever it is filed.
     ///
     /// Deliberately not scoped to the folder you are standing in: the reason to search is that you
@@ -1125,27 +1167,15 @@ final class NotebookStore: ObservableObject {
         let trashedFolderIDs = trash.folderIDs
         let trashedNotebookIDs = trash.notebookIDs
 
-        func isReachable(_ parentFolderId: String?) -> Bool {
-            var seen: Set<String> = []
-            var cursor = parentFolderId
-            while let id = cursor {
-                guard seen.insert(id).inserted else { return false }  // a cycle reaches no root
-                guard let folder = folders.first(where: { $0.id == id }) else { return true }
-                if trashedFolderIDs.contains(id) { return false }
-                cursor = folder.parentFolderId
-            }
-            return true
-        }
-
         return (
             folders: folders.filter {
                 !trashedFolderIDs.contains($0.id)
-                    && isReachable($0.parentFolderId)
+                    && isInLiveSubtree($0.parentFolderId, trashed: trashedFolderIDs)
                     && LibrarySort.matches(title: $0.title, query: query)
             },
             notebooks: notebooks.filter {
                 !trashedNotebookIDs.contains($0.notebookId)
-                    && isReachable($0.parentFolderId)
+                    && isInLiveSubtree($0.parentFolderId, trashed: trashedFolderIDs)
                     && LibrarySort.matches(title: $0.title, query: query)
             }
         )

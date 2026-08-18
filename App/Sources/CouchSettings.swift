@@ -172,6 +172,17 @@ enum CouchSyncStack {
         // id changes nothing, and an id leaves the file only when its tombstone reaches the
         // server (or the user declines to publish it).
         initialState.dirty.formUnion(store.pendingDeletionIDs())
+        // The unsent scan: everything this device holds that the server has never seen — no
+        // recorded revision means no push ever succeeded and no pull ever delivered it — enters
+        // the outbox too. While the backend is off (or WebDAV is selected) the store's
+        // `didChangeDocuments` is nil, so a notebook created then was invisible to sync: nothing
+        // marked it dirty, and short of the manual "Upload everything on this iPad" button
+        // nothing ever would have. Seeding at construction heals that whole class the same way
+        // the deletion seed above does. A document the server already knows is deliberately left
+        // alone — re-queueing the library on every launch would 409-merge all of it for nothing.
+        // The scan reads one small manifest per notebook, which is launch-time noise.
+        initialState.dirty.formUnion(
+            store.allDocumentIDs().filter { initialState.revs[$0] == nil })
         onState?(initialState)
         let engine = CouchSyncEngine(
             client: client, store: store, deviceID: settings.deviceID,

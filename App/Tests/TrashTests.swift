@@ -341,6 +341,56 @@ final class TrashTests: XCTestCase {
         XCTAssertEqual(Set(scope.folderIDs), [a.id, b.id])
     }
 
+    // MARK: Move destinations
+
+    /// What the move menu may offer. `folders` is the whole published set — trashed subtrees
+    /// included, because the Trash screen and the restore path still need them — so a menu drawn
+    /// from it offered destinations no listing shows, and a notebook moved there vanished until
+    /// emptying the Trash purged it for good.
+    func testLiveFoldersExcludeTrashedFoldersAndTheirDescendants() throws {
+        let live = try store.createFolder(title: "Live")
+        let binned = try store.createFolder(title: "Binned")
+        let child = try store.createFolder(title: "Inside", parentFolderId: binned.id)
+        let grandchild = try store.createFolder(title: "Deeper", parentFolderId: child.id)
+
+        try store.trashFolder(id: binned.id)
+
+        XCTAssertEqual(Set(store.liveFolders.map(\.id)), [live.id],
+                       "a trashed folder and everything under it must not be offered")
+        _ = grandchild
+    }
+
+    /// The store refuses the move itself, so no other surface can repeat the menu's mistake.
+    func testMovingANotebookIntoATrashedFolderThrowsAndChangesNothing() throws {
+        let notebook = try store.createNotebook(title: "Draft")
+        let binned = try store.createFolder(title: "Binned")
+        try store.trashFolder(id: binned.id)
+        changed = []
+
+        XCTAssertThrowsError(
+            try store.moveNotebook(id: notebook.notebookId, toFolder: binned.id)
+        ) { error in
+            XCTAssertTrue(error is NotebookStore.FolderUnavailableError)
+        }
+
+        XCTAssertNil(store.manifest(id: notebook.notebookId)?.parentFolderId,
+                     "the notebook must stay where it was")
+        XCTAssertEqual(changed, [], "a refused move must publish nothing")
+    }
+
+    /// Trashing marks only the folder itself; its children stay unmarked but unreachable, so the
+    /// guard has to walk the chain rather than check the one id.
+    func testMovingANotebookIntoAChildOfATrashedFolderThrows() throws {
+        let notebook = try store.createNotebook(title: "Draft")
+        let binned = try store.createFolder(title: "Binned")
+        let child = try store.createFolder(title: "Inside", parentFolderId: binned.id)
+        try store.trashFolder(id: binned.id)
+
+        XCTAssertThrowsError(
+            try store.moveNotebook(id: notebook.notebookId, toFolder: child.id))
+        XCTAssertNil(store.manifest(id: notebook.notebookId)?.parentFolderId)
+    }
+
     private func writeFoldersOnDisk(_ folders: [FolderDTO]) throws {
         let file = FoldersFile(folders: folders, serverTimestamp: NotableDate.format(Date()))
         try JSONEncoder().encode(file)

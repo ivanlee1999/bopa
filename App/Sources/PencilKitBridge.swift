@@ -89,8 +89,13 @@ enum PencilKitBridge {
     /// Re-exports a drawing, reusing the original DTO for any stroke the user did not touch.
     ///
     /// `source` is the page's strokes as they were loaded. PencilKit preserves
-    /// `path.creationDate` through an untouched stroke, and import seeds it from `dto.createdAt`
-    /// (see `stroke(from:)`), so it re-identifies strokes across the round trip.
+    /// `path.creationDate` through an untouched stroke, and both directions stamp it from the
+    /// same clock — import seeds it from `dto.createdAt` (see `stroke(from:)`), and export
+    /// stamps `createdAt` from `path.creationDate` (see `dto(from:controlPoints:bounds:)`) —
+    /// so it re-identifies strokes across the round trip *and* across repeated saves within a
+    /// session. Export used to stamp `createdAt` with the save time instead, which meant a
+    /// stroke drawn this session could never be found again: the next save probed with its draw
+    /// time, missed, and minted a fresh id — tombstoning the old one on every save forever.
     ///
     /// This matters for two reasons. Identity: minting a fresh id per stroke per save made a page
     /// merely opened read as 100% changed, churning its ETag and making any content comparison —
@@ -100,29 +105,67 @@ enum PencilKitBridge {
     static func strokeDTOs(from drawing: PKDrawing, source: [StrokeDTO] = []) -> [StrokeDTO] {
         // Multi-map: two strokes *can* share a creation date, and handing both the same id would
         // be worse than re-encoding one. Entries are consumed on match, so each is claimed once.
+        //
+        // Keys and probes both pass through `wireQuantized`, because a live stroke's
+        // `creationDate` carries sub-millisecond precision the wire format cannot: a DTO's
+        // `createdAt` string holds milliseconds, so a raw `Date` probe would miss the entry its
+        // own export wrote.
         var byCreation: [Date: [StrokeDTO]] = [:]
         for dto in source {
             guard let created = NotableDate.parse(dto.createdAt) else { continue }
-            byCreation[created, default: []].append(dto)
+            byCreation[wireQuantized(created), default: []].append(dto)
         }
 
         return drawing.strokes.flatMap { stroke -> [StrokeDTO] in
+            let created = wireQuantized(stroke.path.creationDate)
+            var candidates = byCreation[created] ?? []
+
             // Carry the original over only when nothing about the stroke changed:
             // - a mask means the eraser cut into it, and reusing the original DTO there would
             //   save the rubbed-out ink straight back;
             // - a non-identity transform means it was moved (lasso).
-            // Either way the geometry really did change, so it goes through `dtos(from:)`, which
-            // also expands a part-erased stroke into its surviving pieces.
-            let created = stroke.path.creationDate
-            if stroke.mask == nil, stroke.transform.isIdentity,
-               var candidates = byCreation[created], !candidates.isEmpty
-            {
+            if stroke.mask == nil, stroke.transform.isIdentity, !candidates.isEmpty {
                 let original = candidates.removeFirst()
                 byCreation[created] = candidates
                 return [original]
             }
-            return dtos(from: stroke)
+
+            // The geometry really did change, so it goes through `dtos(from:)`, which also
+            // expands a part-erased stroke into its surviving pieces. The *identity* survives
+            // anyway: each piece claims a source id in order — the first surviving piece keeps
+            // the stroke's own id, so a trim travels as an edit rather than a delete-plus-add and
+            // a remote erase of that id still lands — and pieces beyond the sources derive stable
+            // ids from the first claimed one, so a still-masked stroke exports the same ids on
+            // every save instead of churning tombstones until the page is next reloaded.
+            var pieces = dtos(from: stroke)
+            guard let anchor = candidates.first else { return pieces }
+            let claimed = candidates.prefix(pieces.count)
+            byCreation[created] = Array(candidates.dropFirst(claimed.count))
+            for index in pieces.indices {
+                pieces[index].id = index < claimed.count
+                    ? claimed[claimed.startIndex + index].id
+                    : derivedId(from: anchor.id, index: index)
+            }
+            return pieces
         }
+    }
+
+    /// A `Date` rounded through the wire format's timestamp precision (milliseconds), by the
+    /// same format/parse pair a DTO's `createdAt` travels through — so a key derived from a
+    /// stored string and a probe derived from a live `Date` land on the same value.
+    private static func wireQuantized(_ date: Date) -> Date {
+        NotableDate.parse(NotableDate.format(date)) ?? date
+    }
+
+    /// A stable id for the `index`-th surviving piece of a split stroke: the same anchor and
+    /// index yield the same id on every export, which is what keeps a still-masked stroke from
+    /// minting fresh ids (and tombstoning its own previous save) every time the page is saved.
+    /// Shaped like the random ids so nothing downstream can tell them apart.
+    private static func derivedId(from anchor: String, index: Int) -> String {
+        let hex = CouchAssetID.sha256Hex(Data("stroke-piece|\(anchor)|\(index)".utf8))
+        let h = Array(hex.prefix(32))
+        return String(h[0..<8]) + "-" + String(h[8..<12]) + "-" + String(h[12..<16]) + "-"
+            + String(h[16..<20]) + "-" + String(h[20..<32])
     }
 
     /// One DTO per surviving piece of a stroke.
@@ -211,7 +254,6 @@ enum PencilKitBridge {
 
         guard let blob = try? SBStrokeCodec.encode(points) else { return nil }
         let bounds = bounds ?? Self.bounds(of: controlPoints, transform: transform)
-        let now = NotableDate.format(Date())
         return StrokeDTO(
             id: UUID().uuidString.lowercased(),
             size: Float(maxWidth),
@@ -222,8 +264,14 @@ enum PencilKitBridge {
             left: Float(bounds.minX),
             right: Float(bounds.maxX),
             pointsData: blob.base64EncodedString(),
-            createdAt: now,
-            updatedAt: now)
+            // The stroke's stable PencilKit identity, not the export clock. `strokeDTOs` finds a
+            // stroke again by this value on the *next* save, so stamping "now" here — with the
+            // save debounce putting "now" seconds after the draw — guaranteed the lookup missed
+            // for every stroke drawn this session, and each save re-minted (and tombstoned) it.
+            createdAt: NotableDate.format(stroke.path.creationDate),
+            // Freshly encoded content is a real edit: the timestamp is what lets a trimmed
+            // stroke beat the peer's intact copy of the same id in the merge.
+            updatedAt: NotableDate.format(Date()))
     }
 
     /// Ink box around a run of points: the path's extent grown by half the widest point.

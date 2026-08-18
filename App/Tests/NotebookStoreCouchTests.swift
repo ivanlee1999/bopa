@@ -484,6 +484,61 @@ final class NotebookStoreCouchTests: XCTestCase {
         XCTAssertTrue(engineState.dirty.contains(CouchDocID.notebook("stranded")))
     }
 
+    /// While the backend is off (or WebDAV is selected) `didChangeDocuments` is nil, so a
+    /// notebook created then was invisible to sync: nothing marked it dirty, and when CouchDB
+    /// came up the engine loaded a state that knew nothing about it. Short of the manual
+    /// "Upload everything" button it stayed on this iPad forever. Building the stack now scans
+    /// for documents the server has never seen and seeds them into the outbox.
+    func testTheStackSeedsTheOutboxWithDocumentsTheServerHasNeverSeen() async throws {
+        // Created while no engine existed to hear about it.
+        let notebook = try store.createNotebook(title: "written while sync was off")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        let settings = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+
+        let stack = try XCTUnwrap(CouchSyncStack.make(
+            settings: settings, rootURL: rootURL, onChange: {}))
+
+        let state = await stack.engine.currentState
+        XCTAssertTrue(
+            state.dirty.contains(CouchDocID.notebook(notebook.notebookId)),
+            "the notebook must be queued for the first flush")
+        XCTAssertTrue(
+            state.dirty.contains(CouchDocID.page(pageId)),
+            "and its page with it")
+    }
+
+    /// The other half of the scan's contract: a document whose revision is recorded has been
+    /// through the server already, and re-queueing it on every launch would 409-merge the whole
+    /// library for nothing.
+    func testTheUnsentScanLeavesDocumentsTheServerAlreadyHoldsAlone() async throws {
+        let known = try store.createNotebook(title: "already synced")
+        let knownPage = try XCTUnwrap(known.pageIds.first)
+        let fresh = try store.createNotebook(title: "never sent")
+        let settings = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+        CouchSyncStack.save(
+            CouchSyncState(
+                lastSeq: "42",
+                revs: [
+                    CouchDocID.notebook(known.notebookId): "1-abc",
+                    CouchDocID.page(knownPage): "1-def",
+                ]),
+            to: rootURL.appendingPathComponent(CouchSyncStack.stateFileName(for: settings)))
+
+        let stack = try XCTUnwrap(CouchSyncStack.make(
+            settings: settings, rootURL: rootURL, onChange: {}))
+
+        let state = await stack.engine.currentState
+        XCTAssertFalse(state.dirty.contains(CouchDocID.notebook(known.notebookId)),
+                       "a document the server holds must not be re-pushed by the scan")
+        XCTAssertFalse(state.dirty.contains(CouchDocID.page(knownPage)))
+        XCTAssertTrue(state.dirty.contains(CouchDocID.notebook(fresh.notebookId)),
+                      "while one it has never seen is")
+    }
+
     /// A checkpoint describes one server's change feed and one server's revisions. Kept in a single
     /// file, it was handed to whichever endpoint the user pointed at next: a foreign `since` skips
     /// changes instead of failing loudly, and foreign revisions suppress real updates as echoes.

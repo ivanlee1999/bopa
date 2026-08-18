@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - Local state
 
@@ -239,8 +240,8 @@ public actor CouchSyncEngine {
         public var retryAfter: TimeInterval?
         /// Set when the mass-deletion guard refused the run (protocol §6.7).
         public var blockedByDeletionGuard = false
-        /// *Which* notebook tombstones the guard held back — not the size of the whole queue,
-        /// which is what the warning used to report, and not merely how many.
+        /// *Which* notebook and folder tombstones the guard held back — not the size of the whole
+        /// queue, which is what the warning used to report, and not merely how many.
         ///
         /// The ids are the point: the user's answer to the guard is `approveHeldDeletions` or
         /// `discardHeldDeletions`, and both are set-scoped. A count would let the UI describe the
@@ -338,6 +339,18 @@ public actor CouchSyncEngine {
     private var flushTail: Task<FlushReport, Never>?
     private var flushSequence: UInt64 = 0
 
+    /// Set once the owner has replaced this engine — reconfiguring rebuilds the whole stack — and
+    /// never cleared. The state file is keyed on endpoint and database only, so a password or
+    /// device-name change hands the *same* path to the replacement engine; a flush still in
+    /// flight here would then persist on completion and clobber the successor's checkpoint and
+    /// rev map with this engine's stale copy.
+    ///
+    /// Nonisolated and lock-guarded rather than actor state, so the owner can mark it
+    /// synchronously *before* the replacement exists — a mark that had to hop onto this actor
+    /// would leave a window in which the dying flush persists between the reconfigure and the
+    /// mark landing.
+    private let invalidated = OSAllocatedUnfairLock(initialState: false)
+
     /// Deletions the user has explicitly approved, waiting for the flush that will act on them.
     ///
     /// Deliberately not part of `CouchSyncState`, so it is neither persisted nor a setting: it is
@@ -430,18 +443,26 @@ public actor CouchSyncEngine {
         // notebook nobody happens to be editing would never be mentioned on the feed again. The
         // user would be left with it gone here, present there, and no path between.
         //
-        // So the checkpoint is rewound and the discarded ids' recorded revisions forgotten, which
-        // together make the next pull replay the feed and land the documents as if they were new.
-        // Both are needed: without the rewind the rows are never re-sent, and without forgetting
-        // the revisions the replayed rows match what this device last recorded and are dropped as
+        // So the checkpoint is rewound and the recorded revisions forgotten, which together make
+        // the next pull replay the feed and land the documents as if they were new. Both are
+        // needed: without the rewind the rows are never re-sent, and without forgetting the
+        // revisions the replayed rows match what this device last recorded and are dropped as
         // its own echoes (§6.3).
+        //
+        // The *whole* rev map is forgotten, not merely the discarded ids'. The wipe that emptied
+        // this device left the revs of the notebooks' pages intact — pushing a page whose file is
+        // gone returns `.nothingToPush` without touching `revs` — so a replay that only forgot
+        // the notebooks re-skipped every one of their pages as this device's own echo, and the
+        // restored notebooks came back as empty shells. The checkpoint is already rewound to
+        // zero, so keeping any of the map buys nothing: every row is coming back anyway, and the
+        // full replay is declared idempotent.
         //
         // A full replay is exactly what losing the checkpoint costs, which this design already
         // treats as safe and idempotent. Discarding a mass deletion is rare, deliberate, and
         // already alarming enough to be worth one slow sync. Notable does the same (§6.7).
         if !discarded.isEmpty {
             state.lastSeq = "0"
-            for documentID in discarded { state.revs.removeValue(forKey: documentID) }
+            state.revs.removeAll()
         }
         persist()
     }
@@ -497,8 +518,13 @@ public actor CouchSyncEngine {
         // Only the deletions are held back. Blocking the whole queue meant a guard meant to
         // question a suspicious *deletion* also stopped ordinary edits syncing — a permanent stall
         // rather than a prompt. Drawings keep flowing; the tombstones wait for an answer.
+        //
+        // Folder tombstones are held alongside the notebooks'. The guard *trips* on notebook
+        // tombstones — they are what measures "most of this library" — but the wipe that produced
+        // them took the folders in the same stroke, and publishing those immediately would delete
+        // the peer's folder tree behind the very question the guard is asking.
         if exceedsDeletionGuard(queue) {
-            let held = queue.filter { isNotebookTombstone($0) && !approved.contains($0) }
+            let held = queue.filter { isHeldTombstone($0) && !approved.contains($0) }
             // An approval that covered the whole batch leaves nothing held, so there is nothing to
             // report and nothing to ask about: the flush proceeds as if the guard had not fired.
             if !held.isEmpty {
@@ -685,7 +711,19 @@ public actor CouchSyncEngine {
     /// deleted everything. Ten-plus notebook tombstones that are also most of what this device
     /// knows is treated as the former until a human says otherwise.
     private func isNotebookTombstone(_ documentID: String) -> Bool {
-        CouchDocID.split(documentID)?.type == CouchDocType.notebook
+        isTombstone(documentID, ofType: CouchDocType.notebook)
+    }
+
+    /// What a tripped guard holds back: the notebook tombstones it measured, and the folder
+    /// tombstones the same wipe produced — a purge that takes a library takes its folder tree
+    /// with it, and those deletions are part of the same question.
+    private func isHeldTombstone(_ documentID: String) -> Bool {
+        isTombstone(documentID, ofType: CouchDocType.notebook)
+            || isTombstone(documentID, ofType: CouchDocType.folder)
+    }
+
+    private func isTombstone(_ documentID: String, ofType type: String) -> Bool {
+        CouchDocID.split(documentID)?.type == type
             && ((try? store.load(documentID))?.isDeleted ?? false)
     }
 
@@ -1135,7 +1173,18 @@ public actor CouchSyncEngine {
         var schema: Int
     }
 
+    /// Retires this engine. Requests already in flight may still finish — a PUT that lands is a
+    /// real write, and the documents it carried stay dirty in the successor's state, which
+    /// re-sends and 409-merges them — but nothing this engine does from here on reaches the
+    /// state file.
+    public nonisolated func invalidate() {
+        invalidated.withLock { $0 = true }
+    }
+
     private func persist() {
+        // An invalidated engine's state describes a configuration that no longer exists; writing
+        // it would overwrite whatever the replacement engine has persisted since.
+        guard !invalidated.withLock({ $0 }) else { return }
         onStateChange?(state)
     }
 }

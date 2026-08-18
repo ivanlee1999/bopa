@@ -120,7 +120,8 @@ final class PencilKitBridgeTests: XCTestCase {
     private func straightStroke(
         transform: CGAffineTransform = .identity,
         mask: UIBezierPath? = nil,
-        ink: PKInk = PKInk(.pen, color: .black)
+        ink: PKInk = PKInk(.pen, color: .black),
+        createdAt: Date = Date()
     ) -> PKStroke {
         let controlPoints = (0...10).map { i -> PKStrokePoint in
             PKStrokePoint(
@@ -131,7 +132,7 @@ final class PencilKitBridgeTests: XCTestCase {
         }
         return PKStroke(
             ink: ink,
-            path: PKStrokePath(controlPoints: controlPoints, creationDate: Date()),
+            path: PKStrokePath(controlPoints: controlPoints, creationDate: createdAt),
             transform: transform,
             mask: mask)
     }
@@ -420,5 +421,123 @@ final class PencilKitBridgeTests: XCTestCase {
 
         XCTAssertEqual(resaved.count, 1)
         XCTAssertNotEqual(resaved[0].pointsData, original.pointsData, "moved stroke kept old points")
+        // Moved, not destroyed: the stroke keeps its identity, so the move travels as an edit and
+        // a remote erase of this id still finds it.
+        XCTAssertEqual(resaved[0].id, original.id)
+    }
+
+    // MARK: Identity for strokes drawn this session
+
+    /// The save debounce puts the export clock seconds after the pen lifts, so a stroke drawn
+    /// this session *always* has a `creationDate` older than the save that first exports it.
+    /// `createdAt` used to be stamped with the save time, which meant the next save probed the
+    /// reuse map with the draw time, missed, and minted a fresh id — same ink, new identity,
+    /// old id tombstoned — on every save for the rest of the session.
+    func testAStrokeDrawnThisSessionKeepsItsIdAcrossSaves() throws {
+        let drawn = straightStroke(createdAt: Date(timeIntervalSinceNow: -300))
+        let drawing = PKDrawing(strokes: [drawn])
+
+        let first = PencilKitBridge.strokeDTOs(from: drawing)
+        let second = PencilKitBridge.strokeDTOs(from: drawing, source: first)
+        let third = PencilKitBridge.strokeDTOs(from: drawing, source: second)
+
+        XCTAssertEqual(second, first, "the same canvas must export byte-identical strokes")
+        XCTAssertEqual(third, first, "and keep doing so on every later save")
+        // The identity is the draw time, to wire precision — not the export time.
+        let stamped = try XCTUnwrap(NotableDate.parse(first[0].createdAt))
+        XCTAssertEqual(
+            stamped.timeIntervalSince(drawn.path.creationDate), 0, accuracy: 0.002,
+            "createdAt must carry the stroke's creation date, not the save clock")
+    }
+
+    /// Erasing one stroke must cost exactly one id: the survivors keep theirs, and the set
+    /// difference the save derives tombstones from names only the erased one.
+    func testErasingOneSessionStrokeTombstonesOnlyThatId() throws {
+        let kept = straightStroke(createdAt: Date(timeIntervalSinceNow: -300))
+        let erased = straightStroke(createdAt: Date(timeIntervalSinceNow: -200))
+        let first = PencilKitBridge.strokeDTOs(from: PKDrawing(strokes: [kept, erased]))
+        XCTAssertEqual(first.count, 2)
+
+        let second = PencilKitBridge.strokeDTOs(from: PKDrawing(strokes: [kept]), source: first)
+
+        XCTAssertEqual(second, [first[0]], "the untouched stroke must keep its id and bytes")
+        let tombstones = CouchTombstones.derive(
+            previousIDs: Set(first.map(\.id)), currentIDs: Set(second.map(\.id)),
+            existing: [], deletedAt: NotableDate.format(Date()))
+        XCTAssertEqual(tombstones.map(\.id), [first[1].id], "only the erased id may be tombstoned")
+    }
+
+    /// End to end through the store: draw, save, reopen the page, save again untouched. The
+    /// second save must find every stroke again — zero tombstones, identical ids — or every
+    /// visit to a page would publish a full erase-and-redraw of its own ink.
+    @MainActor
+    func testSaveLoadSaveRoundTripMintsNoTombstones() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bopa-test-\(UUID().uuidString)")
+        let store = NotebookStore(rootURL: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let manifest = try store.createNotebook(title: "Identity")
+        let pageId = try XCTUnwrap(manifest.pageIds.first)
+        var page = try store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+
+        // Ink drawn this session: created well before the save that exports it.
+        let drawing = PKDrawing(strokes: [
+            straightStroke(createdAt: Date(timeIntervalSinceNow: -300)),
+            straightStroke(createdAt: Date(timeIntervalSinceNow: -200)),
+        ])
+        page.strokes = PencilKitBridge.strokeDTOs(from: drawing, source: page.strokes)
+        let written = try store.savePage(page, baselineStrokeIDs: [])
+
+        // Reopen: the canvas is rebuilt from the file, then flushed without being touched.
+        var reloaded = try store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+        let reopened = PencilKitBridge.drawing(from: reloaded.strokes)
+        let baseline = Set(reloaded.strokes.map(\.id))
+        reloaded.strokes = PencilKitBridge.strokeDTOs(from: reopened, source: reloaded.strokes)
+        let rewritten = try store.savePage(reloaded, baselineStrokeIDs: baseline)
+
+        XCTAssertEqual(rewritten.strokes.map(\.id), written.strokes.map(\.id))
+        XCTAssertTrue(rewritten.deletedStrokes.isEmpty, "an untouched round trip minted tombstones")
+    }
+
+    /// The eraser splits a stroke without changing its `creationDate`, so the pieces all answer
+    /// to the parent's identity. The first surviving piece keeps the parent's id — a trim is an
+    /// edit of the stroke, not its death — and later pieces take ids derived from it, so the
+    /// still-masked stroke exports the *same* ids on every save instead of tombstoning its own
+    /// previous export each time.
+    func testAPartlyErasedStrokeKeepsItsIdAndItsPiecesStayStable() throws {
+        let holes = mask(keepingX: -10...22)
+        holes.append(mask(keepingX: 68...128))
+        let stroke = straightStroke(mask: holes, createdAt: Date(timeIntervalSinceNow: -300))
+        // The stroke was saved intact before the eraser cut into it.
+        var original = try makeNotableStroke()
+        original.createdAt = NotableDate.format(stroke.path.creationDate)
+        let drawing = PKDrawing(strokes: [stroke])
+
+        let first = PencilKitBridge.strokeDTOs(from: drawing, source: [original])
+        XCTAssertEqual(first.count, 2)
+        XCTAssertEqual(first[0].id, original.id, "the first surviving piece is still the stroke")
+        XCTAssertNotEqual(first[1].id, original.id, "the second piece needs its own id")
+
+        // The mask persists on the live canvas, so every further save re-encodes the pieces —
+        // and must land on the same ids.
+        let second = PencilKitBridge.strokeDTOs(from: drawing, source: first)
+        XCTAssertEqual(second.map(\.id), first.map(\.id))
+        let third = PencilKitBridge.strokeDTOs(from: drawing, source: second)
+        XCTAssertEqual(third.map(\.id), first.map(\.id))
+    }
+
+    /// A stroke drawn *and* erased into before its first save has no source entry to anchor on:
+    /// the first save mints its piece ids, and every save after that must find them again.
+    func testANeverSavedMaskedStrokeStabilizesFromItsFirstSave() {
+        let stroke = straightStroke(
+            mask: mask(keepingX: -10...45), createdAt: Date(timeIntervalSinceNow: -300))
+        let drawing = PKDrawing(strokes: [stroke])
+
+        let first = PencilKitBridge.strokeDTOs(from: drawing)
+        XCTAssertEqual(first.count, 1)
+
+        let second = PencilKitBridge.strokeDTOs(from: drawing, source: first)
+        XCTAssertEqual(second.map(\.id), first.map(\.id))
     }
 }
