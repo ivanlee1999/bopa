@@ -338,6 +338,22 @@ final class PauseFirstPutTransport: HTTPTransport, @unchecked Sendable {
     }
 }
 
+/// Answers every PUT of one document with a 409, whatever revision it carries — a peer that keeps
+/// winning the write race, for tests about the conflict-retry path.
+struct AlwaysConflictingPuts: HTTPTransport {
+    let base: MockCouchServer
+    let documentID: String
+
+    func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        if request.method == "PUT", request.path.hasSuffix(documentID) {
+            let body: [String: Any] = ["error": "conflict", "reason": "Document update conflict."]
+            return HTTPResponse(
+                status: 409, body: try JSONSerialization.data(withJSONObject: body))
+        }
+        return try await base.send(request)
+    }
+}
+
 /// Dictionary-backed `CouchLocalStore`, standing in for a device's own storage.
 final class FakeLocalStore: CouchLocalStore, @unchecked Sendable {
     private let lock = NSLock()

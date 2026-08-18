@@ -1067,9 +1067,73 @@ final class CouchSyncEngineTests: XCTestCase {
 
         let report = await ipad.flush()
         XCTAssertEqual(report.stillDirty, [pageID])
-        XCTAssertEqual(report.failures[pageID], String(describing: CouchError.unauthorized))
+        // The report's wording is what the settings footer shows, so it is the user-facing
+        // sentence rather than the raw case description.
+        XCTAssertEqual(report.failures[pageID], CouchError.unauthorized.userMessage)
         let pending = await ipad.pendingCount
         XCTAssertEqual(pending, 1)
+    }
+
+    /// A 409 storm used to be retried with zero delay — the whole attempt budget burned in a few
+    /// milliseconds against a device that was still writing — and exhaustion was reported
+    /// terminal, so the controller never armed its backoff while the feed loop re-triggered the
+    /// same doomed burst on every pull.
+    func testConflictRetriesPaceThemselvesAndExhaustionIsRetriable() async throws {
+        // The server genuinely holds a different version, so every merge produces something new
+        // to send…
+        booxStore.set(pageID, .page(page(strokes: [stroke("s-boox", at: 2, device: "boox")],
+                                         updatedAt: 6, by: "boox")))
+        await boox.markDirty([pageID])
+        _ = await boox.flush()
+        // …and every PUT from this device is answered 409, however fresh its revision.
+        let conflicting = AlwaysConflictingPuts(base: server, documentID: pageID)
+
+        final class DelayRecorder: @unchecked Sendable {
+            private let lock = NSLock()
+            private var delays: [TimeInterval] = []
+            func note(_ delay: TimeInterval) { lock.withLock { delays.append(delay) } }
+            var recorded: [TimeInterval] { lock.withLock { delays } }
+        }
+        let delays = DelayRecorder()
+        let contended = CouchSyncEngine(
+            client: CouchDBClient(transport: conflicting, database: "notes"),
+            store: ipadStore, deviceID: "ipad", maxPushAttempts: 3,
+            sleep: { delays.note($0) })
+
+        ipadStore.set(pageID, .page(page(strokes: [stroke("s-ipad", at: 1, device: "ipad")],
+                                         updatedAt: 5, by: "ipad")))
+        await contended.markDirty([pageID])
+        let report = await contended.flush()
+
+        XCTAssertNotNil(report.failures[pageID])
+        XCTAssertTrue(report.hasRetriableFailure,
+                      "exhausted conflicts are resolved by time, so the backoff must arm")
+        XCTAssertEqual(delays.recorded, [0.25, 0.5],
+                       "the second and third attempts should pace themselves, growing")
+    }
+
+    /// A page the server refuses on the merits — a 413, most likely — must hold back its
+    /// notebook's manifest that pass. Push order promises a reader never sees a manifest naming
+    /// documents that have not landed, and a non-retriable failure used to fall straight through
+    /// the loop into the manifest PUT.
+    func testARefusedPageHoldsBackItsNotebooksManifestThatPass() async throws {
+        ipadStore.set(notebookID, .notebook(CouchNotebook(
+            title: "nb", pageIds: ["p1"], createdAt: stamp(0), updatedAt: stamp(1),
+            updatedBy: "ipad")))
+        ipadStore.set(pageID, .page(page(updatedAt: 5, by: "ipad")))
+        server.failingDocumentIDs[pageID] = 413
+        await ipad.markDirty([pageID, notebookID])
+
+        let report = await ipad.flush()
+
+        XCTAssertEqual(server.documentIDs(), [],
+                       "the manifest must not land while its page was refused")
+        XCTAssertEqual(report.failures[pageID],
+                       "A page is too large for the sync server to accept.")
+        XCTAssertNotNil(report.failures[notebookID], "the held-back manifest says why it waited")
+        XCTAssertFalse(report.hasRetriableFailure, "waiting does not shrink the page")
+        let pending = await ipad.pendingCount
+        XCTAssertEqual(pending, 2, "both stay queued for a pass where the page fits")
     }
 
     /// Reconfiguring rebuilds the whole stack, but the state file is keyed on endpoint and
