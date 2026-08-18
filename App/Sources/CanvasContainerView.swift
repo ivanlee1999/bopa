@@ -16,7 +16,10 @@ final class CanvasContainerView: UIView {
     let canvas = PKCanvasView()
     /// The "paper": a white sheet behind everything, so the page reads as a page on a desk.
     /// Deliberately white in both appearances — ink colors are authored against white.
-    private let pageSheet = UIView()
+    ///
+    /// Not private so a test can hold the drawn paper against the space the ink is stored in:
+    /// they are the same rectangle or the pen does not land where it points.
+    let pageSheet = UIView()
     private let paperView = PaperTemplateView()
     private let backgroundImageView = UIImageView()
     private var imageViews: [UIImageView] = []
