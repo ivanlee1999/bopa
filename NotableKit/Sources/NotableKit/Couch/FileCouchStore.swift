@@ -32,6 +32,9 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     /// actually reads an image off disk — the observable difference between the cached and the
     /// uncached paths.
     var hashFileContents: (URL) -> String? = CouchAssetID.sha256Hex(contentsOf:)
+    /// Files `apply` has written that have not been forced to stable storage yet. See
+    /// `synchronizeAppliedWrites`.
+    private var unsynchronizedPaths: [String] = []
 
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -604,5 +607,42 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         // Atomic because the editor reads these files on another thread; a torn read makes the
         // page fail to load and drops whatever strokes were pending.
         try data.write(to: url, options: .atomic)
+        // Remembered for `synchronizeAppliedWrites`: `.atomic` is a rename, not a barrier, and
+        // the engine must be able to make this write durable before it checkpoints past it.
+        lock.withLock { unsynchronizedPaths.append(url.path) }
+    }
+
+    /// Test hook: the files written by `apply` that are still awaiting `synchronizeAppliedWrites`.
+    var pendingSynchronizationPaths: [String] {
+        lock.withLock { unsynchronizedPaths }
+    }
+
+    /// Forces every document file written since the last call down to stable storage — the
+    /// engine's barrier before it persists sync state.
+    ///
+    /// Both a document write and the state file are `.atomic` renames, and APFS may commit the
+    /// tiny state rename while an earlier page file's *data* has never reached stable storage.
+    /// After a power loss the state then carries `lastSeq` past the row and `revs[id]` for it, so
+    /// the feed never replays the row and a refetch is suppressed as this device's own echo — the
+    /// document is silently gone. Syncing the documents first makes the checkpoint unable to
+    /// outrun what it describes.
+    ///
+    /// `F_FULLFSYNC` rather than `fsync`/`FileHandle.synchronize`: on Apple platforms `fsync`
+    /// only pushes to the drive's cache, and `F_FULLFSYNC` is the documented barrier that flushes
+    /// through to permanent storage — the same call SQLite relies on — which also carries the
+    /// journaled rename metadata issued before it. On a filesystem that does not support it,
+    /// plain `fsync` is the best effort left. Failures are swallowed: an unreadable path here is
+    /// a file already replaced or removed, not new damage, and the write itself already succeeded.
+    public func synchronizeAppliedWrites() {
+        let paths = lock.withLock {
+            let pending = unsynchronizedPaths
+            unsynchronizedPaths.removeAll()
+            return pending
+        }
+        for path in paths {
+            guard let handle = FileHandle(forReadingAtPath: path) else { continue }
+            if fcntl(handle.fileDescriptor, F_FULLFSYNC) != 0 { try? handle.synchronize() }
+            try? handle.close()
+        }
     }
 }

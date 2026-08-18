@@ -208,6 +208,12 @@ public protocol CouchLocalStore: Sendable {
     /// go, and the answer has to survive a restart: a page can arrive in one session and its image
     /// only be fetchable in the next.
     func missingAssetIDs() throws -> [String]
+
+    /// Forces everything `apply` has written down to stable storage. The engine calls this before
+    /// persisting sync state, so the checkpoint can never outrun the documents it describes: a
+    /// state file that survives a power loss while an applied page's bytes did not would skip the
+    /// row forever and echo-suppress every refetch of it.
+    func synchronizeAppliedWrites()
 }
 
 public extension CouchLocalStore {
@@ -223,6 +229,10 @@ public extension CouchLocalStore {
     /// A store that keeps no deletion record of its own has nothing to forget — its tombstones are
     /// whatever `load` reports. Leaving the outbox entry to the engine is then the whole discard.
     func forgetDeletion(_ documentID: String) throws {}
+
+    /// Durability is the file-backed store's problem; a store over memory (or a database that
+    /// does its own journaling) has nothing to flush.
+    func synchronizeAppliedWrites() {}
 
     /// Writes content that is not the result of a merge — seeding a store, or landing bytes whose
     /// document nothing local can contradict. There is no snapshot to preserve content against, so
@@ -584,6 +594,9 @@ public actor CouchSyncEngine {
                 report.hasRetriableFailure = true
             }
         }
+        // Merge-applies above may have rewritten documents; make them durable before the state
+        // that records their revisions is.
+        store.synchronizeAppliedWrites()
         persist()
         // A successful request can still leave the same id queued when the editor saved a newer
         // version during that request. Report the actual outbox after all actor re-entrancy, not
@@ -941,6 +954,7 @@ public actor CouchSyncEngine {
         } while !Task.isCancelled
 
         await fetchMissingAssets(into: &report)
+        store.synchronizeAppliedWrites()
         persist()
         report.clockSkew = await client.clockSkew?.significantSkew
         return report
@@ -1060,6 +1074,11 @@ public actor CouchSyncEngine {
             }
         }
 
+        // The rows above landed as `.atomic` renames, which order nothing: APFS can commit the
+        // tiny state write below while a page's data never reaches stable storage, and a state
+        // that survives such a loss skips the row forever (`lastSeq` is past it) and suppresses
+        // every refetch (`revs[id]` matches). The barrier makes the checkpoint honest.
+        store.synchronizeAppliedWrites()
         // Unconditional now, unlike the guarded assignment this replaces: the batch was checked
         // against `fetchedFrom` before any row was touched, and this actor does not suspend between
         // there and here — `store` and the merge are synchronous — so no overlapping pull can have

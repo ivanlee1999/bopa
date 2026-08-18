@@ -798,6 +798,26 @@ final class FileCouchStoreTests: XCTestCase {
         return try? JSONDecoder().decode(PageFile.self, from: data)
     }
 
+    /// The store remembers what `apply` wrote until the engine's durability barrier drains it —
+    /// the plumbing that lets sync state never checkpoint past a document write APFS has not
+    /// committed. The barrier's ordering against the state write is pinned in
+    /// `CouchSyncEngineTests.testAppliedDocumentsAreSynchronizedBeforeStatePersists`.
+    func testApplyTracksItsWrittenFilesUntilSynchronized() throws {
+        try store.apply(CouchDocID.page("p1"), .page(page([], notebookId: "nb1", updatedAt: 1)))
+
+        XCTAssertEqual(
+            store.pendingSynchronizationPaths,
+            [root.appendingPathComponent("notebooks/nb1/pages/p1.json").path])
+
+        store.synchronizeAppliedWrites()
+        XCTAssertTrue(store.pendingSynchronizationPaths.isEmpty)
+
+        // And the file survived the barrier readable — the sync must not disturb the content.
+        guard case .page? = try store.load(CouchDocID.page("p1")) else {
+            return XCTFail("the synchronized page did not load back")
+        }
+    }
+
     func testDidApplyChangesFiresOnWritesButNotReads() throws {
         final class Counter: @unchecked Sendable { var value = 0 }
         let counter = Counter()

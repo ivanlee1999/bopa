@@ -1114,4 +1114,54 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertNil(final.revs[pageID],
                      "the retired engine's late persist leaked into the shared state file")
     }
+
+    /// Structure test for the durability barrier: applied documents are forced to stable storage
+    /// *before* the state that checkpoints past them is persisted. Both writes are atomic
+    /// renames, and a state file that survived a power loss while a page's data did not would
+    /// skip the row forever and echo-suppress every refetch — so the order is the whole fix.
+    func testAppliedDocumentsAreSynchronizedBeforeStatePersists() async throws {
+        final class Recorder: @unchecked Sendable {
+            private let lock = NSLock()
+            private var entries: [String] = []
+            func note(_ event: String) { lock.withLock { entries.append(event) } }
+            var events: [String] { lock.withLock { entries } }
+        }
+        final class RecordingStore: CouchLocalStore, @unchecked Sendable {
+            let base = FakeLocalStore()
+            let recorder: Recorder
+            init(recorder: Recorder) { self.recorder = recorder }
+
+            func load(_ documentID: String) throws -> CouchDocBody? { try base.load(documentID) }
+            func apply(_ documentID: String, _ body: CouchDocBody, basedOn: CouchDocBody?) throws {
+                recorder.note("apply \(documentID)")
+                try base.apply(documentID, body, basedOn: basedOn)
+            }
+            func applyConflictCopy(_ documentID: String, json: Data) throws {
+                try base.applyConflictCopy(documentID, json: json)
+            }
+            func synchronizeAppliedWrites() { recorder.note("synchronize") }
+        }
+
+        ipadStore.set(pageID, .page(page(strokes: [stroke("s1", at: 1, device: "ipad")],
+                                         updatedAt: 5, by: "ipad")))
+        await ipad.markDirty([pageID])
+        _ = await ipad.flush()
+
+        let recorder = Recorder()
+        let receiving = CouchSyncEngine(
+            client: CouchDBClient(transport: server, database: "notes"),
+            store: RecordingStore(recorder: recorder), deviceID: "boox",
+            onStateChange: { _ in recorder.note("persist") })
+        _ = try await receiving.pull()
+
+        let events = recorder.events
+        let applied = try XCTUnwrap(
+            events.firstIndex(of: "apply \(pageID)"), "the page never landed: \(events)")
+        let persisted = try XCTUnwrap(
+            events[applied...].firstIndex(of: "persist"),
+            "the state was never persisted after the apply: \(events)")
+        XCTAssertTrue(
+            events[applied..<persisted].contains("synchronize"),
+            "the state persisted before the applied document was made durable: \(events)")
+    }
 }
