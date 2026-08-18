@@ -164,8 +164,16 @@ final class CouchSyncController: ObservableObject {
                     // on `pushBack` would leave them there until the user typed something else or
                     // tapped Sync now — a reconnect has to drain the outbox, not merely deliver
                     // what the feed happened to carry.
+                    //
+                    // But not over a scheduled retry: while the push loop is backing off, a busy
+                    // feed re-triggering the outbox on every pull would retry the failing
+                    // document at feed speed — exactly the flood the backoff exists to prevent.
+                    // Content this pull discovered the server lacks is new work and goes out
+                    // regardless; `pushNow` clears the retry timer as it always did.
                     let stillQueued = await self.pending()
-                    if !report.pushBack.isEmpty || stillQueued > 0 { await self.pushNow() }
+                    if !report.pushBack.isEmpty || (stillQueued > 0 && !self.isRetryingPush) {
+                        await self.pushNow()
+                    }
 
                     // A long poll is supposed to block until something happens, so an empty
                     // result should be rare and slow. When it is neither — a proxy that answers
@@ -392,23 +400,11 @@ final class CouchSyncController: ObservableObject {
         }
     }
 
+    /// The wording lives on `CouchError` itself now, so the flush path's per-document failures —
+    /// which reach the same status line — say the same things instead of leaking raw case
+    /// descriptions.
     private static func describe(_ error: Error) -> String {
-        switch error {
-        case CouchError.unauthorized:
-            return "Sync rejected the username or password."
-        case CouchError.transport:
-            return "Offline — changes are saved and will sync when you reconnect."
-        case CouchError.server(let status, _, _) where status == 413:
-            // The one terminal status with an answer the user can act on. Everything else in this
-            // class is a server or configuration fault they can only report.
-            return "A page is too large for the sync server to accept."
-        case CouchError.server(let status, _, _):
-            return status < 500
-                ? "The sync server refused the request (\(status)). Check the sync settings."
-                : "The sync server returned an error (\(status))."
-        default:
-            return String(describing: error)
-        }
+        (error as? CouchError)?.userMessage ?? String(describing: error)
     }
 
     /// One-line status for the settings footer and the capsule.

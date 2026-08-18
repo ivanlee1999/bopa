@@ -13,17 +13,24 @@ public enum CouchMapping {
     /// `notebookDir` is where this page's images live. It is needed because an image travels as a
     /// content-addressed `asset:` reference while it is stored as a path, and only the file itself
     /// can say which asset it is.
+    /// - Parameter backgroundsDirectory: the local `backgrounds/` store, for translating a
+    ///   file-backed background into the `asset:` id of its bytes the same way an image travels.
+    ///   Nil (legacy callers and tests) leaves the field verbatim, exactly as before assets
+    ///   carried backgrounds.
     /// - Parameter sha256: how a placed image's bytes are hashed. Injectable so a caller that
     ///   loads the same page repeatedly — every flush and every merge does — can answer from a
     ///   cache instead of reading each image off disk again.
     public static func couchPage(
         from file: PageFile, deviceID: String, notebookDir: URL,
+        backgroundsDirectory: URL? = nil,
         sha256: (URL) -> String? = CouchAssetID.sha256Hex
     ) -> CouchPage {
         CouchPage(
             notebookId: file.notebookId,
             title: file.title,
-            background: file.background,
+            background: wireBackground(
+                file.background, type: file.backgroundType,
+                backgroundsDirectory: backgroundsDirectory, sha256: sha256),
             backgroundType: file.backgroundType,
             pageWidth: file.pageWidth,
             pageHeight: file.pageHeight,
@@ -41,11 +48,16 @@ public enum CouchMapping {
     /// Rebuilds the on-disk page. `scroll` is device-local and does not travel, so it is carried
     /// over from the copy already on disk rather than reset — otherwise every incoming change
     /// would scroll the reader back to the top.
+    /// - Parameter sha256: how a held image's bytes are hashed — the same injection `couchPage`
+    ///   takes, and for the same reason: this runs on every incoming merge of the page, and the
+    ///   uncached default read every placed image off disk again each time.
     /// - Parameter keeping: strokes already on disk that the merge never saw, appended after the
     ///   merged ink. They are the newest thing on the page, so last — which is also topmost — is
     ///   where they belong. See `FileCouchStore.survivingStrokes`.
     public static func pageFile(
         from page: CouchPage, id: String, existing: PageFile?, notebookDir: URL,
+        backgroundsDirectory: URL? = nil,
+        sha256: (URL) -> String? = CouchAssetID.sha256Hex,
         keeping surviving: [StrokeDTO] = []
     ) -> PageFile {
         let existingImages = Dictionary(
@@ -57,7 +69,8 @@ public enum CouchMapping {
         var held: [String: String] = [:]
         for image in existing?.images ?? [] {
             guard let uri = image.uri,
-                  let assetID = NotableImageFiles.assetID(forURI: uri, notebookDir: notebookDir)
+                  let assetID = NotableImageFiles.assetID(
+                      forURI: uri, notebookDir: notebookDir, sha256: sha256)
             else { continue }
             held[assetID] = uri
         }
@@ -65,7 +78,10 @@ public enum CouchMapping {
             id: id,
             notebookId: page.notebookId,
             title: page.title,
-            background: page.background,
+            background: localBackground(
+                incoming: page.background, backgroundType: page.backgroundType,
+                held: existing?.background, heldType: existing?.backgroundType,
+                backgroundsDirectory: backgroundsDirectory, sha256: sha256),
             backgroundType: page.backgroundType,
             parentFolderId: existing?.parentFolderId,
             scroll: existing?.scroll ?? 0,
@@ -85,6 +101,58 @@ public enum CouchMapping {
             deletedStrokes: page.deletedStrokes,
             deletedImages: page.deletedImages,
             updatedBy: page.updatedBy)
+    }
+
+    // MARK: Backgrounds
+
+    /// The background to publish: the `asset:` document holding its bytes for a PDF or a picture,
+    /// and the value itself for a native template.
+    ///
+    /// A file-backed background that cannot be identified — a file this device does not hold, on
+    /// a page it has never been able to draw — travels as whatever it says locally. That is a
+    /// path naming nothing on the peer, which is exactly how `localBackground` reads it: as a
+    /// peer with nothing to say about backgrounds, so the peer keeps its own. Sending "blank"
+    /// instead would be a claim, and would wipe a background the peer can see.
+    static func wireBackground(
+        _ background: String, type backgroundType: String,
+        backgroundsDirectory: URL?, sha256: (URL) -> String?
+    ) -> String {
+        guard let backgroundsDirectory else { return background }
+        return CouchBackgroundFiles.assetID(
+            forBackground: background, backgroundType: backgroundType,
+            backgroundsDirectory: backgroundsDirectory, sha256: sha256) ?? background
+    }
+
+    /// The local file an incoming background should be drawn from. `held` is what this device has
+    /// been showing for it, and `heldType` what kind of thing that was.
+    ///
+    /// The two "keep what is here" branches are the rule `imageDTO` applies, for the same reason:
+    /// every path a page file holds is one this device wrote, and a document never gets to decide
+    /// which file this device reads. A peer that names no asset has said nothing about
+    /// backgrounds — an older build, or one that cannot read its own file — so it must not be
+    /// able to blank out a background that is here and working.
+    static func localBackground(
+        incoming: String, backgroundType: String, held: String?, heldType: String?,
+        backgroundsDirectory: URL?, sha256: (URL) -> String?
+    ) -> String {
+        // A native template is its own value on every device; there is nothing to resolve.
+        guard let backgroundsDirectory, CouchBackgroundFiles.isFileBacked(backgroundType) else {
+            return incoming
+        }
+        guard CouchAssetID.sha256Hex(ofAssetID: incoming) != nil else { return held ?? incoming }
+
+        // These exact bytes may already be here under the name they were imported with — the
+        // file the user picked, or one the WebDAV backend downloaded. That file keeps its name:
+        // this is most often a page coming back from the server that this very device sent.
+        if let held, let heldType,
+           CouchBackgroundFiles.assetID(
+               forBackground: held, backgroundType: heldType,
+               backgroundsDirectory: backgroundsDirectory, sha256: sha256) == incoming {
+            return held
+        }
+
+        return CouchBackgroundFiles.localPath(forAssetID: incoming, backgroundType: backgroundType)
+            ?? held ?? incoming
     }
 
     static func couchStroke(from dto: StrokeDTO, deviceID: String) -> CouchStroke {
@@ -152,8 +220,12 @@ public enum CouchMapping {
     /// `deletedAt` is passed in rather than read from the manifest: on this side the Trash lives in
     /// `.bopa-trash.json` (see `LocalTrash`), because the manifest doubles as the WebDAV wire
     /// format and must not grow a field that protocol has no room for.
+    /// - Parameter backgroundsDirectory: same as `couchPage`'s — a notebook's default background
+    ///   can be a PDF or a picture too, and it travels the same way.
     public static func couchNotebook(
-        from manifest: NotebookManifest, deviceID: String, deletedAt: String? = nil
+        from manifest: NotebookManifest, deviceID: String, deletedAt: String? = nil,
+        backgroundsDirectory: URL? = nil,
+        sha256: (URL) -> String? = CouchAssetID.sha256Hex
     ) -> CouchNotebook {
         CouchNotebook(
             title: manifest.title,
@@ -162,7 +234,9 @@ public enum CouchMapping {
             parentFolderId: manifest.parentFolderId,
             bookmarks: manifest.bookmarks,
             outline: manifest.outline,
-            defaultBackground: manifest.defaultBackground,
+            defaultBackground: wireBackground(
+                manifest.defaultBackground, type: manifest.defaultBackgroundType,
+                backgroundsDirectory: backgroundsDirectory, sha256: sha256),
             defaultBackgroundType: manifest.defaultBackgroundType,
             defaultPageWidth: manifest.defaultPageWidth,
             defaultPageHeight: manifest.defaultPageHeight,
@@ -175,7 +249,9 @@ public enum CouchMapping {
     /// `openPageId` and `linkedExternalUri` stay device-local: which page you had open on the iPad
     /// is not a fact about the notebook, and the BOOX's linked path does not exist here.
     public static func manifest(
-        from notebook: CouchNotebook, id: String, existing: NotebookManifest?
+        from notebook: CouchNotebook, id: String, existing: NotebookManifest?,
+        backgroundsDirectory: URL? = nil,
+        sha256: (URL) -> String? = CouchAssetID.sha256Hex
     ) -> NotebookManifest {
         NotebookManifest(
             notebookId: id,
@@ -183,7 +259,11 @@ public enum CouchMapping {
             pageIds: notebook.pageIds,
             openPageId: existing?.openPageId,
             parentFolderId: notebook.parentFolderId,
-            defaultBackground: notebook.defaultBackground,
+            defaultBackground: localBackground(
+                incoming: notebook.defaultBackground,
+                backgroundType: notebook.defaultBackgroundType,
+                held: existing?.defaultBackground, heldType: existing?.defaultBackgroundType,
+                backgroundsDirectory: backgroundsDirectory, sha256: sha256),
             defaultBackgroundType: notebook.defaultBackgroundType,
             linkedExternalUri: existing?.linkedExternalUri,
             // Same rule as a page's own size: a declaration is not dropped because the peer's

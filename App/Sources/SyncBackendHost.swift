@@ -150,10 +150,23 @@ final class SyncBackendHost: ObservableObject {
         }
 
         // Every local mutation queues exactly the documents it touched, then starts the debounce.
+        //
+        // The dirty intent is recorded durably *before* the hop: `markDirty` is reached through
+        // an async Task, and an app killed inside that window used to strand the edit — saved to
+        // disk, already known to the server from an earlier push, and marked by nothing, so
+        // nothing would ever send it until the document happened to be touched again. (The
+        // construction-time seeds heal deletions and never-sent documents; an *edit* to a
+        // document the server knows matched neither.) The record clears once `markDirty` has
+        // persisted the id into the engine's own outbox; anything still recorded at the next
+        // launch is folded back in by `CouchSyncStack.make`.
         store.didChangeDocuments = { [weak self] documentIDs in
-            guard let self, let engine = self.engine else { return }
+            guard let self, let engine = self.engine, let couchStore = self.couchStore else {
+                return
+            }
+            couchStore.recordPendingMarks(documentIDs)
             Task {
                 await engine.markDirty(documentIDs)
+                couchStore.confirmPendingMarks(documentIDs)
                 await MainActor.run { self.couch?.noteEdited() }
             }
         }

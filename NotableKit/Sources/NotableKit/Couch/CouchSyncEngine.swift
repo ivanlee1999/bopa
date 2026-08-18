@@ -108,11 +108,20 @@ public enum CouchDocBody: Equatable, Sendable {
         }
     }
 
-    /// The `asset:` documents this body names. Only a page names any; the engine uses this to send
-    /// an image's bytes before the page that places it, and to fetch them when one arrives.
+    /// The `asset:` documents this body names — a page's pictures and background, a notebook's
+    /// default background. The engine uses this to send an asset's bytes before the document that
+    /// places them, and to fetch them when one arrives.
     var referencedAssetIDs: [String] {
-        guard case .page(let page) = self else { return [] }
-        return page.images.compactMap(\.assetId).filter { CouchAssetID.sha256Hex(ofAssetID: $0) != nil }
+        switch self {
+        case .page(let page):
+            return (page.images.compactMap(\.assetId) + [page.background])
+                .filter { CouchAssetID.sha256Hex(ofAssetID: $0) != nil }
+        case .notebook(let notebook):
+            return [notebook.defaultBackground]
+                .filter { CouchAssetID.sha256Hex(ofAssetID: $0) != nil }
+        default:
+            return []
+        }
     }
 }
 
@@ -199,6 +208,12 @@ public protocol CouchLocalStore: Sendable {
     /// go, and the answer has to survive a restart: a page can arrive in one session and its image
     /// only be fetchable in the next.
     func missingAssetIDs() throws -> [String]
+
+    /// Forces everything `apply` has written down to stable storage. The engine calls this before
+    /// persisting sync state, so the checkpoint can never outrun the documents it describes: a
+    /// state file that survives a power loss while an applied page's bytes did not would skip the
+    /// row forever and echo-suppress every refetch of it.
+    func synchronizeAppliedWrites()
 }
 
 public extension CouchLocalStore {
@@ -214,6 +229,10 @@ public extension CouchLocalStore {
     /// A store that keeps no deletion record of its own has nothing to forget — its tombstones are
     /// whatever `load` reports. Leaving the outbox entry to the engine is then the whole discard.
     func forgetDeletion(_ documentID: String) throws {}
+
+    /// Durability is the file-backed store's problem; a store over memory (or a database that
+    /// does its own journaling) has nothing to flush.
+    func synchronizeAppliedWrites() {}
 
     /// Writes content that is not the result of a merge — seeding a store, or landing bytes whose
     /// document nothing local can contradict. There is no snapshot to preserve content against, so
@@ -315,6 +334,9 @@ public actor CouchSyncEngine {
     private let enforceDatabaseIdentity: Bool
     private let now: @Sendable () -> Date
     private let newGeneration: @Sendable () -> String
+    /// How the conflict-retry pause is served. Injectable so tests can record the delays instead
+    /// of living through them.
+    private let sleep: @Sendable (TimeInterval) async -> Void
 
     /// What the last identity check saw, or nil before the first one. Cached so pull and flush do
     /// not each re-read the document on every pass.
@@ -369,6 +391,9 @@ public actor CouchSyncEngine {
         enforceDatabaseIdentity: Bool = false,
         now: @escaping @Sendable () -> Date = Date.init,
         newGeneration: @escaping @Sendable () -> String = { UUID().uuidString.lowercased() },
+        sleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
+            try? await Task.sleep(for: .seconds(seconds))
+        },
         onStateChange: (@Sendable (CouchSyncState) -> Void)? = nil
     ) {
         self.client = client
@@ -381,6 +406,7 @@ public actor CouchSyncEngine {
         self.enforceDatabaseIdentity = enforceDatabaseIdentity
         self.now = now
         self.newGeneration = newGeneration
+        self.sleep = sleep
         self.onStateChange = onStateChange
     }
 
@@ -505,7 +531,8 @@ public actor CouchSyncEngine {
             return report
         }
 
-        var queue = orderedDirty()
+        let plan = orderedDirty()
+        var queue = plan.queue
 
         // The approval is consumed here, before anything is sent, whether or not the guard turns
         // out to trip. It is an answer to the question this flush is about to ask, and a flush that
@@ -535,7 +562,19 @@ public actor CouchSyncEngine {
             }
         }
 
+        // Notebooks whose page or asset the server refused on the merits *this pass*. Push order
+        // exists so a reader never sees a manifest naming documents that have not landed — and a
+        // non-retriable failure used to fall straight through this loop into the manifest PUT,
+        // publishing a page list that points at a page the server just refused.
+        var suppressedNotebooks: Set<String> = []
+
         for (index, documentID) in queue.enumerated() {
+            if suppressedNotebooks.contains(documentID) {
+                report.failures[documentID] = "Not sent: the server refused part of this "
+                    + "notebook, so its page list was held back."
+                report.stillDirty.append(documentID)
+                continue
+            }
             do {
                 switch try await push(documentID) {
                 case .pushed: report.pushed.append(documentID)
@@ -543,18 +582,40 @@ public actor CouchSyncEngine {
                 case .nothingToPush: break
                 }
             } catch let error as CouchError {
-                report.failures[documentID] = String(describing: error)
+                report.failures[documentID] = error.userMessage
                 report.stillDirty.append(documentID)
-                if error.isRetriable {
+                // Conflict exhaustion is retriable-with-backoff even though a single 409 is not:
+                // running out of attempts means another device kept writing while this one
+                // merged, and time is exactly what resolves that. Reporting it terminal left the
+                // document queued with no timer, while the feed loop re-triggered the same doomed
+                // burst on every pull.
+                let isConflict: Bool
+                if case .conflict = error { isConflict = true } else { isConflict = false }
+                if error.isRetriable || isConflict {
                     report.hasRetriableFailure = true
                     if let asked = error.retryAfter {
                         report.retryAfter = max(report.retryAfter ?? 0, asked)
+                    }
+                } else if error != .unauthorized {
+                    // Refused on the merits — a 413, most likely. The notebook this document
+                    // belongs to must not publish a manifest naming it this pass.
+                    switch CouchDocID.split(documentID)?.type {
+                    case CouchDocType.page:
+                        if case .page(let page)? = try? store.load(documentID),
+                           let notebookId = page.notebookId {
+                            suppressedNotebooks.insert(CouchDocID.notebook(notebookId))
+                        }
+                    case CouchDocType.asset:
+                        suppressedNotebooks.formUnion(plan.assetOwners[documentID] ?? [])
+                    default:
+                        break
                     }
                 }
                 // Offline or a server fault applies to every remaining document too, and so do
                 // rejected credentials — which no amount of retrying will fix. Stopping keeps one
                 // dead connection, or one wrong password, from turning into a burst of doomed
-                // requests, one per queued document, on every flush.
+                // requests, one per queued document, on every flush. A conflict is per-document
+                // and does not stop the queue.
                 if error.isRetriable || error == .unauthorized {
                     // Everything after this point was never tried, and is still in the outbox.
                     // Reporting only the one document that failed lost no work — the queue is
@@ -575,6 +636,9 @@ public actor CouchSyncEngine {
                 report.hasRetriableFailure = true
             }
         }
+        // Merge-applies above may have rewritten documents; make them durable before the state
+        // that records their revisions is.
+        store.synchronizeAppliedWrites()
         persist()
         // A successful request can still leave the same id queued when the editor saved a newer
         // version during that request. Report the actual outbox after all actor re-entrancy, not
@@ -590,7 +654,15 @@ public actor CouchSyncEngine {
 
     private func push(_ documentID: String) async throws -> PushOutcome {
         var didMerge = false
-        for _ in 0..<maxPushAttempts {
+        for attempt in 0..<maxPushAttempts {
+            // A 409 means another writer got there first, and colliding again in the same
+            // millisecond mostly reproduces the race: the retries used to run back-to-back and a
+            // contended document burned its whole attempt budget in a blink. A short, growing
+            // pause gives the other device's burst time to land.
+            if attempt > 0 {
+                await sleep(0.25 * Double(attempt))
+                if Task.isCancelled { break }
+            }
             let dirtyGeneration = dirtyGenerations[documentID, default: 0]
             guard let local = try store.load(documentID) else {
                 // Nothing locally: the document was never created, or was cleaned up after being
@@ -684,10 +756,19 @@ public actor CouchSyncEngine {
     /// that have not landed yet — and an image's bytes go before the page that places it, so the
     /// peer never has a reference it cannot resolve.
     ///
+    private struct PushPlan {
+        var queue: [String]
+        /// asset id → the notebook documents whose contents reference it. What the flush loop
+        /// consults when the server refuses an asset outright: the owning manifest must not be
+        /// published over a refusal in the same pass.
+        var assetOwners: [String: Set<String>]
+    }
+
     /// Assets are not queued by the app: nothing "edits" one, and an image placed twice is the same
-    /// document. They are derived here from the pages being sent, and skipped once the server is
-    /// known to hold them — immutability means a revision we have seen can never go stale.
-    private func orderedDirty() -> [String] {
+    /// document. They are derived here from the documents being sent — a page's pictures and
+    /// background, a notebook's default background — and skipped once the server is known to hold
+    /// them: immutability means a revision we have seen can never go stale.
+    private func orderedDirty() -> PushPlan {
         func rank(_ documentID: String) -> Int {
             switch CouchDocID.split(documentID)?.type {
             case CouchDocType.asset: return 0
@@ -697,14 +778,26 @@ public actor CouchSyncEngine {
             }
         }
         var queue = state.dirty
-        for documentID in state.dirty
-        where CouchDocID.split(documentID)?.type == CouchDocType.page {
-            guard let body = try? store.load(documentID) else { continue }
+        var owners: [String: Set<String>] = [:]
+        for documentID in state.dirty {
+            guard let type = CouchDocID.split(documentID)?.type,
+                  type == CouchDocType.page || type == CouchDocType.notebook,
+                  let body = try? store.load(documentID)
+            else { continue }
+            let owner: String?
+            switch body {
+            case .page(let page): owner = page.notebookId.map(CouchDocID.notebook)
+            case .notebook: owner = documentID
+            default: owner = nil
+            }
             for assetID in body.referencedAssetIDs where state.revs[assetID] == nil {
                 queue.insert(assetID)
+                if let owner { owners[assetID, default: []].insert(owner) }
             }
         }
-        return queue.sorted { (rank($0), $0) < (rank($1), $1) }
+        return PushPlan(
+            queue: queue.sorted { (rank($0), $0) < (rank($1), $1) },
+            assetOwners: owners)
     }
 
     /// Protocol §6.7: a device whose local database was wiped looks exactly like a user who
@@ -929,6 +1022,7 @@ public actor CouchSyncEngine {
         } while !Task.isCancelled
 
         await fetchMissingAssets(into: &report)
+        store.synchronizeAppliedWrites()
         persist()
         report.clockSkew = await client.clockSkew?.significantSkew
         return report
@@ -1048,6 +1142,11 @@ public actor CouchSyncEngine {
             }
         }
 
+        // The rows above landed as `.atomic` renames, which order nothing: APFS can commit the
+        // tiny state write below while a page's data never reaches stable storage, and a state
+        // that survives such a loss skips the row forever (`lastSeq` is past it) and suppresses
+        // every refetch (`revs[id]` matches). The barrier makes the checkpoint honest.
+        store.synchronizeAppliedWrites()
         // Unconditional now, unlike the guarded assignment this replaces: the batch was checked
         // against `fetchedFrom` before any row was touched, and this actor does not suspend between
         // there and here — `store` and the merge are synchronous — so no overlapping pull can have

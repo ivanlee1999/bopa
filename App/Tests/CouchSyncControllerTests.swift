@@ -516,6 +516,38 @@ final class CouchSyncControllerTests: XCTestCase {
         }
     }
 
+    /// The feed loop used to re-trigger the outbox on every pull while anything was queued — so a
+    /// document the server kept refusing was retried at feed speed and the push backoff never
+    /// actually held. A scheduled retry owns the outbox until it fires or an edit replaces it.
+    func testTheFeedLoopDoesNotStampedeAScheduledPushRetry() async throws {
+        let engine = EngineSpy()
+        engine.setFlushReport(failingFlush(retriable: true))
+        engine.setPendingCount(1)
+        // Retry waits (jittered off the 1s floor) park; the feed's own idle pacing (0.5s)
+        // returns instantly — so the loop keeps lapping while the retry timer is pending, which
+        // is exactly the race under test.
+        let controller = CouchSyncController(
+            editQuietPeriod: 0.01,
+            sleeper: { duration in
+                if duration > 0.6 { try await Task.sleep(for: .seconds(10)) }
+            },
+            flush: { await engine.flush() },
+            pull: { try await engine.pull(longpoll: $0) },
+            pending: { await engine.pendingCount() })
+
+        await controller.pushNow()
+        XCTAssertEqual(engine.flushCount, 1, "the failing push itself ran once")
+
+        controller.start()
+        try await Task.sleep(for: .milliseconds(120))
+        controller.stop()
+
+        XCTAssertGreaterThanOrEqual(engine.pullCalls.count, 2, "the feed loop was lapping")
+        XCTAssertEqual(
+            engine.flushCount, 1,
+            "the queued outbox belongs to the scheduled retry, not to every pull")
+    }
+
     /// RFC 9110 §10.2.3: when the server says when to come back, that answer beats the client's
     /// own guess.
     func testARetryAfterOverridesTheClientsOwnDelay() async throws {

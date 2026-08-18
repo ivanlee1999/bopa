@@ -430,4 +430,29 @@ public enum CouchError: Error, Equatable {
         if case let .server(_, _, retryAfter) = self { return retryAfter }
         return nil
     }
+
+    /// One sentence a person can act on, for the reports that reach a UI. The raw case
+    /// descriptions ("unauthorized", "server(status: 413, …)") belong in logs; they used to reach
+    /// the settings footer verbatim whenever a *flush* failed, while these wordings sat unused on
+    /// the pull path only.
+    public var userMessage: String {
+        switch self {
+        case .unauthorized:
+            return "Sync rejected the username or password."
+        case .transport:
+            return "Offline — changes are saved and will sync when you reconnect."
+        case .conflict:
+            return "Another device kept changing the same notes; will retry shortly."
+        case .server(let status, _, _) where status == 413:
+            // The one terminal status with an answer the user can act on. Everything else in this
+            // class is a server or configuration fault they can only report.
+            return "A page is too large for the sync server to accept."
+        case .server(let status, _, _):
+            return status < 500
+                ? "The sync server refused the request (\(status)). Check the sync settings."
+                : "The sync server returned an error (\(status))."
+        case .notFound, .malformedResponse, .databaseIdentity:
+            return String(describing: self)
+        }
+    }
 }

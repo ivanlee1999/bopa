@@ -16,6 +16,7 @@ import Foundation
 ///     <root>/notebooks/<notebookId>/images/<name>
 ///     <root>/.bopa-couch-deletions.json     — local tombstones awaiting push
 ///     <root>/.bopa-couch-assets.json        — image blobs a local page wants, not yet downloaded
+///     <root>/.bopa-couch-pending-marks.json — edits whose dirty mark has not reached the engine
 public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     public let rootURL: URL
     public let deviceID: String
@@ -28,6 +29,13 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     private var pageIndex: [String: String] = [:]
     /// "<path>|<mtime>|<size>" → sha256. See `cachedSHA256(of:)`.
     private var hashCache: [String: String] = [:]
+    /// How bytes are hashed on a cache miss. Injectable so a test can count how many times sync
+    /// actually reads an image off disk — the observable difference between the cached and the
+    /// uncached paths.
+    var hashFileContents: (URL) -> String? = CouchAssetID.sha256Hex(contentsOf:)
+    /// Files `apply` has written that have not been forced to stable storage yet. See
+    /// `synchronizeAppliedWrites`.
+    private var unsynchronizedPaths: [String] = []
 
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -47,10 +55,16 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     private var foldersURL: URL { rootURL.appendingPathComponent("folders.json") }
     private var deletionsURL: URL { rootURL.appendingPathComponent(".bopa-couch-deletions.json") }
     private var assetsURL: URL { rootURL.appendingPathComponent(".bopa-couch-assets.json") }
+    private var pendingMarksURL: URL {
+        rootURL.appendingPathComponent(".bopa-couch-pending-marks.json")
+    }
 
     private func notebookDir(_ id: String) -> URL {
         notebooksURL.appendingPathComponent(id, isDirectory: true)
     }
+    /// The `backgrounds/` store — where PDF and picture backgrounds live, shared across notebooks
+    /// (unlike a page's images, which live with their notebook).
+    private var backgroundsURL: URL { CouchBackgroundFiles.directory(under: rootURL) }
     private func manifestURL(_ id: String) -> URL {
         notebookDir(id).appendingPathComponent("manifest.json")
     }
@@ -75,7 +89,8 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             guard let manifest = readManifest(id) else { return nil }
             return .notebook(CouchMapping.couchNotebook(
                 from: manifest, deviceID: deviceID, deletedAt: trash().notebooks
-                    .first { $0.id == id }?.deletedAt))
+                    .first { $0.id == id }?.deletedAt,
+                backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:)))
 
         case CouchDocType.page:
             guard let notebookId = notebookID(forPage: id),
@@ -83,7 +98,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             else { return nil }
             return .page(CouchMapping.couchPage(
                 from: page, deviceID: deviceID, notebookDir: notebookDir(notebookId),
-                sha256: cachedSHA256(of:)))
+                backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:)))
 
         case CouchDocType.folder:
             guard let folder = readFolders().first(where: { $0.id == id }) else { return nil }
@@ -118,10 +133,13 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             let dir = notebookDir(notebookId)
             let file = CouchMapping.pageFile(
                 from: page, id: id, existing: existing, notebookDir: dir,
+                backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:),
                 keeping: survivingStrokes(in: existing, merged: page, basedOn: basedOn))
             try write(encoder.encode(file), to: pageURL(notebookId: notebookId, pageId: id))
             lock.withLock { pageIndex[id] = notebookId }
             noteWantedAssets(of: file, notebookDir: dir)
+            noteWantedBackground(file.background, type: file.backgroundType)
+            pruneWantedAssets(droppedBy: file, replacing: existing, notebookId: notebookId)
 
         case .asset(let asset):
             // Where the bytes go was decided when the page that places them was applied; this only
@@ -133,8 +151,12 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
 
         case .notebook(let notebook):
             let existing = readManifest(id)
-            let manifest = CouchMapping.manifest(from: notebook, id: id, existing: existing)
+            let manifest = CouchMapping.manifest(
+                from: notebook, id: id, existing: existing,
+                backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:))
             try write(encoder.encode(manifest), to: manifestURL(id))
+            noteWantedBackground(
+                manifest.defaultBackground, type: manifest.defaultBackgroundType)
             // The merge decided where this notebook lives — the library or the Trash — so the
             // Trash file follows it in both directions. Without the `nil` case a notebook restored
             // on the BOOX would stay buried here, and the two Trashes would drift apart.
@@ -193,11 +215,11 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         let stamp = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970
         let size = (attributes?[.size] as? NSNumber)?.intValue
         // Nothing to key on means nothing to trust: hash it, and do not remember the answer.
-        guard let stamp, let size else { return CouchAssetID.sha256Hex(contentsOf: url) }
+        guard let stamp, let size else { return hashFileContents(url) }
 
         let key = "\(url.path)|\(stamp)|\(size)"
         if let known = lock.withLock({ hashCache[key] }) { return known }
-        guard let hash = CouchAssetID.sha256Hex(contentsOf: url) else { return nil }
+        guard let hash = hashFileContents(url) else { return nil }
         lock.withLock {
             // A page's images, a few pages deep. Cleared wholesale rather than aged, because the
             // entries are cheap and the cost of a miss is one file read.
@@ -297,6 +319,11 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
 
     /// The file behind an asset this device holds. Nothing indexes these: an image is found through
     /// the page that places it, and the hash is its filename whenever this device wrote it.
+    ///
+    /// Both the notebooks' `images/` and the shared `backgrounds/` store are searched, because
+    /// the id says nothing about which it is: a sha256 is a picture placed on a page or a
+    /// document a whole notebook is drawn on, and by the time a peer asks, all that is known is
+    /// the hash.
     private func assetURL(_ assetID: String) -> URL? {
         guard let sha = CouchAssetID.sha256Hex(ofAssetID: assetID) else { return nil }
         for notebookId in notebookIDs() {
@@ -304,9 +331,19 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
                 .appendingPathComponent(sha)
             if FileManager.default.fileExists(atPath: byHash.path) { return byHash }
         }
-        // An image that arrived over WebDAV kept whatever name it had there, so the last resort is
-        // to ask the files themselves. Only reached when a page places an image this device
-        // imported by another route — after which the page's own load has hashed it anyway.
+        for folder in TemplateFolder.allCases {
+            for name in CouchBackgroundFiles.fileNames(forSHA256Hex: sha) {
+                let byHash = backgroundsURL
+                    .appendingPathComponent(folder.rawValue, isDirectory: true)
+                    .appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: byHash.path) { return byHash }
+            }
+        }
+        // A file that arrived by another route — the WebDAV backend, an import — kept whatever
+        // name it had, so the last resort is to ask the files themselves. Only reached when a
+        // document places bytes this device holds under a user-facing name; the hashes are
+        // remembered (`cachedSHA256`), so a notebook's own PDF is read once and not once per page
+        // that names it.
         for notebookId in notebookIDs() {
             let dir = NotableImageFiles.directory(in: notebookDir(notebookId))
             for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] {
@@ -314,7 +351,37 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
                 if CouchAssetID.sha256Hex(contentsOf: candidate) == sha { return candidate }
             }
         }
+        for folder in TemplateFolder.allCases {
+            let dir = backgroundsURL.appendingPathComponent(folder.rawValue, isDirectory: true)
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] {
+                let candidate = dir.appendingPathComponent(name)
+                if cachedSHA256(of: candidate) == sha { return candidate }
+            }
+        }
         return nil
+    }
+
+    /// The backgrounds twin of `noteWantedAssets`: records the blob a file-backed background
+    /// still owes, so a later pull can fetch it. Only a hash-named path can be owed — that name
+    /// is `CouchMapping.localBackground`'s own output, written when the reference arrived ahead
+    /// of its bytes. A missing file under a user-chosen name is genuinely unknown content, and
+    /// there is no id to fetch it by.
+    private func noteWantedBackground(_ background: String, type backgroundType: String) {
+        guard CouchBackgroundFiles.isFileBacked(backgroundType),
+              let ref = TemplateRef.parse(
+                  background,
+                  impliedFolder: CouchBackgroundFiles.folder(for: backgroundType)),
+              let sha = CouchBackgroundFiles.sha256Hex(ofFileName: ref.fileName)
+        else { return }
+        let url = backgroundsURL.appendingPathComponent(ref.relativePath)
+        guard !FileManager.default.fileExists(atPath: url.path),
+              let relative = relativeToRoot(url)
+        else { return }
+        let assetID = CouchDocID.asset(sha)
+        var wanted = wantedAssets()
+        guard !(wanted[assetID] ?? []).contains(relative) else { return }
+        wanted[assetID, default: []].append(relative)
+        writeWantedAssets(wanted.mapValues { $0.sorted() })
     }
 
     /// Records the blobs `file` places that are not on disk yet, so a later pull can fetch them.
@@ -333,6 +400,50 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         }
         guard added else { return }
         writeWantedAssets(wanted.mapValues { $0.sorted() })
+    }
+
+    /// Forgets wants this merge just orphaned. `noteWantedAssets` only ever adds, and until now
+    /// the only removals were a blob actually arriving (`forgetWantedAsset`) and the whole
+    /// notebook being deleted — so an image erased (or never uploaded) before its bytes landed
+    /// left a permanent want: one doomed 404 GET per pull, and an "images still downloading" note
+    /// that never cleared. Rebuilding this page's contribution on every apply is what lets the
+    /// ledger forget.
+    ///
+    /// Only paths this page used to point at and no longer does can have gone stale here —
+    /// anything else is another page's business, reconciled when that page changes. And a dropped
+    /// path is only forgotten when no other page of the notebook still places it: the ledger's
+    /// paths name the notebook's shared images directory, not the page that asked, and two pages
+    /// can place the same bytes.
+    private func pruneWantedAssets(
+        droppedBy file: PageFile, replacing existing: PageFile?, notebookId: String
+    ) {
+        let dir = notebookDir(notebookId)
+        func referencedPaths(_ page: PageFile?) -> Set<String> {
+            Set((page?.images ?? []).compactMap {
+                NotableImageFiles.url(uri: $0.uri, notebookDir: dir).flatMap(relativeToRoot)
+            })
+        }
+        let dropped = referencedPaths(existing).subtracting(referencedPaths(file))
+        guard !dropped.isEmpty else { return }
+
+        var stale = dropped
+        let pagesDir = dir.appendingPathComponent("pages", isDirectory: true)
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: pagesDir.path)) ?? [] {
+            guard !stale.isEmpty else { break }
+            guard name.hasSuffix(".json"), name != "\(file.id).json",
+                  let data = try? Data(contentsOf: pagesDir.appendingPathComponent(name)),
+                  let page = try? decoder.decode(PageFile.self, from: data)
+            else { continue }
+            stale.subtract(referencedPaths(page))
+        }
+        guard !stale.isEmpty else { return }
+
+        let all = wantedAssets()
+        let kept = all
+            .mapValues { $0.filter { !stale.contains($0) } }
+            .filter { !$0.value.isEmpty }
+        guard kept != all else { return }
+        writeWantedAssets(kept)
     }
 
     private func forgetWantedAsset(_ assetID: String) {
@@ -375,6 +486,68 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
             try? data.write(to: assetsURL, options: .atomic)
         }
+    }
+
+    // MARK: Pending dirty marks
+
+    /// Records that these documents were just edited and their dirty marks have not yet reached
+    /// the engine's persisted outbox. The durable half of `SyncBackendHost.didChangeDocuments`,
+    /// whose signal hops through an async Task on its way to `markDirty` — an app killed inside
+    /// that hop stranded the edit: written to disk, already known to the server, and marked by
+    /// nothing, so nothing would ever push it until the document happened to be touched again.
+    ///
+    /// Same lifecycle as the deletions file: written synchronously at the mutation, folded into
+    /// the outbox when the stack is constructed, cleared once the engine confirms the mark.
+    ///
+    /// Counted rather than kept as a set, because rapid edits to one document overlap: edit A's
+    /// confirm must not erase edit B's still-unconfirmed record, or the crash window reopens
+    /// exactly where it was. An id leaves the file when every recorded edit is confirmed.
+    public func recordPendingMarks(_ documentIDs: [String]) {
+        guard !documentIDs.isEmpty else { return }
+        mutatePendingMarks { marks in
+            for id in documentIDs { marks[id, default: 0] += 1 }
+        }
+    }
+
+    /// The engine now holds these ids in its persisted outbox — `markDirty` returned — so this
+    /// edit's record has done its job.
+    public func confirmPendingMarks(_ documentIDs: [String]) {
+        guard !documentIDs.isEmpty else { return }
+        mutatePendingMarks { marks in
+            for id in documentIDs {
+                guard let count = marks[id] else { continue }
+                marks[id] = count > 1 ? count - 1 : nil
+            }
+        }
+    }
+
+    /// Edits whose journey to the outbox was cut short — what construction folds back in.
+    public func pendingMarkIDs() -> [String] {
+        lock.withLock { readPendingMarksLocked().keys.sorted() }
+    }
+
+    /// One read-modify-write under one lock hold: record (main actor) and confirm (an arbitrary
+    /// Task executor) genuinely race, and a torn update here is a lost crash-safety record.
+    private func mutatePendingMarks(_ mutate: (inout [String: Int]) -> Void) {
+        lock.withLock {
+            var marks = readPendingMarksLocked()
+            mutate(&marks)
+            if marks.isEmpty {
+                try? FileManager.default.removeItem(at: pendingMarksURL)
+                return
+            }
+            guard let data = try? encoder.encode(marks) else { return }
+            try? FileManager.default.createDirectory(
+                at: rootURL, withIntermediateDirectories: true)
+            try? data.write(to: pendingMarksURL, options: .atomic)
+        }
+    }
+
+    private func readPendingMarksLocked() -> [String: Int] {
+        guard let data = try? Data(contentsOf: pendingMarksURL),
+              let marks = try? decoder.decode([String: Int].self, from: data)
+        else { return [:] }
+        return marks
     }
 
     // MARK: Local deletions
@@ -500,5 +673,42 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         // Atomic because the editor reads these files on another thread; a torn read makes the
         // page fail to load and drops whatever strokes were pending.
         try data.write(to: url, options: .atomic)
+        // Remembered for `synchronizeAppliedWrites`: `.atomic` is a rename, not a barrier, and
+        // the engine must be able to make this write durable before it checkpoints past it.
+        lock.withLock { unsynchronizedPaths.append(url.path) }
+    }
+
+    /// Test hook: the files written by `apply` that are still awaiting `synchronizeAppliedWrites`.
+    var pendingSynchronizationPaths: [String] {
+        lock.withLock { unsynchronizedPaths }
+    }
+
+    /// Forces every document file written since the last call down to stable storage — the
+    /// engine's barrier before it persists sync state.
+    ///
+    /// Both a document write and the state file are `.atomic` renames, and APFS may commit the
+    /// tiny state rename while an earlier page file's *data* has never reached stable storage.
+    /// After a power loss the state then carries `lastSeq` past the row and `revs[id]` for it, so
+    /// the feed never replays the row and a refetch is suppressed as this device's own echo — the
+    /// document is silently gone. Syncing the documents first makes the checkpoint unable to
+    /// outrun what it describes.
+    ///
+    /// `F_FULLFSYNC` rather than `fsync`/`FileHandle.synchronize`: on Apple platforms `fsync`
+    /// only pushes to the drive's cache, and `F_FULLFSYNC` is the documented barrier that flushes
+    /// through to permanent storage — the same call SQLite relies on — which also carries the
+    /// journaled rename metadata issued before it. On a filesystem that does not support it,
+    /// plain `fsync` is the best effort left. Failures are swallowed: an unreadable path here is
+    /// a file already replaced or removed, not new damage, and the write itself already succeeded.
+    public func synchronizeAppliedWrites() {
+        let paths = lock.withLock {
+            let pending = unsynchronizedPaths
+            unsynchronizedPaths.removeAll()
+            return pending
+        }
+        for path in paths {
+            guard let handle = FileHandle(forReadingAtPath: path) else { continue }
+            if fcntl(handle.fileDescriptor, F_FULLFSYNC) != 0 { try? handle.synchronize() }
+            try? handle.close()
+        }
     }
 }
