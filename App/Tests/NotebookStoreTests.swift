@@ -474,6 +474,53 @@ final class NotebookStoreTests: XCTestCase {
             "an autosave erased a page name the sync engine had just written")
     }
 
+    // MARK: Refusing saves that could only lose the ink
+
+    /// `savePage` used to return success without writing when the manifest could not be read, so
+    /// the editor cleared its dirty flag and the strokes existed nowhere but on screen. The
+    /// failure has to throw: the save alert and the retry are what stand between them and nothing.
+    func testSavePageThrowsWhenTheManifestIsGone() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        let page = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        try FileManager.default.removeItem(
+            at: rootURL.appendingPathComponent("notebooks/\(notebook.notebookId)/manifest.json"))
+
+        XCTAssertThrowsError(try store.savePage(page))
+    }
+
+    /// A tombstoned page must not be writable: the file would come back for a page the user
+    /// already deleted, invisible to every listing, and the next merge would delete it again.
+    func testSavePageRefusesATombstonedPage() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let doomed = try store.addPage(to: notebook.notebookId)
+        let held = try store.loadPage(notebookId: notebook.notebookId, pageId: doomed.id)
+        try store.deletePage(from: notebook.notebookId, pageId: doomed.id)
+
+        XCTAssertThrowsError(try store.savePage(held))
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: rootURL
+                    .appendingPathComponent(
+                        "notebooks/\(notebook.notebookId)/pages/\(doomed.id).json").path),
+            "the save wrote a page file no listing will ever show")
+    }
+
+    /// The same refusal without a tombstone: a page absent from `pageIds` would be written where
+    /// only the next upload's orphan cleanup finds it — "written but unreachable" is not a save.
+    func testSavePageRefusesAPageTheManifestDoesNotList() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        let page = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+
+        var unlisted = notebook
+        unlisted.pageIds = ["some-other-page"]
+        try writeManifestDirectly(unlisted)
+
+        XCTAssertThrowsError(try store.savePage(page))
+    }
+
     func testAddPageBuildsOnTheManifestFromDisk() throws {
         let notebook = try store.createNotebook(title: "Notes")
         var downloaded = notebook

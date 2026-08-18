@@ -179,7 +179,21 @@ final class NotebookStore: ObservableObject {
     func savePage(_ page: PageFile, baselineStrokeIDs: Set<String>? = nil) throws -> PageFile {
         guard let notebookId = page.notebookId,
               var manifest = readManifestFromDisk(notebookId)
-        else { return page }
+        else {
+            // Returning `page` here used to read as success: the editor cleared its dirty flag
+            // and the ink existed nowhere but on screen. A missing manifest is a notebook that
+            // is gone — deleted, or torn mid-sync — and "could not save" has to say so, because
+            // the alert and the retry are what stand between the strokes and nothing.
+            throw CocoaError(.fileNoSuchFile)
+        }
+        // A page the manifest no longer lists has nowhere to be shown. Tombstoned, writing it
+        // would recreate a file for a page the user already deleted — one no listing shows and
+        // the next merge re-deletes. Merely unlisted, the file would sit where the next upload's
+        // orphan cleanup removes it. Either way the write *looks* like a save and loses the ink,
+        // which is worse than refusing.
+        guard manifest.pageIds.contains(page.id),
+              !manifest.deletedPageIds.contains(where: { $0.id == page.id })
+        else { throw CocoaError(.fileNoSuchFile) }
         var page = page
         let now = NotableDate.format(Date())
         page.updatedAt = now
