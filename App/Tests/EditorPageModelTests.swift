@@ -1,5 +1,6 @@
 import NotableKit
 import PencilKit
+import UIKit
 import XCTest
 
 @testable import Bopa
@@ -161,6 +162,128 @@ final class EditorPageModelTests: XCTestCase {
             to: rootURL.appendingPathComponent(
                 "notebooks/\(notebookId)/pages/\(page.id).json"),
             options: .atomic)
+    }
+
+    // MARK: Remote changes that carry no ink
+
+    /// Puts a tiny valid PNG at `images/<name>` in the notebook dir, the way the sync engine's
+    /// asset download does.
+    private func installImageFile(named name: String) throws {
+        let imagesDir = rootURL.appendingPathComponent(
+            "notebooks/\(notebookId)/images", isDirectory: true)
+        try FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4), format: format)
+            .pngData { ctx in
+                UIColor.systemRed.setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+            }
+        try png.write(to: imagesDir.appendingPathComponent(name))
+    }
+
+    private func makeImageDTO(uri: String) -> ImageDTO {
+        let now = NotableDate.format(Date())
+        return ImageDTO(
+            id: UUID().uuidString.lowercased(), x: 100, y: 200, width: 300, height: 150,
+            uri: uri, createdAt: now, updatedAt: now)
+    }
+
+    /// The fold used to decide "changed" from strokes alone, so an image dropped on the BOOX was
+    /// read as "the canvas already matches the file" and swallowed for as long as the page stayed
+    /// open — every later apply re-armed the flag, and the stroke comparison cleared it again.
+    func testAnImageOnlyRemoteChangeReachesTheOpenPage() throws {
+        try installImageFile(named: "pix.png")
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        let revisionBefore = model.contentRevision
+
+        var onDisk = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        onDisk.images = [makeImageDTO(uri: "images/pix.png")]
+        try writePageDirectly(onDisk)
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertEqual(model.page?.images.map(\.id), onDisk.images.map(\.id))
+        XCTAssertEqual(model.pageImages.count, 1, "the image never reached the open page")
+        XCTAssertEqual(
+            model.pageImages.first?.frame, CGRect(x: 100, y: 200, width: 300, height: 150))
+        XCTAssertFalse(model.remoteInkPending)
+        XCTAssertEqual(
+            model.contentRevision, revisionBefore,
+            "a surface change must not reload the canvas — that costs the undo stack")
+    }
+
+    func testAPaperOnlyRemoteChangeReachesTheOpenPage() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+
+        var onDisk = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        onDisk.background = "lined"
+        try writePageDirectly(onDisk)
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertEqual(model.page?.background, "lined", "the BOOX's paper change was swallowed")
+        XCTAssertFalse(model.remoteInkPending)
+    }
+
+    /// Most applied documents are some other page, or this page's own echo. Those must still
+    /// clear the flag — and touch nothing, or every pull would redraw the open page.
+    func testANoChangeApplyClearsThePendingFlagWithoutTouchingState() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        let revisionBefore = model.contentRevision
+        let pageBefore = model.page
+
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertFalse(model.remoteInkPending)
+        XCTAssertEqual(model.contentRevision, revisionBefore)
+        XCTAssertEqual(model.page, pageBefore)
+        XCTAssertTrue(model.pageImages.isEmpty)
+    }
+
+    /// The trust-fixes semantics hold for surfaces too: a failed pre-fold flush defers the whole
+    /// fold, image and all, until a save has landed — and the retry then delivers both.
+    func testAFailedFlushStillDefersAnImageOnlyFold() throws {
+        try installImageFile(named: "pix.png")
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+
+        // Unsaved ink inside the debounce window...
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "s1", second: 0)])
+        model.scheduleSave()
+
+        // ...an image lands in the file underneath the open page...
+        var onDisk = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        onDisk.images = [makeImageDTO(uri: "images/pix.png")]
+        try writePageDirectly(onDisk)
+
+        // ...and sync announces it while the store cannot take the flush.
+        let heal = try breakTheStore()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertTrue(model.remoteInkPending, "the fold ran over a flush that failed")
+        XCTAssertTrue(model.pageImages.isEmpty, "state advanced while the flush is still owed")
+        XCTAssertTrue(model.dirty)
+        XCTAssertNotNil(model.saveError)
+
+        // Once the store heals, the next apply flushes the stroke and delivers the image.
+        try heal.write(to: manifestURL)
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertFalse(model.remoteInkPending)
+        XCTAssertEqual(model.pageImages.count, 1)
+        XCTAssertFalse(model.dirty)
+        XCTAssertEqual(
+            model.drawing.strokes.count, 1, "the flush-then-fold lost the unsaved stroke")
+        let final = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        XCTAssertEqual(final.strokes.count, 1)
+        XCTAssertEqual(final.images.count, 1, "the flush dropped the image the sync had written")
     }
 
     // MARK: Switching pages flushes the one being left
