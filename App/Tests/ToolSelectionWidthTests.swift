@@ -70,14 +70,64 @@ final class ToolSelectionWidthTests: XCTestCase {
         XCTAssertEqual(makeSelection().widths[.pencil], .broad)
     }
 
-    /// Reaching for a width while erasing means nothing rather than something odd.
-    func testTheEraserHasNoWidth() {
+    // MARK: The eraser's width
+
+    /// The eraser shipped at one fixed size for as long as it existed — `select(width:)` was an
+    /// explicit no-op for it — which made cleaning a region as slow as erasing a letter. It takes
+    /// the same five steps as the pens now, and they round-trip through the selection.
+    func testTheEraserWidthRoundTripsThroughSelection() {
+        let selection = makeSelection()
+        selection.select(.eraser)
+
+        selection.select(width: .broad)
+
+        XCTAssertEqual(selection.widths[.eraser], .broad)
+        XCTAssertEqual(selection.width, .broad)
+    }
+
+    func testTheBuiltEraserCarriesTheChosenWidth() {
         let selection = makeSelection()
         selection.select(.eraser)
         selection.select(width: .broad)
 
-        XCTAssertNil(selection.widths[.eraser])
-        XCTAssertTrue(selection.pkTool is PKEraserTool)
+        let expected = ToolSelection.Kind.eraser.baseWidth * ToolSelection.Width.broad.scale
+        XCTAssertEqual(
+            (selection.pkTool as? PKEraserTool)?.width ?? 0, expected, accuracy: 0.01)
+
+        // The stroke eraser takes whole strokes whatever it is told — a width means nothing to
+        // it, and PencilKit would read one back as 0 — but choosing it must not lose the width
+        // the pixel eraser goes back to.
+        selection.select(eraserMode: .stroke)
+        XCTAssertEqual((selection.pkTool as? PKEraserTool)?.eraserType, .vector)
+        selection.select(eraserMode: .pixel)
+        XCTAssertEqual(
+            (selection.pkTool as? PKEraserTool)?.width ?? 0, expected, accuracy: 0.01)
+    }
+
+    /// Erasing is coarser work than writing: an eraser the size of a nib takes all day to clear
+    /// anything, which is why reMarkable's and GoodNotes' erasers run well past their pens.
+    func testTheEraserRunsBroaderThanThePens() {
+        XCTAssertGreaterThan(
+            ToolSelection.Kind.eraser.baseWidth, ToolSelection.Kind.pen.baseWidth * 3)
+    }
+
+    func testTheEraserWidthSurvivesRelaunch() {
+        let first = makeSelection()
+        first.select(.eraser)
+        first.select(width: .heavy)
+
+        XCTAssertEqual(makeSelection().widths[.eraser], .heavy)
+    }
+
+    /// The lasso is the one tool that genuinely has no width; reaching for one while selecting
+    /// still means nothing rather than something odd.
+    func testTheLassoStillHasNoWidth() {
+        let selection = makeSelection()
+        selection.select(.lasso)
+
+        selection.select(width: .broad)
+
+        XCTAssertNil(selection.widths[.lasso])
     }
 
     func testTheHighlighterIsAMarker() {
@@ -95,7 +145,9 @@ final class ToolSelectionWidthTests: XCTestCase {
         XCTAssertEqual((selection.pkTool as? PKEraserTool)?.eraserType, .vector)
 
         selection.select(eraserMode: .pixel)
-        XCTAssertEqual((selection.pkTool as? PKEraserTool)?.eraserType, .bitmap)
+        // `.fixedWidthBitmap`, not `.bitmap`: building a bitmap eraser with a width is how
+        // PencilKit spells "sized on the page" — it scales with the zoom the way ink does.
+        XCTAssertEqual((selection.pkTool as? PKEraserTool)?.eraserType, .fixedWidthBitmap)
     }
 
     /// Choosing how to erase means "erase", the same way choosing an ink means "write".

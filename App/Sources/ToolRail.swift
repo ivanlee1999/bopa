@@ -45,17 +45,29 @@ final class ToolSelection: ObservableObject {
             }
         }
 
-        /// The nib this tool writes with at [Width.medium]; the other two scale from it.
+        /// Whether the width row applies. Everything with a nib — and the eraser, whose "nib" is
+        /// how much it takes per pass. Only the lasso is widthless.
+        var hasWidth: Bool {
+            switch self {
+            case .pen, .fountain, .pencil, .marker, .eraser: true
+            case .lasso: false
+            }
+        }
+
+        /// The nib this tool works at [Width.medium]; the other steps scale from it.
         ///
         /// Per tool because they are different implements: a highlighter that came out the width
-        /// of a pen would not highlight anything.
+        /// of a pen would not highlight anything, and erasing is coarser work than writing —
+        /// reMarkable's and GoodNotes' erasers run well past their pens, because a rubber the
+        /// size of a nib takes all day to clear anything.
         var baseWidth: CGFloat {
             switch self {
             case .pen: 5
             case .fountain: 6
             case .pencil: 4
             case .marker: 24
-            case .eraser, .lasso: 0
+            case .eraser: 25
+            case .lasso: 0
             }
         }
     }
@@ -123,9 +135,17 @@ final class ToolSelection: ObservableObject {
             }
         }
 
-        var pkEraser: PKEraserTool {
+        /// The PencilKit tool, at [width]. The width is the rail's, not a default: the eraser
+        /// shipped at one fixed size for as long as it existed, which made cleaning a region as
+        /// slow as erasing a letter.
+        ///
+        /// PencilKit folds the width in on its own terms: a bitmap eraser built with one comes
+        /// back as `.fixedWidthBitmap` — sized on the page, so it scales with the zoom like the
+        /// ink does — and the vector eraser takes whole strokes whatever it is told, so a width
+        /// means nothing to it (PencilKit reads one back as 0).
+        func pkEraser(width: CGFloat) -> PKEraserTool {
             switch self {
-            case .pixel: PKEraserTool(.bitmap)
+            case .pixel: PKEraserTool(.bitmap, width: width)
             case .stroke: PKEraserTool(.vector)
             }
         }
@@ -174,10 +194,10 @@ final class ToolSelection: ObservableObject {
         revision += 1
     }
 
-    /// Sets the width of whichever tool is selected. A no-op for the eraser and the lasso, which
-    /// have no nib — reaching for a width while erasing means nothing rather than something odd.
+    /// Sets the width of whichever tool is selected — the eraser included, persisted the same
+    /// way. A no-op only for the lasso, which has no width to set.
     func select(width: Width) {
-        guard kind.takesInk else { return }
+        guard kind.hasWidth else { return }
         widths[kind] = width
         defaults.set(width.rawValue, forKey: Self.widthKey(kind))
         revision += 1
@@ -221,6 +241,13 @@ final class ToolSelection: ObservableObject {
         }
     }
 
+    /// The eraser as currently configured — its mode, at its own remembered width — whatever
+    /// tool the rail has selected. The pencil's double-tap needs it while a pen is still the
+    /// selection, and it must be the eraser the user set up, not a default one.
+    var pkEraserTool: PKEraserTool {
+        eraserMode.pkEraser(width: Kind.eraser.baseWidth * (widths[.eraser] ?? .medium).scale)
+    }
+
     var pkTool: PKTool {
         let nib = kind.baseWidth * width.scale
         switch kind {
@@ -230,7 +257,7 @@ final class ToolSelection: ObservableObject {
         // The marker's own translucency is what makes it a highlighter rather than a fat pen;
         // PencilKit applies it from the ink type, so the colour is passed at full strength.
         case .marker: return PKInkingTool(.marker, color: ink.uiColor, width: nib)
-        case .eraser: return eraserMode.pkEraser
+        case .eraser: return pkEraserTool
         case .lasso: return PKLassoTool()
         }
     }
@@ -361,15 +388,31 @@ struct ToolRail: View {
 
     /// The widths, as the dots they draw.
     ///
-    /// Shown as sizes rather than named, because the thing being chosen is a size — and while the
-    /// eraser is selected it becomes the eraser's two modes instead, which is the choice that
-    /// actually applies then. The rail used to offer one fixed width per tool and no way to erase
-    /// a whole stroke.
+    /// Shown as sizes rather than named, because the thing being chosen is a size — for the
+    /// eraser as much as for the pens, so the row stays while erasing and the eraser's two modes
+    /// join it. The modes used to *replace* the row, which is how the eraser ended up the one
+    /// implement with a single fixed size. The rail scrolls when the column outgrows the screen,
+    /// so both fit the way every other group does.
     @ViewBuilder
     private var widthPicker: some View {
         let layout = vertical
             ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
         layout {
+            ForEach(ToolSelection.Width.allCases) { width in
+                Button {
+                    selection.select(width: width)
+                } label: {
+                    // The selected cell is an ink fill, so the dot has to invert with it or
+                    // the one step you chose is the one you cannot see.
+                    Circle()
+                        .fill(selection.width == width ? Modernist.paper : Modernist.ink)
+                        .frame(width: width.dotSize, height: width.dotSize)
+                }
+                .buttonStyle(RailButtonStyle(selected: selection.width == width, size: hit))
+                .disabled(!selection.kind.hasWidth)
+                .accessibilityLabel(width.label)
+                .accessibilityIdentifier("editor.width.\(width.rawValue)")
+            }
             if selection.kind == .eraser {
                 ForEach(ToolSelection.EraserMode.allCases) { mode in
                     Button {
@@ -382,22 +425,6 @@ struct ToolRail: View {
                         RailButtonStyle(selected: selection.eraserMode == mode, size: hit))
                     .accessibilityLabel(mode.label)
                     .accessibilityIdentifier("editor.eraserMode.\(mode.rawValue)")
-                }
-            } else {
-                ForEach(ToolSelection.Width.allCases) { width in
-                    Button {
-                        selection.select(width: width)
-                    } label: {
-                        // The selected cell is an ink fill, so the dot has to invert with it or
-                        // the one step you chose is the one you cannot see.
-                        Circle()
-                            .fill(selection.width == width ? Modernist.paper : Modernist.ink)
-                            .frame(width: width.dotSize, height: width.dotSize)
-                    }
-                    .buttonStyle(RailButtonStyle(selected: selection.width == width, size: hit))
-                    .disabled(!selection.kind.takesInk)
-                    .accessibilityLabel(width.label)
-                    .accessibilityIdentifier("editor.width.\(width.rawValue)")
                 }
             }
         }
