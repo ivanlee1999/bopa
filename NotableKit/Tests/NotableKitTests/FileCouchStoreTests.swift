@@ -442,6 +442,63 @@ final class FileCouchStoreTests: XCTestCase {
         XCTAssertEqual(page.images.map(\.assetId), [pictureAssetID])
     }
 
+    /// The ledger used to only ever add: an image erased before its bytes arrived left a
+    /// permanent want — one doomed 404 GET per pull, and an "images still downloading" note that
+    /// never cleared.
+    func testAWantIsForgottenWhenTheImageIsErasedBeforeItsBytesArrive() throws {
+        let pageID = CouchDocID.page("p1")
+        try store.apply(CouchDocID.notebook("nb1"), .notebook(CouchNotebook(
+            title: "album", pageIds: ["p1"], createdAt: stamp(0), updatedAt: stamp(1),
+            updatedBy: "boox")))
+        try store.apply(pageID, .page(CouchPage(
+            notebookId: "nb1",
+            images: [CouchImage(
+                id: "i1", assetId: pictureAssetID, x: 0, y: 0, width: 4, height: 4,
+                createdAt: stamp(1), updatedAt: stamp(1))],
+            createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "boox")))
+        XCTAssertEqual(try store.missingAssetIDs(), [pictureAssetID])
+
+        // The peer erases the image before its bytes were ever uploaded; the merged page carries
+        // the tombstone and no longer places the picture.
+        try store.apply(pageID, .page(CouchPage(
+            notebookId: "nb1",
+            deletedImages: [CouchTombstone(id: "i1", deletedAt: stamp(2))],
+            createdAt: stamp(0), updatedAt: stamp(2), updatedBy: "boox")))
+
+        XCTAssertTrue(try store.missingAssetIDs().isEmpty,
+                      "an erased image's want must not keep a 404 retry alive forever")
+    }
+
+    /// A want names a path in the notebook's shared images directory, not the page that asked —
+    /// so erasing the picture from one page must not starve another page that still places the
+    /// same bytes.
+    func testAWantSurvivesWhileAnotherPageStillPlacesTheImage() throws {
+        try store.apply(CouchDocID.notebook("nb1"), .notebook(CouchNotebook(
+            title: "album", pageIds: ["p1", "p2"], createdAt: stamp(0), updatedAt: stamp(1),
+            updatedBy: "boox")))
+        for pageId in ["p1", "p2"] {
+            try store.apply(CouchDocID.page(pageId), .page(CouchPage(
+                notebookId: "nb1",
+                images: [CouchImage(
+                    id: "i-\(pageId)", assetId: pictureAssetID, x: 0, y: 0, width: 4, height: 4,
+                    createdAt: stamp(1), updatedAt: stamp(1))],
+                createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "boox")))
+        }
+        XCTAssertEqual(try store.missingAssetIDs(), [pictureAssetID])
+
+        try store.apply(CouchDocID.page("p1"), .page(CouchPage(
+            notebookId: "nb1",
+            deletedImages: [CouchTombstone(id: "i-p1", deletedAt: stamp(2))],
+            createdAt: stamp(0), updatedAt: stamp(2), updatedBy: "boox")))
+
+        XCTAssertEqual(try store.missingAssetIDs(), [pictureAssetID],
+                       "p2 still places the bytes, so the want has to survive")
+
+        try store.apply(pictureAssetID, .asset(CouchAsset(
+            data: pictureBytes, at: stamp(3), updatedBy: "ipad")))
+        XCTAssertTrue(try store.missingAssetIDs().isEmpty)
+    }
+
     /// An image this device already holds under its own name keeps that name: renaming it to the
     /// hash would orphan the copy the WebDAV backend syncs by filename.
     func testBytesAlreadyHeldKeepTheNameTheyArrivedUnder() throws {

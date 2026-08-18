@@ -127,6 +127,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             try write(encoder.encode(file), to: pageURL(notebookId: notebookId, pageId: id))
             lock.withLock { pageIndex[id] = notebookId }
             noteWantedAssets(of: file, notebookDir: dir)
+            pruneWantedAssets(droppedBy: file, replacing: existing, notebookId: notebookId)
 
         case .asset(let asset):
             // Where the bytes go was decided when the page that places them was applied; this only
@@ -338,6 +339,50 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         }
         guard added else { return }
         writeWantedAssets(wanted.mapValues { $0.sorted() })
+    }
+
+    /// Forgets wants this merge just orphaned. `noteWantedAssets` only ever adds, and until now
+    /// the only removals were a blob actually arriving (`forgetWantedAsset`) and the whole
+    /// notebook being deleted — so an image erased (or never uploaded) before its bytes landed
+    /// left a permanent want: one doomed 404 GET per pull, and an "images still downloading" note
+    /// that never cleared. Rebuilding this page's contribution on every apply is what lets the
+    /// ledger forget.
+    ///
+    /// Only paths this page used to point at and no longer does can have gone stale here —
+    /// anything else is another page's business, reconciled when that page changes. And a dropped
+    /// path is only forgotten when no other page of the notebook still places it: the ledger's
+    /// paths name the notebook's shared images directory, not the page that asked, and two pages
+    /// can place the same bytes.
+    private func pruneWantedAssets(
+        droppedBy file: PageFile, replacing existing: PageFile?, notebookId: String
+    ) {
+        let dir = notebookDir(notebookId)
+        func referencedPaths(_ page: PageFile?) -> Set<String> {
+            Set((page?.images ?? []).compactMap {
+                NotableImageFiles.url(uri: $0.uri, notebookDir: dir).flatMap(relativeToRoot)
+            })
+        }
+        let dropped = referencedPaths(existing).subtracting(referencedPaths(file))
+        guard !dropped.isEmpty else { return }
+
+        var stale = dropped
+        let pagesDir = dir.appendingPathComponent("pages", isDirectory: true)
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: pagesDir.path)) ?? [] {
+            guard !stale.isEmpty else { break }
+            guard name.hasSuffix(".json"), name != "\(file.id).json",
+                  let data = try? Data(contentsOf: pagesDir.appendingPathComponent(name)),
+                  let page = try? decoder.decode(PageFile.self, from: data)
+            else { continue }
+            stale.subtract(referencedPaths(page))
+        }
+        guard !stale.isEmpty else { return }
+
+        let all = wantedAssets()
+        let kept = all
+            .mapValues { $0.filter { !stale.contains($0) } }
+            .filter { !$0.value.isEmpty }
+        guard kept != all else { return }
+        writeWantedAssets(kept)
     }
 
     private func forgetWantedAsset(_ assetID: String) {
