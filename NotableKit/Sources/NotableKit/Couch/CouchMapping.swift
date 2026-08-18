@@ -41,11 +41,15 @@ public enum CouchMapping {
     /// Rebuilds the on-disk page. `scroll` is device-local and does not travel, so it is carried
     /// over from the copy already on disk rather than reset — otherwise every incoming change
     /// would scroll the reader back to the top.
+    /// - Parameter sha256: how a held image's bytes are hashed — the same injection `couchPage`
+    ///   takes, and for the same reason: this runs on every incoming merge of the page, and the
+    ///   uncached default read every placed image off disk again each time.
     /// - Parameter keeping: strokes already on disk that the merge never saw, appended after the
     ///   merged ink. They are the newest thing on the page, so last — which is also topmost — is
     ///   where they belong. See `FileCouchStore.survivingStrokes`.
     public static func pageFile(
         from page: CouchPage, id: String, existing: PageFile?, notebookDir: URL,
+        sha256: (URL) -> String? = CouchAssetID.sha256Hex,
         keeping surviving: [StrokeDTO] = []
     ) -> PageFile {
         let existingImages = Dictionary(
@@ -57,7 +61,8 @@ public enum CouchMapping {
         var held: [String: String] = [:]
         for image in existing?.images ?? [] {
             guard let uri = image.uri,
-                  let assetID = NotableImageFiles.assetID(forURI: uri, notebookDir: notebookDir)
+                  let assetID = NotableImageFiles.assetID(
+                      forURI: uri, notebookDir: notebookDir, sha256: sha256)
             else { continue }
             held[assetID] = uri
         }

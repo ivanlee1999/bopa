@@ -356,6 +356,40 @@ final class FileCouchStoreTests: XCTestCase {
         XCTAssertEqual(try loadedAssetID(), CouchAssetID.forBytes(replacement))
     }
 
+    /// The apply path shares `load`'s hash cache. It used to hash through the uncached default in
+    /// `CouchMapping.pageFile`'s held-map, so every incoming merge of a page re-read every placed
+    /// image off disk — megabytes per photo, on every pull that touched the page.
+    func testApplyDoesNotRehashAnUnchangedImage() throws {
+        try placeImage(named: "holiday.png", in: "nb1", on: "p1")
+
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var count = 0
+            func increment() { lock.withLock { count += 1 } }
+            var value: Int { lock.withLock { count } }
+        }
+        let hashes = Counter()
+        let base = store.hashFileContents
+        store.hashFileContents = { url in
+            hashes.increment()
+            return base(url)
+        }
+
+        let incoming = CouchPage(
+            notebookId: "nb1",
+            images: [CouchImage(
+                id: "i1", assetId: pictureAssetID, x: 0, y: 0, width: 4, height: 4,
+                createdAt: stamp(1), updatedAt: stamp(1))],
+            createdAt: stamp(0), updatedAt: stamp(2), updatedBy: "boox")
+        try store.apply(CouchDocID.page("p1"), .page(incoming))
+        XCTAssertEqual(hashes.value, 1, "the first apply hashes the placed file once, to fill the cache")
+
+        var again = incoming
+        again.updatedAt = stamp(3)
+        try store.apply(CouchDocID.page("p1"), .page(again))
+        XCTAssertEqual(hashes.value, 1, "a second apply of an unchanged image must not re-read it")
+    }
+
     /// What a placed image looks like on the wire: a reference to the hash of its bytes, not to
     /// wherever this device happens to keep the file.
     func testAPlacedImageTravelsAsTheHashOfItsBytes() throws {
