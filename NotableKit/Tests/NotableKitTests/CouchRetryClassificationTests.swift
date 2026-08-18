@@ -111,4 +111,41 @@ final class CouchRetryClassificationTests: XCTestCase {
             HTTPResponse(status: status, headers: ["Retry-After": header], body: Data())
         }
     }
+
+    // MARK: Which hop refused it — protocol §7.2
+
+    /// CouchDB answers `application/json` with its own error name.
+    func testCouchDBsOwnErrorBodyNamesCouchDBAsTheRefuser() {
+        XCTAssertEqual(
+            CouchDBClient.refuser(ofBody: MockCouchServer.couchDBTooLarge), .couchDB)
+    }
+
+    /// nginx answers an HTML error page, and CouchDB never saw the request.
+    func testAnHTMLErrorPageNamesAnIntermediary() {
+        XCTAssertEqual(
+            CouchDBClient.refuser(ofBody: MockCouchServer.proxyTooLarge), .intermediary)
+    }
+
+    /// The safe default. Assuming the proxy means the upload is retried once the server is fixed;
+    /// assuming CouchDB would strand it awaiting an edit that changes nothing.
+    func testAnUnreadableBodyIsReadAsAnIntermediary() {
+        for body in [Data(), Data("not json at all".utf8), Data("{".utf8),
+                     Data(#"{"error":"something_else"}"#.utf8)] {
+            XCTAssertEqual(CouchDBClient.refuser(ofBody: body), .intermediary)
+        }
+    }
+
+    /// The two messages must name different things to fix — that is the whole point of telling
+    /// them apart. A user sent to shrink a note when the server caps uploads edits forever.
+    func testTheTwoRefusalsGiveDifferentAdvice() {
+        let couch = CouchError.server(
+            status: 413, path: "/notes/page:1", retryAfter: nil, refusedBy: .couchDB)
+        let proxy = CouchError.server(
+            status: 413, path: "/notes/asset:1", retryAfter: nil, refusedBy: .intermediary)
+
+        XCTAssertTrue(couch.userMessage.contains("document limit"))
+        XCTAssertFalse(couch.userMessage.contains("client_max_body_size"))
+        XCTAssertTrue(proxy.userMessage.contains("client_max_body_size"))
+        XCTAssertNotEqual(couch.userMessage, proxy.userMessage)
+    }
 }

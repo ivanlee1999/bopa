@@ -341,8 +341,23 @@ public struct CouchDBClient: Sendable {
         default:
             return .server(
                 status: response.status, path: path,
-                retryAfter: Self.retryAfter(response.header("Retry-After")))
+                retryAfter: Self.retryAfter(response.header("Retry-After")),
+                refusedBy: response.status == 413
+                    ? Self.refuser(ofBody: response.body) : .notApplicable)
         }
+    }
+
+    /// Which hop refused an oversized request — protocol §7.2.
+    ///
+    /// **The test is the body, not the status.** CouchDB answers `application/json` with
+    /// `{"error":"document_too_large"}`; nginx answers an HTML error page and never reaches CouchDB
+    /// at all. Anything that is not recognisably CouchDB's own error — including a body that fails
+    /// to parse, which is what a proxy in an unexpected configuration produces — is treated as the
+    /// intermediary case, because that is the assumption whose failure mode is recoverable: it
+    /// retries after the server is fixed instead of staying stuck forever.
+    static func refuser(ofBody body: Data) -> CouchError.Refuser {
+        let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        return (object?["error"] as? String) == "document_too_large" ? .couchDB : .intermediary
     }
 
     /// `Retry-After` in either shape RFC 9110 allows: a delay in seconds, or an HTTP date.
@@ -387,8 +402,28 @@ public enum CouchError: Error, Equatable {
     /// Credentials rejected — worth surfacing immediately, since retrying cannot fix it.
     case unauthorized
     /// Any other status the client does not handle specially. `retryAfter` carries the server's
-    /// own answer to "when should I come back", in seconds, when it sent one.
-    case server(status: Int, path: String, retryAfter: TimeInterval? = nil)
+    /// own answer to "when should I come back", in seconds, when it sent one. `refusedBy` answers
+    /// §7.2's question for a 413 and is `.notApplicable` otherwise.
+    case server(
+        status: Int, path: String, retryAfter: TimeInterval? = nil,
+        refusedBy: Refuser = .notApplicable)
+
+    /// Which hop refused an oversized request (protocol §7.2). The two answers call for opposite
+    /// handling, and conflating them tells the user to fix the wrong thing.
+    ///
+    /// `couchDB` means the document's *ordinary* fields exceed `max_document_size`. Attachment data
+    /// is exempt from that measure, so in practice this can only ever be a page — an asset document
+    /// is a couple of hundred bytes plus its blob.
+    ///
+    /// `intermediary` means something in front of CouchDB capped the request body and CouchDB never
+    /// saw it. nginx's `client_max_body_size` defaults to 1 MB, which after base64's 4/3 inflation
+    /// rejects any asset over roughly 768 KiB — every photograph a phone takes. It is configuration
+    /// rather than content, so nothing about the document will ever change to fix it.
+    public enum Refuser: Sendable, Equatable {
+        case notApplicable
+        case couchDB
+        case intermediary
+    }
     /// Offline, DNS failure, timeout: keep the work queued and back off.
     case transport(String)
     case malformedResponse(String)
@@ -410,7 +445,7 @@ public enum CouchError: Error, Equatable {
     public var isRetriable: Bool {
         switch self {
         case .transport: return true
-        case let .server(status, _, _):
+        case let .server(status, _, _, _):
             switch status {
             case 408, 425, 429: return true          // timeout, too early, rate limited
             case 500...599: return true              // the server's own fault, possibly transient
@@ -427,7 +462,7 @@ public enum CouchError: Error, Equatable {
     /// How long the server asked this device to wait, if it said. Only meaningful when
     /// `isRetriable`.
     public var retryAfter: TimeInterval? {
-        if case let .server(_, _, retryAfter) = self { return retryAfter }
+        if case let .server(_, _, retryAfter, _) = self { return retryAfter }
         return nil
     }
 
@@ -443,11 +478,18 @@ public enum CouchError: Error, Equatable {
             return "Offline — changes are saved and will sync when you reconnect."
         case .conflict:
             return "Another device kept changing the same notes; will retry shortly."
-        case .server(let status, _, _) where status == 413:
-            // The one terminal status with an answer the user can act on. Everything else in this
-            // class is a server or configuration fault they can only report.
-            return "A page is too large for the sync server to accept."
-        case .server(let status, _, _):
+        case .server(413, _, _, .couchDB):
+            // The one terminal status with an answer the user can act on — but which answer depends
+            // on which hop refused it (§7.2), and they are opposites.
+            return "A page is too large for the sync server's document limit."
+        case .server(413, _, _, _):
+            // Not the document's fault and not fixable here: something in front of CouchDB capped
+            // the upload. Naming the setting is the whole value of this sentence — "too large"
+            // alone sends the user to edit a note that is not the problem.
+            return "The sync server refused an upload before it reached CouchDB — a proxy in "
+                + "front of it limits how large a request may be. Raise client_max_body_size "
+                + "(nginx defaults to 1 MB, which is smaller than most photos)."
+        case .server(let status, _, _, _):
             return status < 500
                 ? "The sync server refused the request (\(status)). Check the sync settings."
                 : "The sync server returned an error (\(status))."
