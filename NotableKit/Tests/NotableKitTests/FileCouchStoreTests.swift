@@ -232,6 +232,37 @@ final class FileCouchStoreTests: XCTestCase {
         }
     }
 
+    // MARK: Pending dirty marks
+
+    /// The durable half of the edit signal: recorded before the hop to the engine, confirmed
+    /// after `markDirty` persists — so the file's contents are exactly the edits an app kill
+    /// would otherwise strand.
+    func testPendingMarksSurviveAReopenAndClearOnlyWhenEveryEditIsConfirmed() throws {
+        let id = CouchDocID.page("p1")
+        store.recordPendingMarks([id])
+        XCTAssertEqual(
+            FileCouchStore(rootURL: root, deviceID: "ipad").pendingMarkIDs(), [id],
+            "surviving a restart is the record's whole job")
+
+        // A second edit lands before the first confirm. The confirm must clear only its own
+        // edit, or the crash window reopens exactly where it was.
+        store.recordPendingMarks([id])
+        store.confirmPendingMarks([id])
+        XCTAssertEqual(store.pendingMarkIDs(), [id], "the second edit is still unconfirmed")
+
+        store.confirmPendingMarks([id])
+        XCTAssertTrue(store.pendingMarkIDs().isEmpty)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(".bopa-couch-pending-marks.json").path),
+            "an empty record leaves no file behind")
+
+        // Confirming something never recorded must not go negative and eat the next record.
+        store.confirmPendingMarks([id])
+        store.recordPendingMarks([id])
+        XCTAssertEqual(store.pendingMarkIDs(), [id])
+    }
+
     // MARK: Enumeration and conflict copies
 
     func testAllDocumentIDsCoversFoldersNotebooksPagesAndDeletions() throws {

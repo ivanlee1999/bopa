@@ -172,6 +172,12 @@ enum CouchSyncStack {
         // id changes nothing, and an id leaves the file only when its tombstone reaches the
         // server (or the user declines to publish it).
         initialState.dirty.formUnion(store.pendingDeletionIDs())
+        // The same healing for *edits*: a dirty mark recorded at the mutation whose journey to
+        // the engine was cut short by an app kill. The record clears only after `markDirty` has
+        // persisted the id (see `SyncBackendHost`), so anything still here is an edit nothing
+        // else will queue — the document is on disk and the server holds a revision for it,
+        // which makes it invisible to both the deletion seed above and the unsent scan below.
+        initialState.dirty.formUnion(store.pendingMarkIDs())
         // The unsent scan: everything this device holds that the server has never seen — no
         // recorded revision means no push ever succeeded and no pull ever delivered it — enters
         // the outbox too. While the backend is off (or WebDAV is selected) the store's

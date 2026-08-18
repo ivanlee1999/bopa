@@ -16,6 +16,7 @@ import Foundation
 ///     <root>/notebooks/<notebookId>/images/<name>
 ///     <root>/.bopa-couch-deletions.json     — local tombstones awaiting push
 ///     <root>/.bopa-couch-assets.json        — image blobs a local page wants, not yet downloaded
+///     <root>/.bopa-couch-pending-marks.json — edits whose dirty mark has not reached the engine
 public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     public let rootURL: URL
     public let deviceID: String
@@ -54,6 +55,9 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     private var foldersURL: URL { rootURL.appendingPathComponent("folders.json") }
     private var deletionsURL: URL { rootURL.appendingPathComponent(".bopa-couch-deletions.json") }
     private var assetsURL: URL { rootURL.appendingPathComponent(".bopa-couch-assets.json") }
+    private var pendingMarksURL: URL {
+        rootURL.appendingPathComponent(".bopa-couch-pending-marks.json")
+    }
 
     private func notebookDir(_ id: String) -> URL {
         notebooksURL.appendingPathComponent(id, isDirectory: true)
@@ -482,6 +486,68 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
             try? data.write(to: assetsURL, options: .atomic)
         }
+    }
+
+    // MARK: Pending dirty marks
+
+    /// Records that these documents were just edited and their dirty marks have not yet reached
+    /// the engine's persisted outbox. The durable half of `SyncBackendHost.didChangeDocuments`,
+    /// whose signal hops through an async Task on its way to `markDirty` — an app killed inside
+    /// that hop stranded the edit: written to disk, already known to the server, and marked by
+    /// nothing, so nothing would ever push it until the document happened to be touched again.
+    ///
+    /// Same lifecycle as the deletions file: written synchronously at the mutation, folded into
+    /// the outbox when the stack is constructed, cleared once the engine confirms the mark.
+    ///
+    /// Counted rather than kept as a set, because rapid edits to one document overlap: edit A's
+    /// confirm must not erase edit B's still-unconfirmed record, or the crash window reopens
+    /// exactly where it was. An id leaves the file when every recorded edit is confirmed.
+    public func recordPendingMarks(_ documentIDs: [String]) {
+        guard !documentIDs.isEmpty else { return }
+        mutatePendingMarks { marks in
+            for id in documentIDs { marks[id, default: 0] += 1 }
+        }
+    }
+
+    /// The engine now holds these ids in its persisted outbox — `markDirty` returned — so this
+    /// edit's record has done its job.
+    public func confirmPendingMarks(_ documentIDs: [String]) {
+        guard !documentIDs.isEmpty else { return }
+        mutatePendingMarks { marks in
+            for id in documentIDs {
+                guard let count = marks[id] else { continue }
+                marks[id] = count > 1 ? count - 1 : nil
+            }
+        }
+    }
+
+    /// Edits whose journey to the outbox was cut short — what construction folds back in.
+    public func pendingMarkIDs() -> [String] {
+        lock.withLock { readPendingMarksLocked().keys.sorted() }
+    }
+
+    /// One read-modify-write under one lock hold: record (main actor) and confirm (an arbitrary
+    /// Task executor) genuinely race, and a torn update here is a lost crash-safety record.
+    private func mutatePendingMarks(_ mutate: (inout [String: Int]) -> Void) {
+        lock.withLock {
+            var marks = readPendingMarksLocked()
+            mutate(&marks)
+            if marks.isEmpty {
+                try? FileManager.default.removeItem(at: pendingMarksURL)
+                return
+            }
+            guard let data = try? encoder.encode(marks) else { return }
+            try? FileManager.default.createDirectory(
+                at: rootURL, withIntermediateDirectories: true)
+            try? data.write(to: pendingMarksURL, options: .atomic)
+        }
+    }
+
+    private func readPendingMarksLocked() -> [String: Int] {
+        guard let data = try? Data(contentsOf: pendingMarksURL),
+              let marks = try? decoder.decode([String: Int].self, from: data)
+        else { return [:] }
+        return marks
     }
 
     // MARK: Local deletions

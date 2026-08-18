@@ -464,6 +464,65 @@ final class NotebookStoreCouchTests: XCTestCase {
             sink.reported.first?.revs[CouchDocID.notebook(notebook.notebookId)], "1-abc")
     }
 
+    /// An *edit's* dirty mark travels the same async hop a deletion's did, and matched neither
+    /// construction-time seed: the document is on disk (so it is not a deletion) and the server
+    /// holds a revision for it (so the unsent scan skips it). The host now records the intent
+    /// durably before the hop — synchronously, inside the mutation's own change signal — and
+    /// clears it only after the engine has persisted the mark.
+    func testAnEditsDirtyMarkIsDurableAcrossTheHopToTheEngine() async throws {
+        let settings = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+        let host = SyncBackendHost(loadSettings: { settings }, loadBackend: { .couchdb })
+        host.attach(store: store, coordinator: SyncCoordinator())
+        // A fresh reader over the same directory — the file is the record, not the instance.
+        let reader = FileCouchStore(rootURL: rootURL, deviceID: "ipad")
+
+        _ = try store.createNotebook(title: "durable")
+        // No suspension has happened since the mutation, so the Task carrying markDirty cannot
+        // have run yet — this is exactly the window an app kill used to strand.
+        XCTAssertFalse(
+            reader.pendingMarkIDs().isEmpty,
+            "the mark must be durable before the hop to the engine, not after it")
+
+        // Once the engine holds the ids in its persisted outbox, the record has done its job.
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(reader.pendingMarkIDs().isEmpty, "a confirmed mark must not linger")
+    }
+
+    /// The healing half: a mark still recorded at launch — the app died mid-hop — re-enters the
+    /// outbox at construction, exactly as a recorded deletion does.
+    func testTheStackSeedsTheOutboxWithUnconfirmedDirtyMarks() async throws {
+        let notebook = try store.createNotebook(title: "edited then killed")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        let settings = CouchSettings(
+            serverURL: "http://127.0.0.1:5984", database: "notes", username: "sync",
+            password: "pw", deviceID: "ipad")
+        // The server already holds the page — a recorded revision — so the unsent scan cannot
+        // see the edit; only the pending mark says one is waiting.
+        CouchSyncStack.save(
+            CouchSyncState(
+                lastSeq: "42",
+                revs: [
+                    CouchDocID.notebook(notebook.notebookId): "2-abc",
+                    CouchDocID.page(pageId): "2-def",
+                ]),
+            to: rootURL.appendingPathComponent(CouchSyncStack.stateFileName(for: settings)))
+        FileCouchStore(rootURL: rootURL, deviceID: "ipad")
+            .recordPendingMarks([CouchDocID.page(pageId)])
+
+        let stack = try XCTUnwrap(CouchSyncStack.make(
+            settings: settings, rootURL: rootURL, onChange: {}))
+
+        let state = await stack.engine.currentState
+        XCTAssertTrue(
+            state.dirty.contains(CouchDocID.page(pageId)),
+            "the stranded edit must re-enter the outbox at construction")
+        XCTAssertFalse(
+            state.dirty.contains(CouchDocID.notebook(notebook.notebookId)),
+            "and nothing else rides along with it")
+    }
+
     /// A deletion is recorded durably the moment it happens, but its dirty mark used to travel
     /// only through an async Task — an app killed between the two held a tombstone nothing would
     /// ever push, because nothing re-read the deletions file at startup. Building the stack now
