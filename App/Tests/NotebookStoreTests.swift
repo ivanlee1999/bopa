@@ -533,6 +533,96 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(onDisk.pageIds, downloaded.pageIds + [added.id])
     }
 
+    /// A save prunes stroke tombstones past the protocol's 30-day horizon (§6.6, "Pruning") and
+    /// keeps everything younger — otherwise a much-erased page's document grows for ever.
+    func testSavePrunesTombstonesPastTheHorizonAndKeepsTheRest() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        var seeded = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        seeded.deletedStrokes = [
+            CouchTombstone(id: "ancient", deletedAt: "2026-01-01T00:00:00.000Z"),
+            CouchTombstone(id: "recent", deletedAt: NotableDate.format(Date())),
+            CouchTombstone(id: "unreadable", deletedAt: "not-a-timestamp"),
+        ]
+        try writePageDirectly(seeded, notebookId: notebook.notebookId)
+
+        let page = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        try store.savePage(page)
+
+        let after = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        XCTAssertEqual(
+            after.deletedStrokes.map(\.id).sorted(), ["recent", "unreadable"],
+            "past the horizon goes; fresh stays; unparseable cannot be shown old enough to drop")
+    }
+
+    /// An image tombstone lands on disk while the page is open — the BOOX erased the image — and
+    /// the next autosave must carry it forward and drop the image, not push back a page that
+    /// still shows the image and has forgotten it was ever erased.
+    func testSaveKeepsAnImageTombstoneThatArrivedWhileThePageWasOpen() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        let held = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+
+        var arrived = held
+        arrived.images = []
+        arrived.deletedImages = [
+            CouchTombstone(id: "img-1", deletedAt: NotableDate.format(Date()))
+        ]
+        try writePageDirectly(arrived, notebookId: notebook.notebookId)
+
+        var stale = held
+        stale.images = [
+            ImageDTO(
+                id: "img-1", x: 10, y: 10, width: 100, height: 100, uri: nil,
+                createdAt: held.createdAt, updatedAt: held.createdAt)
+        ]
+        try store.savePage(stale)
+
+        let after = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        XCTAssertEqual(after.deletedImages.map(\.id), ["img-1"])
+        XCTAssertTrue(after.images.isEmpty, "an erased image must not ride back in on an autosave")
+    }
+
+    /// Drawing must not rewrite the notebook's envelope — the record the merge decides renames,
+    /// moves and page order by. When it did, ink drawn here silently undid a rename arriving from
+    /// the BOOX whenever the ink was later. A page save touches the page document alone.
+    func testSavingAPageLeavesTheNotebookEnvelopeAlone() throws {
+        let notebook = try store.createNotebook(title: "Notes")
+        let pageId = try XCTUnwrap(notebook.pageIds.first)
+        var changed: [[String]] = []
+        store.didChangeDocuments = { changed.append($0) }
+
+        let page = try store.loadPage(notebookId: notebook.notebookId, pageId: pageId)
+        try store.savePage(page)
+
+        let after = try manifestOnDisk(notebook.notebookId)
+        XCTAssertEqual(after.updatedAt, notebook.updatedAt, "the envelope clock must not move")
+        XCTAssertEqual(
+            changed, [["page:\(pageId)"]],
+            "sync is offered the page alone — the notebook document did not change")
+    }
+
+    /// Losing the envelope bump must not lose the recency sort: the pages directory's own
+    /// modification date moves with every page save, so drawing still floats the notebook.
+    func testDrawingFloatsTheNotebookWithoutTouchingItsEnvelope() throws {
+        let stale = try store.createNotebook(title: "Older")
+        Thread.sleep(forTimeInterval: 0.05)
+        _ = try store.createNotebook(title: "Newer")
+        XCTAssertEqual(store.notebooks.map(\.title), ["Newer", "Older"])
+
+        Thread.sleep(forTimeInterval: 0.05)
+        let pageId = try XCTUnwrap(stale.pageIds.first)
+        let page = try store.loadPage(notebookId: stale.notebookId, pageId: pageId)
+        try store.savePage(page)
+
+        XCTAssertEqual(
+            store.notebooks.map(\.title), ["Older", "Newer"],
+            "the inked notebook floats to the top on the pages directory's clock")
+        XCTAssertEqual(
+            try manifestOnDisk(stale.notebookId).updatedAt, stale.updatedAt,
+            "and its envelope still has not moved")
+    }
+
     /// Writes straight to disk, bypassing the store — standing in for the sync engine.
     private func writeManifestDirectly(_ manifest: NotebookManifest) throws {
         let encoder = JSONEncoder()

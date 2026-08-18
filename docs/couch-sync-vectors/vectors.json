@@ -2853,6 +2853,106 @@
           "pageHeight": 1000
         }
       ]
+    },
+    {
+      "name": "tiebreak-supplementary-updated-by-orders-by-bytes",
+      "kind": "page",
+      "why": "Same-instant scalar conflicts fall to the updatedBy tiebreak, and the two languages' default string orders disagree beyond ASCII: UTF-16 code units file a supplementary-plane character below parts of the BMP that UTF-8 files it above, so each app would pick a different winner for the same conflict. The protocol's string order is UTF-8 bytes (\u00a72.4): U+1D49C (F0 9D 92 9C) outranks U+FB00 (EF AC 80).",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": "from-a",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-16T10:00:00Z",
+        "updatedBy": "\ud835\udc9c-tablet"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": "from-b",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-16T10:00:00Z",
+        "updatedBy": "\ufb00-tablet"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": "from-a",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-16T10:00:00Z",
+        "updatedBy": "\ud835\udc9c-tablet"
+      }
+    },
+    {
+      "name": "tiebreak-spellings-of-one-device-differ-in-bytes",
+      "kind": "page",
+      "why": "Composed and decomposed spellings of one device name are equal under Unicode canonical equivalence but not byte-for-byte; a merge that equates them skips the tiebreak its twin takes. The gate and the order both read UTF-8 bytes: NFC \u00e9 (C3 A9) outranks NFD e+U+0301 (65 CC 81).",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": "from-nfc",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-16T10:00:00Z",
+        "updatedBy": "\u00e9-pad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": "from-nfd",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-16T10:00:00Z",
+        "updatedBy": "e\u0301-pad"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "title": "from-nfc",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-16T10:00:00Z",
+        "updatedBy": "\u00e9-pad"
+      }
     }
   ]
 }

@@ -31,14 +31,32 @@ public enum CouchMerge {
     static func earlier(_ a: String, _ b: String) -> String {
         let (ma, mb) = (millis(a), millis(b))
         if ma != mb { return ma < mb ? a : b }
-        return a <= b ? a : b
+        return byteCompare(a, b) <= 0 ? a : b
     }
 
     /// The source string whose instant is later, with the same spelling tiebreak as `earlier`.
     static func later(_ a: String, _ b: String) -> String {
         let (ma, mb) = (millis(a), millis(b))
         if ma != mb { return ma > mb ? a : b }
-        return a >= b ? a : b
+        return byteCompare(a, b) >= 0 ? a : b
+    }
+
+    /// Lexicographic comparison over UTF-8 bytes — the protocol's string order (§4), used
+    /// wherever the merge breaks a tie on a string.
+    ///
+    /// Neither language's default is safe here. Swift's `<` (and `==`) reads strings by Unicode
+    /// canonical equivalence, which files supplementary-plane characters differently from their
+    /// bytes *and* equates spellings — composed and decomposed "é" — that differ on the wire, so
+    /// a tiebreak can be skipped here that Kotlin takes. Kotlin's `compareTo` orders by UTF-16
+    /// code unit, which files every supplementary-plane character (a device name with an emoji in
+    /// it) below parts of the BMP that UTF-8 files it above. Two merges that order the same pair
+    /// differently pick different winners for the same conflict, and the two apps quietly diverge
+    /// on identical input. Bytes are the one reading both languages produce identically; pinned by
+    /// the `tiebreak-*` vectors.
+    static func byteCompare(_ a: String, _ b: String) -> Int {
+        if a.utf8.lexicographicallyPrecedes(b.utf8) { return -1 }
+        if b.utf8.lexicographicallyPrecedes(a.utf8) { return 1 }
+        return 0
     }
 
     /// Total, commutative order over a document's scalar envelope. `true` means `a` wins.
@@ -50,8 +68,11 @@ public enum CouchMerge {
                      over b: (updatedAt: String, updatedBy: String, scalarKey: String)) -> Bool {
         let (ma, mb) = (millis(a.updatedAt), millis(b.updatedAt))
         if ma != mb { return ma > mb }
-        if a.updatedBy != b.updatedBy { return a.updatedBy > b.updatedBy }
-        return a.scalarKey >= b.scalarKey
+        // The gate must be byte equality too: Swift `!=` would call two spellings of one device
+        // name equal and skip a tiebreak Kotlin takes.
+        let d = byteCompare(a.updatedBy, b.updatedBy)
+        if d != 0 { return d > 0 }
+        return byteCompare(a.scalarKey, b.scalarKey) >= 0
     }
 
     /// Minimal key-sorted JSON of scalar fields, used only as the last-resort tiebreak.
@@ -206,13 +227,13 @@ public enum CouchMerge {
     private static func preferredStroke(_ x: CouchStroke, _ y: CouchStroke) -> CouchStroke {
         let (mx, my) = (millis(x.updatedAt), millis(y.updatedAt))
         if mx != my { return mx > my ? x : y }
-        return strokeTiebreak(x) >= strokeTiebreak(y) ? x : y
+        return byteCompare(strokeTiebreak(x), strokeTiebreak(y)) >= 0 ? x : y
     }
 
     private static func preferredImage(_ x: CouchImage, _ y: CouchImage) -> CouchImage {
         let (mx, my) = (millis(x.updatedAt), millis(y.updatedAt))
         if mx != my { return mx > my ? x : y }
-        return imageTiebreak(x) >= imageTiebreak(y) ? x : y
+        return byteCompare(imageTiebreak(x), imageTiebreak(y)) >= 0 ? x : y
     }
 
     /// Total order over every field of a stroke. Floats go in as their IEEE-754 bit patterns:

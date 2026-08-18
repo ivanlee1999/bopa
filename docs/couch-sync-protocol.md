@@ -296,6 +296,16 @@ Swift and Kotlin would not agree on for free.
 3. else greater `scalarKey(doc)` by UTF-8 code-unit order wins;
 4. else the scalar envelopes are identical — either may be returned.
 
+**UTF-8 code-unit order means bytes — including the equality test.** Neither language's
+default string comparison implements it: Swift's `<`/`==` read Unicode canonical
+equivalence, which files supplementary-plane characters away from their byte order *and*
+equates spellings (composed and decomposed `é`) that differ on the wire, so step 2's gate
+can be skipped on one side and taken on the other; Kotlin's `compareTo` orders by UTF-16
+code unit, which files every supplementary-plane character below parts of the BMP that
+UTF-8 files above. Any string tiebreak in the merge — steps 2 and 3 here, the spelling
+tiebreak in `earlier`/`later`, and the stroke/image field keys — compares raw UTF-8 bytes.
+Pinned by the `tiebreak-*` vectors.
+
 Step 3 exists so `pick` stays commutative when two devices write the same millisecond
 under the same device id; without it `merge(a,b) ≠ merge(b,a)` in that case. Because the
 two devices use distinct `deviceId` values, step 3 is unreachable in normal operation —
@@ -630,8 +640,22 @@ tombstones = existing ++ { (id, deletedAt: now) : id ∈ departed }, sorted by i
 An id that is already tombstoned **keeps its original `deletedAt`**. Re-stamping it on every
 save would let an arbitrarily later timestamp win a delete-vs-edit comparison it should lose.
 
-Tombstones older than 30 days may be pruned locally; a tombstone whose `deletedAt` cannot be
-parsed is never pruned, since it cannot be shown to be old enough.
+**Pruning.** A writer prunes stroke and image tombstones whose `deletedAt` is more than **30
+days** old, whenever it is rewriting the document anyway — never as an edit of its own (no
+`updatedAt` bump, no push of an otherwise-unchanged document). A tombstone whose `deletedAt`
+cannot be parsed is never pruned, since it cannot be shown to be old enough.
+
+Pruning needs no coordination. A peer still holding the longer list unions the pruned
+tombstones straight back on merge; that is harmless — the next local write prunes them again,
+and they are gone everywhere once every writer is past the horizon. What the horizon actually
+bounds is the device that *stopped syncing*: one that last pulled before an erasure and
+returns after 30 days re-offers the erased ink as if new. That is the accepted cost of not
+growing every page document forever.
+
+Only stroke and image tombstones are ever pruned. `deletedPageIds`, bookmarks, and removed
+outline entries are kept indefinitely: they carry structural identity the merge needs (a
+pruned outline tombstone resurrects its entry — see §5.2.2), and they grow with deliberate
+user actions, not with every sweep of the eraser.
 
 ### 6.7 Mass-deletion guard
 

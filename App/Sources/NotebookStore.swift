@@ -92,11 +92,13 @@ final class NotebookStore: ObservableObject {
     func refresh() {
         let notebooksDir = rootURL.appendingPathComponent("notebooks", isDirectory: true)
         let ids = (try? FileManager.default.contentsOfDirectory(atPath: notebooksDir.path)) ?? []
-        notebooks = ids.compactMap { id in
+        notebooks = ids.compactMap { id -> NotebookManifest? in
             guard let data = try? Data(contentsOf: manifestURL(id)) else { return nil }
             return try? decoder.decode(NotebookManifest.self, from: data)
         }
-        .sorted { ($0.updatedAt, $0.title) > ($1.updatedAt, $1.title) }
+        .map { (activity: lastActivity($0), manifest: $0) }
+        .sorted { ($0.activity, $0.manifest.title) > ($1.activity, $1.manifest.title) }
+        .map(\.manifest)
 
         folders = ((try? Data(contentsOf: foldersURL))
             .flatMap { try? decoder.decode(FoldersFile.self, from: $0) }?.folders ?? [])
@@ -108,6 +110,22 @@ final class NotebookStore: ObservableObject {
         trash = LocalTrash.load(root: rootURL)
 
         remoteIndex = RemoteIndex.load(root: rootURL)
+    }
+
+    /// When this notebook last changed, for the recency sort: its envelope clock or the pages
+    /// directory's, whichever is later.
+    ///
+    /// The envelope alone stopped being enough when `savePage` stopped bumping it (drawing must
+    /// not rewrite the record the merge decides renames and moves by). Every page save replaces a
+    /// directory entry atomically, which moves the directory's own modification date — including
+    /// for ink arriving from the other device, which never floated the notebook before and
+    /// should have.
+    private func lastActivity(_ manifest: NotebookManifest) -> Date {
+        let envelope = NotableDate.parse(manifest.updatedAt) ?? .distantPast
+        let pagesDir = notebookDir(manifest.notebookId).appendingPathComponent("pages")
+        let attributes = try? FileManager.default.attributesOfItem(atPath: pagesDir.path)
+        guard let inked = attributes?[.modificationDate] as? Date else { return envelope }
+        return max(envelope, inked)
     }
 
     /// - Parameter pageSize: the sheet every page here is laid out on, recorded on the notebook
@@ -175,7 +193,8 @@ final class NotebookStore: ObservableObject {
         return String(date.timeIntervalSinceReferenceDate)
     }
 
-    /// Persists a page and bumps the notebook's `updatedAt` (the sync conflict clock).
+    /// Persists a page — and only the page. The notebook's envelope is deliberately left alone;
+    /// see the note at the end of this method.
     ///
     /// The manifest is re-read from disk rather than taken from `notebooks`: that array is only as
     /// fresh as the last `refresh()`, and sync writes manifests from another thread throughout a
@@ -236,11 +255,13 @@ final class NotebookStore: ObservableObject {
         // Whatever the caller *had* and no longer has was erased. Recording it is what stops the
         // other device's copy of an erased stroke from coming back on the next merge — absence
         // alone cannot be told apart from "that stroke has not reached this device yet".
-        page.deletedStrokes = CouchTombstones.derive(
-            previousIDs: baseline,
-            currentIDs: saved,
-            existing: onDisk?.deletedStrokes ?? [],
-            deletedAt: now)
+        page.deletedStrokes = CouchTombstones.prune(
+            CouchTombstones.derive(
+                previousIDs: baseline,
+                currentIDs: saved,
+                existing: onDisk?.deletedStrokes ?? [],
+                deletedAt: now),
+            now: Date())
         let erased = Set(page.deletedStrokes.map(\.id))
 
         // Erasure beats drawing: a stroke the other device tombstoned goes, even though this
@@ -252,18 +273,30 @@ final class NotebookStore: ObservableObject {
         page.strokes += (onDisk?.strokes ?? []).filter {
             !saved.contains($0.id) && !baseline.contains($0.id) && !erased.contains($0.id)
         }
-        // Images travel the same way and the editor never removes them, so an add-wins union is
-        // the whole rule (the page format carries no image tombstones).
+        // Image tombstones only ever arrive from the other device (nothing here deletes an
+        // image), so the file's are at least as fresh as the caller's load-time copy — union
+        // them, or an autosave would strip an erasure that landed while the page was open and
+        // push the stripped list back to the server. Then honour them, same as the strokes.
+        page.deletedImages = CouchTombstones.prune(
+            CouchMerge.unionTombstones(page.deletedImages, onDisk?.deletedImages ?? []),
+            now: Date())
+        let erasedImages = Set(page.deletedImages.map(\.id))
+        page.images.removeAll { erasedImages.contains($0.id) }
+        // Live images travel the same way the strokes do and the editor never removes them, so
+        // an add-wins union over the tombstones is the whole rule.
         let savedImages = Set(page.images.map(\.id))
-        page.images += (onDisk?.images ?? []).filter { !savedImages.contains($0.id) }
+        page.images += (onDisk?.images ?? []).filter {
+            !savedImages.contains($0.id) && !erasedImages.contains($0.id)
+        }
 
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
-        manifest.updatedAt = now
-        manifest.updatedBy = deviceID
-        try writeManifest(manifest)
-        refreshAfterLocalChange(
-            documents: [CouchDocID.page(page.id), CouchDocID.notebook(notebookId)])
+        // The manifest is deliberately not touched. Ink lives in the page document, which carries
+        // its own clock; bumping the notebook's `updatedAt` here made every autosave rewrite the
+        // envelope the merge decides renames, moves and page order by — so drawing on this device
+        // silently undid a rename arriving from the other one, every time the ink was later.
+        // Sorting by recency reads the pages directory's own clock instead (see `refresh`).
+        refreshAfterLocalChange(documents: [CouchDocID.page(page.id)])
         return page
     }
 
