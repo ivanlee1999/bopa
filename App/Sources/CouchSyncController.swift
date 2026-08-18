@@ -71,6 +71,10 @@ final class CouchSyncController: ObservableObject {
     private let discardDeletions: ResolveDeletions
     private let sleeper: Sleeper
     private let now: @MainActor () -> Date
+    /// Where a measured skew stops being reported and starts being used: every timestamp the app
+    /// stamps afterwards is corrected by it. Distinct from `now`, which paces the loops and must
+    /// keep reading the real clock — a corrected clock stepping backwards would confuse a backoff.
+    private let syncClock: SyncClock
 
     private var pullTask: Task<Void, Never>?
     private var pushTask: Task<Void, Never>?
@@ -97,6 +101,7 @@ final class CouchSyncController: ObservableObject {
         retryCeiling: TimeInterval = 60,
         idleFloor: TimeInterval = 0.5,
         now: @escaping @MainActor () -> Date = Date.init,
+        syncClock: SyncClock = .shared,
         sleeper: @escaping Sleeper = { try await Task.sleep(for: .seconds($0)) },
         flush: @escaping Flush,
         pull: @escaping Pull,
@@ -110,6 +115,7 @@ final class CouchSyncController: ObservableObject {
         self.pushBackoff = retryFloor
         self.idleFloor = idleFloor
         self.now = now
+        self.syncClock = syncClock
         self.sleeper = sleeper
         self.flush = flush
         self.pull = pull
@@ -390,6 +396,10 @@ final class CouchSyncController: ObservableObject {
     /// repeated on every lap buries the one line that matters. Clearing is logged too — that is
     /// the message saying the clock was fixed.
     private func noteClockSkew(_ skew: ClockSkew?) {
+        // Applied before the early return, not after it: an unchanged measurement is still the
+        // measurement in force, and a launch that restored a stale value from defaults would
+        // otherwise keep stamping from it while every response says otherwise.
+        syncClock.note(skew)
         guard skew != clockSkew else { return }
         clockSkew = skew
         if let skew {

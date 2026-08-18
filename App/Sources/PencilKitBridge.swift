@@ -271,7 +271,7 @@ enum PencilKitBridge {
             createdAt: NotableDate.format(stroke.path.creationDate),
             // Freshly encoded content is a real edit: the timestamp is what lets a trimmed
             // stroke beat the peer's intact copy of the same id in the merge.
-            updatedAt: NotableDate.format(Date()))
+            updatedAt: SyncClock.shared.stamp())
     }
 
     /// Ink box around a run of points: the path's extent grown by half the widest point.

@@ -12,6 +12,12 @@ struct CouchSettingsSection: View {
     @State private var isSeeding = false
 
     var body: some View {
+        // First, above the server configuration. A wrong clock corrupts merge outcomes on *both*
+        // devices, and the footer sentence it used to share is the one people scroll past.
+        if let couch = host?.couch {
+            ClockSkewSection(controller: couch)
+        }
+
         Section("CouchDB server") {
             TextField("https://couch.example.com", text: $settings.serverURL)
                 .textContentType(.URL)
@@ -97,6 +103,46 @@ struct CouchSettingsSection: View {
 /// can tell those apart, so this is where they say which it was — and until they do, the held
 /// tombstones sit in the outbox and everything else goes on syncing.
 ///
+/// The persistent clock warning. Its own view for the same reason `HeldDeletionsSection` is: it has
+/// to appear and disappear as the measurement moves, which a one-shot read of `host` would not do.
+///
+/// There is nothing to dismiss and no button to offer — the only fix is in the Settings app, which
+/// nothing here can reach, and nothing on this card stops being true by being read.
+private struct ClockSkewSection: View {
+    @ObservedObject var controller: CouchSyncController
+
+    /// Shown well above the 120s at which a skew is *recorded*. That threshold is loose enough to
+    /// absorb a slow link, and a banner that fires for a round-trip hiccup is one that gets ignored
+    /// when it matters.
+    private var isSevere: Bool {
+        guard let skew = controller.clockSkew else { return false }
+        return abs(skew.seconds) >= SyncClock.warningSeconds
+    }
+
+    var body: some View {
+        if isSevere, let skew = controller.clockSkew {
+            Section {
+                Label {
+                    Text("This iPad's clock is wrong")
+                        .font(.headline)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                .accessibilityIdentifier("couch.clockSkew.title")
+
+                Text(skew.summary)
+                    .font(.callout)
+                    .accessibilityIdentifier("couch.clockSkew.detail")
+            } footer: {
+                Text("Open Settings › General › Date & Time and turn on Set Automatically. Bopa "
+                    + "corrects new edits for the difference, but edits already made carry the "
+                    + "wrong time and your other devices cannot correct them.")
+            }
+        }
+    }
+}
+
 /// Split into its own view purely to observe the controller: the section has to appear when a
 /// flush finds a batch and vanish when the choice is made.
 private struct HeldDeletionsSection: View {
