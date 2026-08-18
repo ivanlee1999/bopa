@@ -202,6 +202,134 @@ final class EditorPageModelTests: XCTestCase {
         XCTAssertEqual(after, before, "a clean page was rewritten just for being reopened")
     }
 
+    // MARK: The open page vanishing underneath the editor
+
+    /// Deleting the open page from the overview used to leave the editor writing into a
+    /// tombstoned ghost file — it only listened for *remote* changes. It now hears the local
+    /// delete, drops the pending work (the strokes belong to a page that no longer exists), and
+    /// lands on the neighbor. No save alert: a deletion the user asked for is not a failure.
+    func testDeletingTheOpenPageMovesTheEditorToItsNeighbor() throws {
+        let second = try store.addPage(to: notebookId)
+        let third = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: third.id))
+
+        // Ink drawn moments before the delete: it belongs to the doomed page and goes with it.
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "s1", second: 0)])
+        model.scheduleSave()
+
+        try store.deletePage(from: notebookId, pageId: third.id)
+
+        XCTAssertEqual(model.pageId, second.id, "the nearest surviving neighbor")
+        XCTAssertFalse(model.dirty)
+        XCTAssertNil(model.saveError, "a deletion the user asked for is not a failed save")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: rootURL
+                    .appendingPathComponent("notebooks/\(notebookId)/pages/\(third.id).json")
+                    .path),
+            "the editor recreated the ghost file the delete had just removed")
+    }
+
+    func testDeletingSomeOtherPageLeavesTheEditorWhereItIs() throws {
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+
+        try store.deletePage(from: notebookId, pageId: second.id)
+
+        XCTAssertEqual(model.pageId, pageIds[0])
+    }
+
+    /// The same vanish arriving from sync: the merge unlists the page, the pull loop refreshes
+    /// and announces. The editor must move rather than fold ink into a tombstoned page.
+    func testARemoteMergeThatDeletesTheOpenPageMovesTheEditor() throws {
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: second.id))
+
+        var manifest = try XCTUnwrap(store.manifest(id: notebookId))
+        manifest.pageIds.removeAll { $0 == second.id }
+        manifest.deletedPageIds.append(
+            CouchTombstone(id: second.id, deletedAt: NotableDate.format(Date())))
+        try writeManifestDirectly(manifest)
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertEqual(model.pageId, pageIds[0])
+        XCTAssertNil(model.saveError)
+    }
+
+    /// The notebook itself going — deleted for good while its editor is open — leaves nothing to
+    /// land on; the editor asks to be dismissed.
+    func testTheNotebookVanishingAsksTheEditorToClose() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        var closed = false
+        model.requestClose = { closed = true }
+
+        try store.purgeNotebook(id: notebookId)
+
+        XCTAssertTrue(closed)
+    }
+
+    /// Writes straight to disk, bypassing the store — standing in for the sync engine.
+    private func writeManifestDirectly(_ manifest: NotebookManifest) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        try encoder.encode(manifest).write(
+            to: manifestURL, options: .atomic)
+    }
+
+    // MARK: Where the editor lands, as a table
+
+    func testLandingPrefersThePageThatTookTheVanishedOnesPlace() {
+        XCTAssertEqual(
+            EditorPageRecovery.landingPageId(
+                vanished: "b", previousOrder: ["a", "b", "c"],
+                pageIds: ["a", "c"], openPageId: "a"),
+            "c")
+    }
+
+    func testLandingFallsBackToThePageBeforeWhenTheLastPageGoes() {
+        XCTAssertEqual(
+            EditorPageRecovery.landingPageId(
+                vanished: "c", previousOrder: ["a", "b", "c"],
+                pageIds: ["a", "b"], openPageId: "a"),
+            "b")
+    }
+
+    /// A merge can take several pages at once; the walk skips neighbors that went with it.
+    func testLandingSkipsNeighborsThatVanishedInTheSameSweep() {
+        XCTAssertEqual(
+            EditorPageRecovery.landingPageId(
+                vanished: "b", previousOrder: ["a", "b", "c", "d"],
+                pageIds: ["a", "d"], openPageId: nil),
+            "d")
+    }
+
+    /// With no memory of where the page was, the manifest's own openPageId is the best guess —
+    /// a merge may have retargeted it deliberately.
+    func testLandingUsesOpenPageIdWhenThePositionIsUnknown() {
+        XCTAssertEqual(
+            EditorPageRecovery.landingPageId(
+                vanished: "x", previousOrder: [],
+                pageIds: ["a", "b"], openPageId: "b"),
+            "b")
+        XCTAssertEqual(
+            EditorPageRecovery.landingPageId(
+                vanished: "x", previousOrder: [],
+                pageIds: ["a", "b"], openPageId: "gone-too"),
+            "a")
+    }
+
+    func testLandingIsNowhereWhenNoPagesSurvive() {
+        XCTAssertNil(
+            EditorPageRecovery.landingPageId(
+                vanished: "a", previousOrder: ["a"], pageIds: [], openPageId: nil))
+    }
+
     /// The ordinary path still works: drawing, saving, and the baseline following the save.
     func testASuccessfulSaveAdvancesTheBaseline() throws {
         var page = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])

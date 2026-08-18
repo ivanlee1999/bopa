@@ -56,6 +56,9 @@ struct EditorView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 model.attach(store: store, notebookId: notebookId)
+                // The model asks to close when its notebook vanishes underneath it — deleted
+                // locally or by a merge — because an editor over nothing has nothing to show.
+                model.requestClose = { onClose?() }
                 if model.pageId == nil { model.openInitialPage() }
             }
             .onDisappear { model.saveNow() }
