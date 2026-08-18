@@ -292,6 +292,50 @@ final class CouchSyncEngineTests: XCTestCase {
         XCTAssertFalse(server.isDeleted(otherID), "the newer edit should have resurrected it")
     }
 
+    /// Protocol §6.4. The resurrection has to reach the *server*, not merely survive locally.
+    ///
+    /// CouchDB will not let a revision write over a tombstone: a PUT carrying `_rev` at a deleted
+    /// leaf is a 409 even when the revision is the document's current one (verified against 3.5.2),
+    /// and only a body with no revision at all brings the document back. So an engine that answers
+    /// the 409 by re-pushing at the fetched revision can never land the survival — it burns its
+    /// retries and leaves the id dirty forever, with the notebook alive here and deleted on every
+    /// peer. This asserts the create-retry that gets it there.
+    func testAResurrectionIsPushedAsACreateOverThePeersTombstone() async throws {
+        ipadStore.set(notebookID, .notebook(CouchNotebook(
+            title: "notes", pageIds: ["p1"], createdAt: stamp(0), updatedAt: stamp(1),
+            updatedBy: "ipad")))
+        await ipad.markDirty([notebookID])
+        _ = await ipad.flush()
+        _ = try await boox.pull()
+
+        // The iPad empties the Trash, and that reaches the server first.
+        ipadStore.set(notebookID, .deleted(CouchDeletedDoc(
+            type: CouchDocType.notebook, deletedAt: stamp(10), updatedBy: "ipad")))
+        await ipad.markDirty([notebookID])
+        _ = await ipad.flush()
+        XCTAssertTrue(server.isDeleted(notebookID))
+
+        // The BOOX edited it after the deletion, and only finds out now.
+        var edited = booxStore.notebook(notebookID)!
+        edited.title = "still wanted"
+        edited.updatedAt = stamp(20)
+        booxStore.set(notebookID, .notebook(edited))
+        await boox.markDirty([notebookID])
+        let flush = await boox.flush()
+
+        XCTAssertTrue(flush.failures.isEmpty, "the push must not be left in the outbox")
+        XCTAssertFalse(
+            server.isDeleted(notebookID),
+            "the work outlived the deletion, so the notebook must be back")
+        XCTAssertEqual(booxStore.notebook(notebookID)?.title, "still wanted")
+
+        // And the deleting device gets it back on its next pull, which is the whole point of
+        // pushing it: the refusal has to travel, not just hold locally.
+        _ = try await ipad.pull()
+        XCTAssertFalse(ipadStore.body(notebookID)?.isDeleted ?? false)
+        XCTAssertEqual(ipadStore.notebook(notebookID)?.title, "still wanted")
+    }
+
     /// The other half of delete-vs-edit, and the one that used to lose the deletion.
     ///
     /// A plain `GET` of a deleted document is a 404 — CouchDB does not hand the tombstone back

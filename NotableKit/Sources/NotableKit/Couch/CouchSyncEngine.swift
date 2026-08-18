@@ -757,6 +757,16 @@ public actor CouchSyncEngine {
                     clearDirty(documentID, ifUnchangedSince: dirtyGeneration)
                     return .nothingToPush
                 }
+                // The mirror of the case above: the merge kept the document *alive* over the
+                // peer's tombstone (§6.4 — work that outlived the deletion). CouchDB refuses a PUT
+                // at a deleted leaf whatever the body carries, so retrying at `remote.rev` can only
+                // 409 again until the retries run out, leaving the resurrection stuck in the outbox
+                // — the notebook alive on this device and deleted on every other one, with no error
+                // the user ever sees. Undeleting *is* a create, so drop the revision and let the
+                // retry above send it as one, exactly as the vanished-document branch does. If that
+                // create races a newer live document it 409s back into this same fetch-and-merge
+                // path, which is where a three-way race belongs.
+                if remote.body.isDeleted && !merged.isDeleted { state.revs[documentID] = nil }
             }
         }
         throw CouchError.conflict(documentID: documentID)

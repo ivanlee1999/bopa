@@ -709,7 +709,8 @@ liveness comes from where the work actually lands instead:
 
 Scenario 12 of §8.1, `delete-vs-later-edit-resurrects`, pins the rename shape; scenario 23,
 `ink-only-edit-resurrects`, pins the ink shape — the peer's later edit is a single stroke and
-nothing else, so the notebook survives only by way of the content clock. A runner's `draw` op
+nothing else, so the notebook survives only by way of the content clock — see §6.4 for which
+device that survival happens on, and when it reaches the other. A runner's `draw` op
 **MUST** write only the page (bumping the notebook would model a save path neither app has), and
 its scenario store **MUST** answer `contentClock` from the page documents it holds, exactly as
 the real stores answer it from Room and from the notebook directory.
@@ -781,6 +782,16 @@ show, the merged result carries the envelope **stamped to that instant** — the
 — so the refusal travels: every peer, on any build, then resolves the same conflict by the
 ordinary envelope comparison. The stamp happens only on a deletion refusal, never on a plain
 merge, so it cannot hand ink the power over renames that §5.5 removed.
+
+**The refusal costs one more exchange.** Only the device that *meets* the tombstone can refuse it,
+and that is the device holding the newer pages — the one that was drawing. The device that emptied
+the Trash pushes its tombstone unopposed, because its peer's ink moved no notebook document for it
+to collide with; the notebook really is gone there until the stamped envelope reaches it on a later
+pull. No ink is lost — the pages were never deleted on the drawing device, and the push-back that
+follows its refusal carries the survival — but a deletion is not undone inside the exchange that
+applied it. Scenario 23 of §8.1 pins that order, which is why it runs a step longer than the rest.
+Asserting recovery any earlier would pin the ink-save envelope bump §5.5 removed rather than the
+rule that replaced it.
 
 Pages have no independent lifecycle: they live and die with their notebook's `pageIds` /
 `deletedPageIds`.
@@ -1152,5 +1163,7 @@ disagrees with the server, fix the mock — the point of it is to be the server.
 Two of the 23 are about the same rule and neither replaces the other. Scenario 12,
 `delete-vs-later-edit-resurrects`, is delete-vs-edit where the later edit is a **rename**; scenario
 23, `ink-only-edit-resurrects`, is the same shape where the later edit is **a stroke and nothing
-else**. The second is the one that fails if the notebook `updatedAt` bump on an ink save is ever
-removed — see §5.5, which also states the `draw` fidelity requirement both runners must meet.
+else**. The second is the one that fails if §6.4's content clock is ever dropped, or an implementation
+goes back to reading the envelope alone. It runs a step longer than every other scenario because
+the survival happens on the drawing device and reaches the deleting one only on a further pull —
+see §5.5, which also states the `draw` fidelity requirement both runners must meet.

@@ -524,7 +524,7 @@
     },
     {
       "name": "ink-only-edit-resurrects",
-      "why": "A notebook deleted on one device but only DRAWN IN on the other comes back, with the stroke — protocol 6.4, and the rule 5.5 exists to protect. Scenario 12 pins the same resurrection with a rename, which writes the notebook's own updatedAt and so would survive the tempting 'fix' of dropping the notebook timestamp bump on an ink-only save. This is the case that would not survive it: no rename, no metadata edit, just a stroke later than the deletion. Remove the bump and the drawing is destroyed by a deletion it outlived, with no error anywhere.",
+      "why": "A notebook purged on one device while the other was only DRAWING IN it comes back, with both strokes — protocol 6.4. Scenario 12 pins the same resurrection where the later edit is a rename, which writes the notebook's own updatedAt; this is the case with no rename and no metadata edit, just a stroke later than the deletion, so the notebook survives only by way of the content clock — the newest page clock the applier holds. It also pins where that survival happens and when it travels: the deleting device's tombstone lands unopposed and the notebook really is gone there (step 4), the drawing device refuses the deletion when it meets it and pushes the stamped envelope (step 5), and only then does the deleting device get the notebook back (step 6). No ink is ever lost, but recovery on the deleting side costs one more exchange — asserting it any earlier would be pinning the ink-save envelope bump that both apps removed, not the rule that replaced it.",
       "steps": [
         { "device": "ipad", "do": [
           { "op": "newNotebook", "doc": "nbW", "title": "W", "pages": ["pgW"], "at": 0 },
@@ -541,9 +541,13 @@
         { "device": "ipad", "do": [
           { "op": "push" },
           { "op": "pull" },
-          { "op": "expectTitle", "doc": "nbW", "title": "W" },
-          { "op": "expectStrokes", "doc": "pgW", "ids": ["w1", "w2"] } ] },
+          { "op": "expectDeleted", "doc": "nbW" } ] },
         { "device": "boox", "do": [
+          { "op": "pull" },
+          { "op": "expectTitle", "doc": "nbW", "title": "W" },
+          { "op": "expectStrokes", "doc": "pgW", "ids": ["w1", "w2"] },
+          { "op": "push" } ] },
+        { "device": "ipad", "do": [
           { "op": "pull" },
           { "op": "expectTitle", "doc": "nbW", "title": "W" },
           { "op": "expectStrokes", "doc": "pgW", "ids": ["w1", "w2"] } ] }
