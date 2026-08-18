@@ -140,11 +140,8 @@ struct PageOverviewView: View {
     }
 
     private func thumbnail(pageId: String) -> some View {
-        let image = store.manifest(id: notebookId).flatMap { manifest in
-            ThumbnailRenderer.thumbnail(
-                notebookId: notebookId, pageId: pageId,
-                revision: manifest.updatedAt, store: store)
-        }
+        let image = ThumbnailRenderer.thumbnail(
+            notebookId: notebookId, pageId: pageId, store: store)
         return ZStack {
             Rectangle().fill(.white)
             if let image {

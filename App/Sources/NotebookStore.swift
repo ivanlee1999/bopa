@@ -156,6 +156,25 @@ final class NotebookStore: ObservableObject {
         return try decoder.decode(PageFile.self, from: data)
     }
 
+    /// A cheap revision stamp for one page: when its file was last written. What the thumbnail
+    /// cache keys on, so it has to move when the page changes — and only then.
+    ///
+    /// The page's own `updatedAt` is the honest spelling of this fact, but reading it means
+    /// decoding the page file — megabytes for an inked page — on every cell of a scrolling grid.
+    /// Every writer stamps `updatedAt` and rewrites the file in the same breath (`savePage` here,
+    /// the sync engine's apply on its thread), so the file's modification date moves exactly when
+    /// `updatedAt` does, for the price of a stat. Crucially it does *not* move with the manifest:
+    /// keying on the notebook's `updatedAt` left thumbnails stale for ink that arrived from the
+    /// BOOX (a remote page apply rewrites only the page file) and re-rendered every page of a
+    /// notebook for a rename.
+    nonisolated func pageRevision(notebookId: String, pageId: String) -> String {
+        let url = notebookDirURL(notebookId).appendingPathComponent("pages/\(pageId).json")
+        guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate
+        else { return "missing" }
+        return String(date.timeIntervalSinceReferenceDate)
+    }
+
     /// Persists a page and bumps the notebook's `updatedAt` (the sync conflict clock).
     ///
     /// The manifest is re-read from disk rather than taken from `notebooks`: that array is only as

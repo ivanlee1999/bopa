@@ -690,10 +690,11 @@ struct EditorCanvasView: UIViewRepresentable {
                                 width: ToolSelection.Kind.pen.baseWidth
                                     * (toolSelection?.width.scale ?? 1)))
                 } else {
-                    // The rail's own eraser mode, not a fixed one: a pencil double-tap means
-                    // "erase", and which kind of erasing is a choice the user has already made.
+                    // The rail's own eraser, not a fixed one: a pencil double-tap means
+                    // "erase", and which kind of erasing — and how broadly — are choices the
+                    // user has already made.
                     selectFromOutsideTheRail(
-                        toolSelection?.eraserMode.pkEraser ?? PKEraserTool(.bitmap))
+                        toolSelection?.pkEraserTool ?? PKEraserTool(.bitmap))
                 }
             case .previousTool:
                 if let previousTool { selectFromOutsideTheRail(previousTool) }

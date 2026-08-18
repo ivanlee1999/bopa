@@ -151,6 +151,7 @@ final class EditorPageModel: NSObject, ObservableObject {
                 notebookDir: notebookDir,
                 storeRoot: store.rootURL)
             pageImages = BackgroundRenderer.pageImages(for: loaded, notebookDir: notebookDir)
+            shownSurfaces = SurfaceState(of: loaded)
             canvasStrokeIDs = Set(loaded.strokes.map(\.id))
             contentRevision += 1
             // Seed with the persisted offset so a save before any scroll preserves it.
@@ -194,13 +195,68 @@ final class EditorPageModel: NSObject, ObservableObject {
         let erased = Set(onDisk.deletedStrokes.map(\.id))
         let arrived = onDisk.strokes.contains { !canvasStrokeIDs.contains($0.id) }
         let erasedElsewhere = canvasStrokeIDs.contains { erased.contains($0) }
-        // Most applied documents are some other page, or this page's own echo. Reloading for those
-        // would throw away the undo stack for nothing.
-        guard arrived || erasedElsewhere else {
-            remoteInkPending = false  // the canvas already matches the file
+        if arrived || erasedElsewhere {
+            if open(pageId: pageId) { remoteInkPending = false }
             return
         }
-        if open(pageId: pageId) { remoteInkPending = false }
+        // No ink moved, but a page is more than its ink. This decision used to be stroke-based
+        // alone, which read an image dropped on the BOOX — or a paper change, or a resize — as
+        // "the canvas already matches the file" and swallowed it for as long as the page stayed
+        // open: every later apply re-armed the flag, and the stroke comparison cleared it again.
+        // The surfaces the canvas does not hold are compared and refreshed here instead; most
+        // applied documents are still some other page or this page's own echo, and those change
+        // nothing and cost nothing.
+        refreshNonInkSurfaces(from: onDisk)
+        remoteInkPending = false  // the canvas now matches the file
+    }
+
+    /// Puts everything a page shows *besides* ink — its images, its paper, its sheet — onto the
+    /// published state, from a copy of the file that is already known to agree with the canvas
+    /// about the ink. Deliberately not a reload through `open`: replacing the drawing for a
+    /// surface change would cancel the undo stack for strokes that never moved.
+    private func refreshNonInkSurfaces(from onDisk: PageFile) {
+        guard var page, let store else { return }
+        // Compared against what the *canvas* shows, not against `page`: `savePage` unions
+        // remotely-arrived images into what it returns, so after any flush `page` can already
+        // carry an image the screen has never drawn — and a comparison against it would read the
+        // arrival as "nothing changed" and swallow the image all over again.
+        let arrivedSurfaces = SurfaceState(of: onDisk)
+        guard arrivedSurfaces != shownSurfaces else { return }
+        // Only the surface fields, not the whole file: `page.strokes` has to keep naming what
+        // this editor last loaded or wrote, because it is the `source:` the next export
+        // re-identifies against.
+        page.images = onDisk.images
+        page.background = onDisk.background
+        page.backgroundType = onDisk.backgroundType
+        page.pageWidth = onDisk.pageWidth
+        page.pageHeight = onDisk.pageHeight
+        self.page = page
+        let notebookDir = store.notebookDirURL(notebookId)
+        pageBackground = BackgroundRenderer.image(
+            for: page, notebookDir: notebookDir, storeRoot: store.rootURL)
+        pageImages = BackgroundRenderer.pageImages(for: page, notebookDir: notebookDir)
+        shownSurfaces = arrivedSurfaces
+    }
+
+    /// The non-ink surfaces as the canvas last drew them — what `foldInRemoteInk` compares an
+    /// applied file against. A separate record rather than a reading of `page`, because `page`
+    /// tracks the *file* (it absorbs `savePage`'s unions) while this has to track the *screen*.
+    private var shownSurfaces: SurfaceState?
+
+    private struct SurfaceState: Equatable {
+        let images: [ImageDTO]
+        let background: String
+        let backgroundType: String
+        let pageWidth: Int?
+        let pageHeight: Int?
+
+        init(of page: PageFile) {
+            images = page.images
+            background = page.background
+            backgroundType = page.backgroundType
+            pageWidth = page.pageWidth
+            pageHeight = page.pageHeight
+        }
     }
 
     /// Writes the chosen paper into the page file (`backgroundType: "native"`), which is what
@@ -213,6 +269,10 @@ final class EditorPageModel: NSObject, ObservableObject {
         page.background = background
         page.backgroundType = backgroundType
         self.page = page
+        // The screen follows this choice immediately (the template is derived from `page`), so
+        // the record of what it shows has to follow too — or the next remote apply would read
+        // the user's own paper change back off the file as an arrival and refresh for nothing.
+        shownSurfaces = SurfaceState(of: page)
         dirty = true
         saveNow()
     }
