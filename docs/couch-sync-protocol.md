@@ -286,7 +286,7 @@ Two consequences are normative:
   deployment behind a proxy can appear to sync notes perfectly while no picture ever arrives.
 
 A client therefore **MUST NOT** read a `413` as a statement about this protocol or about the
-asset's content until it has checked which hop produced it — see §7, which makes the two cases
+asset's content until it has checked which hop produced it — see §7.2, which makes the two cases
 distinguishable and requires different handling for each. In particular, an implementation that
 suppresses a refused document until its content changes must not apply that to a proxy's refusal:
 the fix for that one happens on the server, and no local edit will ever arrive to lift the
@@ -638,10 +638,14 @@ them can conflict.
 
 Assets are immutable; return either (they are equal by construction).
 
-An asset **tombstone** is applied, never resurrected. §6.4's delete-versus-edit rule has nothing
-to weigh here — an asset carries no `deletedAt` and is never edited, so there is no later work to
-outlive the deletion. A sweep (§3.5) is undone by re-uploading the bytes under the same id when
-some page turns out to still need them, not by a merge arguing with the tombstone.
+An asset **tombstone** is applied, never resurrected — and that is §6.4 reached in the ordinary
+way, not an exception to it. An asset is immutable, so its liveness is the `updatedAt` it was
+created with, and §3.5.3 will not sweep one until that instant is at least the grace period old.
+The live copy therefore always loses to the deletion, on both devices, without either needing a
+special case.
+
+A sweep is undone by re-uploading the bytes under the same id when some page turns out to still
+need them (§3.5), not by a merge arguing with the tombstone.
 
 ### 5.1 Page geometry is picked, but a declaration is never dropped
 
