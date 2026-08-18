@@ -678,7 +678,10 @@ private struct FolderContentsView: View {
                     try store.moveNotebook(id: notebook.notebookId, toFolder: nil)
                 }
             }
-            ForEach(store.folders, id: \.id) { folder in
+            // Only live folders: `store.folders` is the whole published set, trashed subtrees
+            // included, and a notebook moved into one of those is reachable from no surface —
+            // then purged for good with the Trash.
+            ForEach(store.liveFolders, id: \.id) { folder in
                 Button(folder.title) {
                     perform("Moving the notebook", error: $actionError) {
                         try store.moveNotebook(id: notebook.notebookId, toFolder: folder.id)
