@@ -77,6 +77,14 @@ final class SyncBackendHost: ObservableObject {
         guard let store else { return }
         couch?.stop()
         couch = nil
+        // Retired *before* the replacement exists, and synchronously: `stop()` cancels the
+        // controller's own pumps, but a flush can be in flight from anywhere (`syncNow`, the
+        // background flush) and cancellation is cooperative — the old engine could otherwise
+        // finish that flush after the new stack is built and persist its stale state over the
+        // successor's, since the state file is keyed on endpoint and database only and a
+        // password or device-name change rebuilds onto the very same path.
+        engine?.invalidate()
+        backgroundFlush?.cancel()
         engine = nil
         couchStore = nil
         // Whichever backend is now selected, the other one stops here rather than at its next

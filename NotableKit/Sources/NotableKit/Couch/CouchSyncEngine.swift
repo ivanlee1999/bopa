@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - Local state
 
@@ -337,6 +338,18 @@ public actor CouchSyncEngine {
     /// could not have carried.
     private var flushTail: Task<FlushReport, Never>?
     private var flushSequence: UInt64 = 0
+
+    /// Set once the owner has replaced this engine — reconfiguring rebuilds the whole stack — and
+    /// never cleared. The state file is keyed on endpoint and database only, so a password or
+    /// device-name change hands the *same* path to the replacement engine; a flush still in
+    /// flight here would then persist on completion and clobber the successor's checkpoint and
+    /// rev map with this engine's stale copy.
+    ///
+    /// Nonisolated and lock-guarded rather than actor state, so the owner can mark it
+    /// synchronously *before* the replacement exists — a mark that had to hop onto this actor
+    /// would leave a window in which the dying flush persists between the reconfigure and the
+    /// mark landing.
+    private let invalidated = OSAllocatedUnfairLock(initialState: false)
 
     /// Deletions the user has explicitly approved, waiting for the flush that will act on them.
     ///
@@ -1160,7 +1173,18 @@ public actor CouchSyncEngine {
         var schema: Int
     }
 
+    /// Retires this engine. Requests already in flight may still finish — a PUT that lands is a
+    /// real write, and the documents it carried stay dirty in the successor's state, which
+    /// re-sends and 409-merges them — but nothing this engine does from here on reaches the
+    /// state file.
+    public nonisolated func invalidate() {
+        invalidated.withLock { $0 = true }
+    }
+
     private func persist() {
+        // An invalidated engine's state describes a configuration that no longer exists; writing
+        // it would overwrite whatever the replacement engine has persisted since.
+        guard !invalidated.withLock({ $0 }) else { return }
         onStateChange?(state)
     }
 }

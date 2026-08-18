@@ -1071,4 +1071,47 @@ final class CouchSyncEngineTests: XCTestCase {
         let pending = await ipad.pendingCount
         XCTAssertEqual(pending, 1)
     }
+
+    /// Reconfiguring rebuilds the whole stack, but the state file is keyed on endpoint and
+    /// database only — a password or device-name change hands the *same* file to the new engine.
+    /// A flush still in flight on the old engine used to persist when it completed, clobbering
+    /// the successor's checkpoint and rev map with the retired engine's stale copy. Once
+    /// invalidated, an engine must never persist again.
+    func testAnInvalidatedEnginesLateFlushDoesNotClobberTheSuccessorsState() async throws {
+        let pausing = PauseFirstPutTransport(base: server)
+        // The shared state file, as both engines' `onStateChange` sees it.
+        let stateFile = OSAllocatedUnfairLock<CouchSyncState?>(initialState: nil)
+        let retired = CouchSyncEngine(
+            client: CouchDBClient(transport: pausing, database: "notes"),
+            store: ipadStore, deviceID: "ipad",
+            onStateChange: { state in stateFile.withLock { $0 = state } })
+        ipadStore.set(pageID, .page(page(strokes: [stroke("s1", at: 1, device: "ipad")],
+                                         updatedAt: 5, by: "ipad")))
+        await retired.markDirty([pageID])
+
+        // The flush goes to the network and parks there...
+        let lateFlush = Task { await retired.flush() }
+        await pausing.waitUntilPutIsPaused()
+
+        // ...while the user changes a setting: the host retires the old engine, then builds the
+        // replacement over the same state file.
+        retired.invalidate()
+        let successor = CouchSyncEngine(
+            client: CouchDBClient(transport: server, database: "notes"),
+            store: booxStore, deviceID: "ipad",
+            state: CouchSyncState(lastSeq: "77"),
+            onStateChange: { state in stateFile.withLock { $0 = state } })
+        await successor.markDirty([notebookID])  // persists the successor's state
+
+        // The old engine's PUT completes only now, after the handover.
+        pausing.releasePut()
+        let report = await lateFlush.value
+        XCTAssertEqual(report.pushed, [pageID], "the retired flush itself still ran to completion")
+
+        let final = try XCTUnwrap(stateFile.withLock { $0 })
+        XCTAssertEqual(final.lastSeq, "77", "the state on disk must be the successor's")
+        XCTAssertEqual(final.dirty, [notebookID])
+        XCTAssertNil(final.revs[pageID],
+                     "the retired engine's late persist leaked into the shared state file")
+    }
 }
