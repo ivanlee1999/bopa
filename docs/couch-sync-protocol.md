@@ -824,7 +824,7 @@ and a deletion made an hour ago destroys work done since.
 
 The fix for that is hybrid logical clocks, which is a protocol change both apps and the shared
 vectors must make together. It is **not** part of this version. Detection is the floor, and it is
-normative:
+normative — and what is done with the measurement, in §7.1a, is normative on top of it:
 
 - Every response from an origin server with a clock carries a `Date` header (RFC 9110 §6.6.1).
   Clients read it from **every response the transport returns**, whatever the status — a `404` or
@@ -847,6 +847,43 @@ normative:
 - The warning names the **direction** (ahead of / behind the server) and a rough **magnitude**,
   because "your clock is wrong" is not actionable and "about 40 minutes ahead" points straight at
   the device's date and time settings.
+
+### 7.1a Stamping from the corrected clock
+
+The measurement is **applied where a timestamp is made**. Every instant a client writes into a
+synced document is its wall clock minus the last measured skew — notable's `SyncClock`, bopa's
+`SyncClock`. This does not change the wire format, the merge, or any vector: it changes only what a
+client writes into the fields the merge already reads.
+
+Three rules make it safe, and an implementation that keeps only some of them is worse than one that
+keeps none:
+
+- **Stamp time, never apply time.** An instant that arrived from a peer is used exactly as sent —
+  never clamped, rewritten or second-guessed on the way in. The merge stays a pure function of the
+  two documents, so both devices still compute the same result from the same pair. Correcting on
+  apply would make the result depend on *which device merged*, which the §8 fixed-point assertions
+  exist to forbid.
+- **The §6.4 liveness clock is one of them.** Liveness is `max(envelope updatedAt, contentClock)`,
+  and `contentClock` is the newest *page* clock — so a skewed device that stamped ink into the
+  future would inflate its own liveness and beat a deletion the peer made after the ink. The page
+  clocks read the corrected clock for exactly that reason.
+- **Every sync-relevant stamp or none of them.** Deletion instants, trash and restore stamps,
+  envelope touches, page and stroke clocks, conflict copies, and the tombstone-pruning horizon all
+  read the corrected clock. Correcting deletions while leaving edit clocks alone is *worse than not
+  correcting at all*: on a device an hour fast the deletions move back an hour while the edits stay
+  an hour ahead, and §6.4 resurrects far more eagerly than the uncorrected bug destroys.
+- **The measurement is persisted.** The edit that most needs correcting is the one made offline
+  after a sync — it happens before any response could re-measure. A device that has never reached
+  the server is exactly as wrong as it was before, which is the honest floor.
+
+Two things this deliberately is not. It is **not** a hybrid logical clock: two devices agree only to
+the precision of their measurements against a shared server, and nothing here establishes causality
+or survives a server whose own clock is wrong. And it is **not** a reason to stop warning — a
+corrected clock still writes instants no peer can verify, and the instants already written stay
+wrong for ever. Past **300 seconds** the warning is therefore **persistent and prominent** in the
+sync settings, not a clause appended to a status line: at that scale no latency explains it, the
+damage reads as anything but a clock (a notebook that will not stay out of the Trash, a rename that
+will not stick), and the only repair is on the device itself.
 
 ## 8. Test vectors
 

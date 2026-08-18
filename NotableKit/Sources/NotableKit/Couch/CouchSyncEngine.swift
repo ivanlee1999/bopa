@@ -1250,7 +1250,7 @@ public actor CouchSyncEngine {
                 continue
             }
 
-            let now = NotableDate.format(Date())
+            let now = SyncClock.shared.stamp()
             let asset = CouchAsset(
                 contentType: blob.contentType, createdAt: now, updatedAt: now,
                 updatedBy: deviceID, data: blob.data)

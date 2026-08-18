@@ -44,9 +44,15 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     }()
     private let decoder = JSONDecoder()
 
-    public init(rootURL: URL, deviceID: String) {
+    /// The clock the deletion ledger stamps from. A tombstone is the one document whose instant
+    /// decides whether other people's work survives (§6.4), so a wrong clock here is the most
+    /// expensive wrong clock in the protocol — see `SyncClock`.
+    private let clock: SyncClock
+
+    public init(rootURL: URL, deviceID: String, clock: SyncClock = .shared) {
         self.rootURL = rootURL
         self.deviceID = deviceID
+        self.clock = clock
     }
 
     // MARK: Paths
@@ -271,7 +277,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         // and a folder quietly dropped here is a folder the user never learns went missing.
         guard CouchDocID.split(documentID) != nil else { return }
 
-        let stamp = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        let stamp = ISO8601DateFormatter().string(from: clock.now()).prefix(10)
         // Derived from the document and its bytes rather than minted fresh, so re-reading the same
         // unreadable document produces the same copy instead of another one. The feed is replayed
         // from the start whenever a checkpoint is lost — which this design treats as safe — and
@@ -280,7 +286,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         let identity = CouchAssetID.sha256Hex(Data(documentID.utf8) + json)
         let newNotebookId = uuidShaped(identity.prefix(32))
         let newPageId = uuidShaped(identity.suffix(32))
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
 
         // Whatever could not be decoded is preserved verbatim next to the notebook, because the
         // point of this path is that we do not understand it well enough to rewrite it.
@@ -571,7 +577,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     /// which is what makes deleting a notebook while offline work.
     public func recordDeletion(_ documentID: String, deletedAt: String? = nil) {
         var all = deletions()
-        all[documentID] = deletedAt ?? NotableDate.format(Date())
+        all[documentID] = deletedAt ?? clock.stamp()
         writeDeletions(all)
     }
 
@@ -660,7 +666,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     private func writeFolders(_ folders: [FolderDTO]) throws {
         let file = FoldersFile(
             folders: folders.sorted { $0.id < $1.id },
-            serverTimestamp: NotableDate.format(Date()))
+            serverTimestamp: clock.stamp())
         try write(encoder.encode(file), to: foldersURL)
     }
 

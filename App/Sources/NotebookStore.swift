@@ -33,6 +33,11 @@ final class NotebookStore: ObservableObject {
 
     let rootURL: URL
 
+    /// Every timestamp this store writes comes from here rather than from `Date()`, so a device
+    /// whose clock is wrong stops winning merges it should lose — see `SyncClock`. Injectable so a
+    /// test can stamp from a clock it controls.
+    let clock: SyncClock
+
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = [.withoutEscapingSlashes]
@@ -40,10 +45,11 @@ final class NotebookStore: ObservableObject {
     }()
     private let decoder = JSONDecoder()
 
-    init(rootURL: URL? = nil) {
+    init(rootURL: URL? = nil, clock: SyncClock = .shared) {
         self.rootURL = rootURL
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("notable", isDirectory: true)
+        self.clock = clock
         refresh()
     }
 
@@ -136,7 +142,7 @@ final class NotebookStore: ObservableObject {
         title: String, parentFolderId: String? = nil, template: NativeTemplate = .blank,
         pageSize: PageSize = PageSizePreset.default.size
     ) throws -> NotebookManifest {
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         let notebookId = UUID().uuidString.lowercased()
         let pageId = UUID().uuidString.lowercased()
         let plan = TemplateApplication.plan(pageCount: 1, from: .native(template))
@@ -233,7 +239,7 @@ final class NotebookStore: ObservableObject {
               !manifest.deletedPageIds.contains(where: { $0.id == page.id })
         else { throw CocoaError(.fileNoSuchFile) }
         var page = page
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         page.updatedAt = now
         page.updatedBy = deviceID
 
@@ -261,7 +267,7 @@ final class NotebookStore: ObservableObject {
                 currentIDs: saved,
                 existing: onDisk?.deletedStrokes ?? [],
                 deletedAt: now),
-            now: Date())
+            now: clock.now())
         let erased = Set(page.deletedStrokes.map(\.id))
 
         // Erasure beats drawing: a stroke the other device tombstoned goes, even though this
@@ -279,7 +285,7 @@ final class NotebookStore: ObservableObject {
         // push the stripped list back to the server. Then honour them, same as the strokes.
         page.deletedImages = CouchTombstones.prune(
             CouchMerge.unionTombstones(page.deletedImages, onDisk?.deletedImages ?? []),
-            now: Date())
+            now: clock.now())
         let erasedImages = Set(page.deletedImages.map(\.id))
         page.images.removeAll { erasedImages.contains($0.id) }
         // Live images travel the same way the strokes do and the editor never removes them, so
@@ -357,7 +363,7 @@ final class NotebookStore: ObservableObject {
         manifest.pageIds = repaired
         // The repair has to travel: a peer holding the same damaged list would otherwise merge it
         // straight back, and `updatedAt` is the clock the merge reads.
-        manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedAt = clock.stamp()
         manifest.updatedBy = deviceID
         if let openPageId = manifest.openPageId, !repaired.contains(openPageId) {
             manifest.openPageId = repaired.first
@@ -380,7 +386,7 @@ final class NotebookStore: ObservableObject {
     @discardableResult
     func splitOversizedPages(in notebookId: String) -> Int {
         guard var manifest = readManifestFromDisk(notebookId) else { return 0 }
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         var pageIds: [String] = []
         var added = 0
 
@@ -455,7 +461,7 @@ final class NotebookStore: ObservableObject {
         guard var manifest = readManifestFromDisk(notebookId) else {
             throw CocoaError(.fileNoSuchFile)
         }
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         let notebookDefault = PageBackground(
             background: manifest.defaultBackground, backgroundType: manifest.defaultBackgroundType)
         let template: NativeTemplate
@@ -499,7 +505,7 @@ final class NotebookStore: ObservableObject {
         else { throw CocoaError(.fileNoSuchFile) }
         let source = try loadPage(notebookId: notebookId, pageId: pageId)
 
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         var copy = source
         copy.id = UUID().uuidString.lowercased()
         copy.createdAt = now
@@ -546,7 +552,7 @@ final class NotebookStore: ObservableObject {
         else { throw CocoaError(.fileNoSuchFile) }
         guard manifest.pageIds.count > 1 else { throw LastPageError() }
 
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         manifest.pageIds.removeAll { $0 == pageId }
         manifest.deletedPageIds.append(CouchTombstone(id: pageId, deletedAt: now))
         // The bookmark can simply go — the merge filters starred pages by the tombstone too. The
@@ -596,7 +602,7 @@ final class NotebookStore: ObservableObject {
               manifest.pageIds.contains(pageId)
         else { throw CocoaError(.fileNoSuchFile) }
 
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         let entry = CouchBookmark(pageId: pageId, updatedAt: now, removed: !bookmarked)
         manifest.bookmarks.removeAll { $0.pageId == pageId }
         manifest.bookmarks.append(entry)
@@ -625,7 +631,7 @@ final class NotebookStore: ObservableObject {
               manifest.pageIds.contains(pageId)
         else { throw CocoaError(.fileNoSuchFile) }
 
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         // Appended at the page's position rather than at the end: an outline is read against the
         // notebook, so a new entry belongs beside the pages it sits between, not after everything.
         let entry = CouchOutlineEntry(
@@ -677,7 +683,7 @@ final class NotebookStore: ObservableObject {
             ? live[destination].offset - (live[destination].offset > live[source].offset ? 1 : 0)
             : manifest.outline.endIndex
         manifest.outline.insert(entry, at: min(max(target, 0), manifest.outline.endIndex))
-        manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedAt = clock.stamp()
         manifest.updatedBy = deviceID
         try writeManifest(manifest)
         refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
@@ -690,7 +696,7 @@ final class NotebookStore: ObservableObject {
               let index = manifest.outline.firstIndex(where: { $0.id == entryId })
         else { throw CocoaError(.fileNoSuchFile) }
 
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         edit(&manifest.outline[index], now)
         manifest.updatedAt = now
         manifest.updatedBy = deviceID
@@ -709,7 +715,7 @@ final class NotebookStore: ObservableObject {
 
         let page = manifest.pageIds.remove(at: source)
         manifest.pageIds.insert(page, at: destination.clamped(to: manifest.pageIds))
-        manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedAt = clock.stamp()
         manifest.updatedBy = deviceID
         try writeManifest(manifest)
         refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
@@ -723,7 +729,7 @@ final class NotebookStore: ObservableObject {
     func renamePage(in notebookId: String, pageId: String, title: String?) throws {
         var page = try loadPage(notebookId: notebookId, pageId: pageId)
         page.title = title
-        page.updatedAt = NotableDate.format(Date())
+        page.updatedAt = clock.stamp()
         page.updatedBy = deviceID
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: pageId), options: .atomic)
@@ -750,7 +756,7 @@ final class NotebookStore: ObservableObject {
     func renameNotebook(id: String, title: String) throws {
         guard var manifest = manifest(id: id) else { throw CocoaError(.fileNoSuchFile) }
         manifest.title = title
-        manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedAt = clock.stamp()
         manifest.updatedBy = deviceID
         try writeManifest(manifest)
         refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
@@ -774,7 +780,7 @@ final class NotebookStore: ObservableObject {
         }
         guard var manifest = manifest(id: id) else { throw CocoaError(.fileNoSuchFile) }
         manifest.parentFolderId = folderId
-        manifest.updatedAt = NotableDate.format(Date())
+        manifest.updatedAt = clock.stamp()
         manifest.updatedBy = deviceID
         try writeManifest(manifest)
         refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
@@ -853,7 +859,7 @@ final class NotebookStore: ObservableObject {
     /// §5.5 decides by `updatedAt`. Without it this write would tie with the peer's live copy and
     /// the notebook could come straight back out of the Trash.
     func trashNotebook(id: String) throws {
-        try LocalTrash.addNotebook(id, at: Date(), root: rootURL)
+        try LocalTrash.addNotebook(id, at: clock.now(), root: rootURL)
         try touchNotebook(id)
     }
 
@@ -862,7 +868,7 @@ final class NotebookStore: ObservableObject {
     /// the file rather than a second cascade to get wrong. That holds on the peer too: it hides
     /// the same subtree from the same one field.
     func trashFolder(id: String) throws {
-        try LocalTrash.addFolder(id, at: Date(), root: rootURL)
+        try LocalTrash.addFolder(id, at: clock.now(), root: rootURL)
         try touchFolder(id)
     }
 
@@ -885,7 +891,7 @@ final class NotebookStore: ObservableObject {
             var all = folders
             guard let index = all.firstIndex(where: { $0.id == id }) else { return }
             all[index].parentFolderId = nil
-            all[index].updatedAt = NotableDate.format(Date())
+            all[index].updatedAt = clock.stamp()
             try writeFolders(all)
         } else {
             try touchFolder(id)
@@ -901,7 +907,7 @@ final class NotebookStore: ObservableObject {
     /// manifest in will find it.
     private func touchNotebook(_ id: String) throws {
         if var manifest = manifest(id: id) {
-            manifest.updatedAt = NotableDate.format(Date())
+            manifest.updatedAt = clock.stamp()
             manifest.updatedBy = deviceID
             try writeManifest(manifest)
         }
@@ -915,7 +921,7 @@ final class NotebookStore: ObservableObject {
             refreshAfterLocalChange(documents: [CouchDocID.folder(id)])
             return
         }
-        all[index].updatedAt = NotableDate.format(Date())
+        all[index].updatedAt = clock.stamp()
         try writeFolders(all)
     }
 
@@ -1058,7 +1064,7 @@ final class NotebookStore: ObservableObject {
 
     @discardableResult
     func createFolder(title: String, parentFolderId: String? = nil) throws -> FolderDTO {
-        let now = NotableDate.format(Date())
+        let now = clock.stamp()
         let folder = FolderDTO(
             id: UUID().uuidString.lowercased(), title: title,
             parentFolderId: parentFolderId, createdAt: now, updatedAt: now)
@@ -1072,7 +1078,7 @@ final class NotebookStore: ObservableObject {
             throw CocoaError(.fileNoSuchFile)
         }
         all[index].title = title
-        all[index].updatedAt = NotableDate.format(Date())
+        all[index].updatedAt = clock.stamp()
         try writeFolders(all)
     }
 
@@ -1083,7 +1089,7 @@ final class NotebookStore: ObservableObject {
     private func writeFolders(_ folders: [FolderDTO], deleting: [String] = []) throws {
         let file = FoldersFile(
             folders: folders.sorted { $0.id < $1.id },
-            serverTimestamp: NotableDate.format(Date()))
+            serverTimestamp: clock.stamp())
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try encoder.encode(file).write(to: foldersURL)
         // Tombstones before the change signal, for the same reason as a notebook's: the folder is

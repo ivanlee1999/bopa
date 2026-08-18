@@ -649,6 +649,44 @@ final class NotebookStoreCouchTests: XCTestCase {
             CouchSyncStack.stateFileName(for: settings),
             CouchSyncStack.stateFileName(for: changed))
     }
+
+    // MARK: Clock skew (§7.1a)
+
+    /// §6.4's liveness signal reads the page clocks, and the page clocks are stamped by the store.
+    /// So a skewed device must not be able to inflate its own liveness: an hour-fast iPad that
+    /// stamped ink an hour into the future would beat a deletion the peer made *after* the ink,
+    /// which is the whole failure §7.1a exists to stop. This pins the chain
+    /// `savePage` → `page.updatedAt` → `FileCouchStore.contentClock`.
+    func testTheLivenessSignalIsStampedFromTheCorrectedClock() throws {
+        let defaults = UserDefaults(suiteName: "NotebookStoreCouchTests.liveness")!
+        defaults.removePersistentDomain(forName: "NotebookStoreCouchTests.liveness")
+        let fixed = Date(timeIntervalSince1970: 1_770_000_000)
+        let clock = SyncClock(defaults: defaults, base: { fixed })
+        clock.note(ClockSkew(seconds: 3_600))
+
+        let skewed = NotebookStore(rootURL: rootURL, clock: clock)
+        skewed.deviceID = "ipad"
+        let manifest = try skewed.createNotebook(title: "notes")
+        let pageId = manifest.pageIds[0]
+        var page = try skewed.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+        page.strokes = [stroke("s1")]
+        _ = try skewed.savePage(page)
+
+        let corrected = NotableDate.format(fixed.addingTimeInterval(-3_600))
+        let store = FileCouchStore(rootURL: rootURL, deviceID: "ipad", clock: clock)
+        XCTAssertEqual(
+            store.contentClock(CouchDocID.notebook(manifest.notebookId)), corrected,
+            "the liveness clock must be the corrected instant, not this device's own")
+
+        // The tombstone side of the same comparison, so the two cannot drift apart: correcting one
+        // without the other is worse than correcting neither. `SyncClockTests` covers the stamp
+        // itself; this asserts the ledger the deletion actually lands in.
+        store.recordDeletion(CouchDocID.notebook(manifest.notebookId))
+        let ledger = rootURL.appendingPathComponent(".bopa-couch-deletions.json")
+        let recorded = try JSONDecoder().decode(
+            [String: String].self, from: Data(contentsOf: ledger))
+        XCTAssertEqual(recorded[CouchDocID.notebook(manifest.notebookId)], corrected)
+    }
 }
 
 /// Collects what the stack reports. A class because the callback is `@Sendable`, and the test
