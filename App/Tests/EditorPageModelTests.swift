@@ -163,6 +163,45 @@ final class EditorPageModelTests: XCTestCase {
             options: .atomic)
     }
 
+    // MARK: Switching pages flushes the one being left
+
+    /// The navigator panel jumps pages through `open(pageId:)` alone — the one switch path that
+    /// never flushed. Everything drawn inside the 2-second debounce window was silently lost,
+    /// along with the unsaved scroll offset. `open` now flushes at the door.
+    func testOpeningAnotherPageFlushesTheDebouncedWork() throws {
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+
+        // Draw and scroll, then jump pages before the 2s debounce fires — the navigator's path.
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "s1", second: 0)])
+        model.scheduleSave()
+        model.liveState.pageY = 500
+
+        XCTAssertTrue(model.open(pageId: second.id))
+
+        let left = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        XCTAssertEqual(left.strokes.count, 1, "the stroke drawn inside the debounce window is gone")
+        XCTAssertEqual(left.scroll, 500, "the scroll offset was dropped with it")
+    }
+
+    /// The fold's own path — saveNow, then open to reload — must stay a single flush: a second
+    /// save inside `open` has to see a clean page and do nothing.
+    func testOpeningTheSamePageAfterASaveIsANoOpFlush() throws {
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        page.strokes = [try makeStroke(id: "s1", second: 0)]
+        try store.savePage(page)
+
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        let before = try store.loadPage(notebookId: notebookId, pageId: pageIds[0]).updatedAt
+
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+
+        let after = try store.loadPage(notebookId: notebookId, pageId: pageIds[0]).updatedAt
+        XCTAssertEqual(after, before, "a clean page was rewritten just for being reopened")
+    }
+
     /// The ordinary path still works: drawing, saving, and the baseline following the save.
     func testASuccessfulSaveAdvancesTheBaseline() throws {
         var page = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])

@@ -75,6 +75,12 @@ final class EditorPageModel: NSObject, ObservableObject {
     ///   ordinary ones do not, because `loadError` already puts the failure on screen.
     @discardableResult
     func open(pageId newPageId: String) -> Bool {
+        // Every route off the current page runs through here, so this is where its debounced
+        // work is flushed. The navigator panel's jump used to be the one switch that never did:
+        // anything drawn inside the 2s re-arming window was silently lost, along with the
+        // unsaved scroll offset. Flushing at the door kills the whole forgot-to-flush class —
+        // callers that already saved cost nothing, because saveNow is a no-op when clean.
+        saveNow()
         guard let store else { return false }
         do {
             let loaded = try store.loadPage(notebookId: notebookId, pageId: newPageId)
