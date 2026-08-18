@@ -108,11 +108,20 @@ public enum CouchDocBody: Equatable, Sendable {
         }
     }
 
-    /// The `asset:` documents this body names. Only a page names any; the engine uses this to send
-    /// an image's bytes before the page that places it, and to fetch them when one arrives.
+    /// The `asset:` documents this body names — a page's pictures and background, a notebook's
+    /// default background. The engine uses this to send an asset's bytes before the document that
+    /// places them, and to fetch them when one arrives.
     var referencedAssetIDs: [String] {
-        guard case .page(let page) = self else { return [] }
-        return page.images.compactMap(\.assetId).filter { CouchAssetID.sha256Hex(ofAssetID: $0) != nil }
+        switch self {
+        case .page(let page):
+            return (page.images.compactMap(\.assetId) + [page.background])
+                .filter { CouchAssetID.sha256Hex(ofAssetID: $0) != nil }
+        case .notebook(let notebook):
+            return [notebook.defaultBackground]
+                .filter { CouchAssetID.sha256Hex(ofAssetID: $0) != nil }
+        default:
+            return []
+        }
     }
 }
 
@@ -685,8 +694,9 @@ public actor CouchSyncEngine {
     /// peer never has a reference it cannot resolve.
     ///
     /// Assets are not queued by the app: nothing "edits" one, and an image placed twice is the same
-    /// document. They are derived here from the pages being sent, and skipped once the server is
-    /// known to hold them — immutability means a revision we have seen can never go stale.
+    /// document. They are derived here from the documents being sent — a page's pictures and
+    /// background, a notebook's default background — and skipped once the server is known to hold
+    /// them: immutability means a revision we have seen can never go stale.
     private func orderedDirty() -> [String] {
         func rank(_ documentID: String) -> Int {
             switch CouchDocID.split(documentID)?.type {
@@ -697,9 +707,11 @@ public actor CouchSyncEngine {
             }
         }
         var queue = state.dirty
-        for documentID in state.dirty
-        where CouchDocID.split(documentID)?.type == CouchDocType.page {
-            guard let body = try? store.load(documentID) else { continue }
+        for documentID in state.dirty {
+            guard let type = CouchDocID.split(documentID)?.type,
+                  type == CouchDocType.page || type == CouchDocType.notebook,
+                  let body = try? store.load(documentID)
+            else { continue }
             for assetID in body.referencedAssetIDs where state.revs[assetID] == nil {
                 queue.insert(assetID)
             }

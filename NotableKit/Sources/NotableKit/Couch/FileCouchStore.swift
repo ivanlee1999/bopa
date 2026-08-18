@@ -55,6 +55,9 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     private func notebookDir(_ id: String) -> URL {
         notebooksURL.appendingPathComponent(id, isDirectory: true)
     }
+    /// The `backgrounds/` store — where PDF and picture backgrounds live, shared across notebooks
+    /// (unlike a page's images, which live with their notebook).
+    private var backgroundsURL: URL { CouchBackgroundFiles.directory(under: rootURL) }
     private func manifestURL(_ id: String) -> URL {
         notebookDir(id).appendingPathComponent("manifest.json")
     }
@@ -79,7 +82,8 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             guard let manifest = readManifest(id) else { return nil }
             return .notebook(CouchMapping.couchNotebook(
                 from: manifest, deviceID: deviceID, deletedAt: trash().notebooks
-                    .first { $0.id == id }?.deletedAt))
+                    .first { $0.id == id }?.deletedAt,
+                backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:)))
 
         case CouchDocType.page:
             guard let notebookId = notebookID(forPage: id),
@@ -87,7 +91,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             else { return nil }
             return .page(CouchMapping.couchPage(
                 from: page, deviceID: deviceID, notebookDir: notebookDir(notebookId),
-                sha256: cachedSHA256(of:)))
+                backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:)))
 
         case CouchDocType.folder:
             guard let folder = readFolders().first(where: { $0.id == id }) else { return nil }
@@ -122,11 +126,12 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             let dir = notebookDir(notebookId)
             let file = CouchMapping.pageFile(
                 from: page, id: id, existing: existing, notebookDir: dir,
-                sha256: cachedSHA256(of:),
+                backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:),
                 keeping: survivingStrokes(in: existing, merged: page, basedOn: basedOn))
             try write(encoder.encode(file), to: pageURL(notebookId: notebookId, pageId: id))
             lock.withLock { pageIndex[id] = notebookId }
             noteWantedAssets(of: file, notebookDir: dir)
+            noteWantedBackground(file.background, type: file.backgroundType)
             pruneWantedAssets(droppedBy: file, replacing: existing, notebookId: notebookId)
 
         case .asset(let asset):
@@ -139,8 +144,12 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
 
         case .notebook(let notebook):
             let existing = readManifest(id)
-            let manifest = CouchMapping.manifest(from: notebook, id: id, existing: existing)
+            let manifest = CouchMapping.manifest(
+                from: notebook, id: id, existing: existing,
+                backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:))
             try write(encoder.encode(manifest), to: manifestURL(id))
+            noteWantedBackground(
+                manifest.defaultBackground, type: manifest.defaultBackgroundType)
             // The merge decided where this notebook lives — the library or the Trash — so the
             // Trash file follows it in both directions. Without the `nil` case a notebook restored
             // on the BOOX would stay buried here, and the two Trashes would drift apart.
@@ -303,6 +312,11 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
 
     /// The file behind an asset this device holds. Nothing indexes these: an image is found through
     /// the page that places it, and the hash is its filename whenever this device wrote it.
+    ///
+    /// Both the notebooks' `images/` and the shared `backgrounds/` store are searched, because
+    /// the id says nothing about which it is: a sha256 is a picture placed on a page or a
+    /// document a whole notebook is drawn on, and by the time a peer asks, all that is known is
+    /// the hash.
     private func assetURL(_ assetID: String) -> URL? {
         guard let sha = CouchAssetID.sha256Hex(ofAssetID: assetID) else { return nil }
         for notebookId in notebookIDs() {
@@ -310,9 +324,19 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
                 .appendingPathComponent(sha)
             if FileManager.default.fileExists(atPath: byHash.path) { return byHash }
         }
-        // An image that arrived over WebDAV kept whatever name it had there, so the last resort is
-        // to ask the files themselves. Only reached when a page places an image this device
-        // imported by another route — after which the page's own load has hashed it anyway.
+        for folder in TemplateFolder.allCases {
+            for name in CouchBackgroundFiles.fileNames(forSHA256Hex: sha) {
+                let byHash = backgroundsURL
+                    .appendingPathComponent(folder.rawValue, isDirectory: true)
+                    .appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: byHash.path) { return byHash }
+            }
+        }
+        // A file that arrived by another route — the WebDAV backend, an import — kept whatever
+        // name it had, so the last resort is to ask the files themselves. Only reached when a
+        // document places bytes this device holds under a user-facing name; the hashes are
+        // remembered (`cachedSHA256`), so a notebook's own PDF is read once and not once per page
+        // that names it.
         for notebookId in notebookIDs() {
             let dir = NotableImageFiles.directory(in: notebookDir(notebookId))
             for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] {
@@ -320,7 +344,37 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
                 if CouchAssetID.sha256Hex(contentsOf: candidate) == sha { return candidate }
             }
         }
+        for folder in TemplateFolder.allCases {
+            let dir = backgroundsURL.appendingPathComponent(folder.rawValue, isDirectory: true)
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] {
+                let candidate = dir.appendingPathComponent(name)
+                if cachedSHA256(of: candidate) == sha { return candidate }
+            }
+        }
         return nil
+    }
+
+    /// The backgrounds twin of `noteWantedAssets`: records the blob a file-backed background
+    /// still owes, so a later pull can fetch it. Only a hash-named path can be owed — that name
+    /// is `CouchMapping.localBackground`'s own output, written when the reference arrived ahead
+    /// of its bytes. A missing file under a user-chosen name is genuinely unknown content, and
+    /// there is no id to fetch it by.
+    private func noteWantedBackground(_ background: String, type backgroundType: String) {
+        guard CouchBackgroundFiles.isFileBacked(backgroundType),
+              let ref = TemplateRef.parse(
+                  background,
+                  impliedFolder: CouchBackgroundFiles.folder(for: backgroundType)),
+              let sha = CouchBackgroundFiles.sha256Hex(ofFileName: ref.fileName)
+        else { return }
+        let url = backgroundsURL.appendingPathComponent(ref.relativePath)
+        guard !FileManager.default.fileExists(atPath: url.path),
+              let relative = relativeToRoot(url)
+        else { return }
+        let assetID = CouchDocID.asset(sha)
+        var wanted = wantedAssets()
+        guard !(wanted[assetID] ?? []).contains(relative) else { return }
+        wanted[assetID, default: []].append(relative)
+        writeWantedAssets(wanted.mapValues { $0.sorted() })
     }
 
     /// Records the blobs `file` places that are not on disk yet, so a later pull can fetch them.

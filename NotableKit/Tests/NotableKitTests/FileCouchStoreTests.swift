@@ -547,6 +547,169 @@ final class FileCouchStoreTests: XCTestCase {
         return try? JSONDecoder().decode(PageFile.self, from: data)
     }
 
+    private func readManifestFile(_ notebookId: String) -> NotebookManifest? {
+        let url = root.appendingPathComponent("notebooks/\(notebookId)/manifest.json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(NotebookManifest.self, from: data)
+    }
+
+    // MARK: File-backed backgrounds
+
+    private let pdfBytes = Data("%PDF-1.4 a stand-in for a scanned planner".utf8)
+    private var pdfAssetID: String { CouchAssetID.forBytes(pdfBytes) }
+    private var pdfSHA: String { CouchAssetID.sha256Hex(pdfBytes) }
+
+    /// Lays down what a PDF-backed notebook looks like on this device: the document in the shared
+    /// `backgrounds/` store under the user's own name, a page drawn on it, and a manifest whose
+    /// default points at it — the state a WebDAV template sync or an import leaves behind.
+    private func placePDFBackground(in notebookId: String, on pageId: String) throws {
+        let pdfURL = root.appendingPathComponent("backgrounds/pdfs/weekly.pdf")
+        try FileManager.default.createDirectory(
+            at: pdfURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try pdfBytes.write(to: pdfURL)
+
+        let dir = root.appendingPathComponent("notebooks/\(notebookId)", isDirectory: true)
+        let manifest = NotebookManifest(
+            notebookId: notebookId, title: "planner", pageIds: [pageId],
+            defaultBackground: "pdfs/weekly.pdf", defaultBackgroundType: "autoPdf",
+            createdAt: stamp(0), updatedAt: stamp(1), serverTimestamp: stamp(1))
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("pages"), withIntermediateDirectories: true)
+        try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"))
+        let file = PageFile(
+            id: pageId, notebookId: notebookId,
+            background: "pdfs/weekly.pdf", backgroundType: "pdf0",
+            createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "ipad")
+        try JSONEncoder().encode(file).write(to: dir.appendingPathComponent("pages/\(pageId).json"))
+    }
+
+    /// The upload half: a PDF background travels as the `asset:` id of its bytes — in the same
+    /// `background` field, the way notable publishes it — and the bytes are findable behind that
+    /// id. Before this, the field carried `pdfs/weekly.pdf` verbatim, a path naming nothing on
+    /// the peer, and no asset ever travelled.
+    func testAPDFBackgroundTravelsAsTheHashOfItsBytes() throws {
+        try placePDFBackground(in: "nb1", on: "p1")
+
+        guard case .page(let page)? = try store.load(CouchDocID.page("p1")) else {
+            return XCTFail("the page did not load")
+        }
+        XCTAssertEqual(page.background, pdfAssetID)
+        XCTAssertEqual(page.backgroundType, "pdf0", "the type still says how to draw it")
+
+        guard case .notebook(let notebook)? = try store.load(CouchDocID.notebook("nb1")) else {
+            return XCTFail("the notebook did not load")
+        }
+        XCTAssertEqual(notebook.defaultBackground, pdfAssetID)
+
+        // The engine pushes whatever the body references, so both must name the asset…
+        XCTAssertEqual(CouchDocBody.page(page).referencedAssetIDs, [pdfAssetID])
+        XCTAssertEqual(CouchDocBody.notebook(notebook).referencedAssetIDs, [pdfAssetID])
+        // …and the store must be able to produce its bytes when the engine asks.
+        guard case .asset(let asset)? = try store.load(pdfAssetID) else {
+            return XCTFail("the bytes behind the background were not found")
+        }
+        XCTAssertEqual(asset.data, pdfBytes)
+    }
+
+    /// The download half — the P1 the audit found: a notebook whose paper is a PDF lost its whole
+    /// visual substrate on this device, because nothing resolved the reference and nothing
+    /// fetched the bytes.
+    func testAnIncomingPDFBackgroundIsOwedUntilItsBytesArrive() throws {
+        try store.apply(CouchDocID.notebook("nb1"), .notebook(CouchNotebook(
+            title: "planner", pageIds: ["p1"],
+            defaultBackground: pdfAssetID, defaultBackgroundType: "autoPdf",
+            createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "boox")))
+        try store.apply(CouchDocID.page("p1"), .page(CouchPage(
+            notebookId: "nb1",
+            background: pdfAssetID, backgroundType: "pdf3",
+            createdAt: stamp(0), updatedAt: stamp(1), updatedBy: "boox")))
+
+        // The reference resolves to the path the renderer reads — `pdfs/<sha>.pdf` under the
+        // shared store — while the bytes are still on their way.
+        XCTAssertEqual(readPageFile("nb1", "p1")?.background, "pdfs/\(pdfSHA).pdf")
+        XCTAssertEqual(readManifestFile("nb1")?.defaultBackground, "pdfs/\(pdfSHA).pdf")
+        XCTAssertEqual(try store.missingAssetIDs(), [pdfAssetID])
+
+        // Owed across a restart, like an image.
+        let reopened = FileCouchStore(rootURL: root, deviceID: "ipad")
+        XCTAssertEqual(try reopened.missingAssetIDs(), [pdfAssetID])
+
+        try reopened.apply(pdfAssetID, .asset(CouchAsset(
+            data: pdfBytes, at: stamp(2), updatedBy: "ipad")))
+        XCTAssertTrue(try reopened.missingAssetIDs().isEmpty)
+        XCTAssertEqual(
+            try Data(contentsOf: root.appendingPathComponent("backgrounds/pdfs/\(pdfSHA).pdf")),
+            pdfBytes,
+            "the bytes must land where the resolved reference points")
+
+        // And a page holding the reference publishes the same id back — the round trip does not
+        // corrupt the address.
+        guard case .page(let page)? = try reopened.load(CouchDocID.page("p1")) else {
+            return XCTFail("the page did not load")
+        }
+        XCTAssertEqual(page.background, pdfAssetID)
+    }
+
+    /// Bytes already here under the user's own name keep that name — renaming would orphan the
+    /// copy the WebDAV backend syncs by filename, the same rule a placed image follows.
+    func testABackgroundAlreadyHeldKeepsTheNameItWasImportedUnder() throws {
+        try placePDFBackground(in: "nb1", on: "p1")
+
+        try store.apply(CouchDocID.page("p1"), .page(CouchPage(
+            notebookId: "nb1",
+            background: pdfAssetID, backgroundType: "pdf0",
+            createdAt: stamp(0), updatedAt: stamp(2), updatedBy: "boox")))
+
+        XCTAssertEqual(readPageFile("nb1", "p1")?.background, "pdfs/weekly.pdf")
+        XCTAssertTrue(try store.missingAssetIDs().isEmpty, "nothing is owed — the bytes are here")
+    }
+
+    /// A peer that names no asset — an older build, or one that cannot read its own file — has
+    /// said nothing about backgrounds, so it must not blank out one that is here and working.
+    func testAPeerWithoutBackgroundAssetsCannotReplaceALocalBackground() throws {
+        try placePDFBackground(in: "nb1", on: "p1")
+
+        try store.apply(CouchDocID.page("p1"), .page(CouchPage(
+            notebookId: "nb1",
+            background: "/storage/emulated/0/Documents/notabledb/backgrounds/pdfs/weekly.pdf",
+            backgroundType: "pdf0",
+            createdAt: stamp(0), updatedAt: stamp(2), updatedBy: "boox")))
+
+        XCTAssertEqual(readPageFile("nb1", "p1")?.background, "pdfs/weekly.pdf",
+                       "the peer's device-absolute path must not replace the working local one")
+    }
+
+    /// The whole journey between two directories: the paper travels with the notebook.
+    func testAPDFBackgroundReachesTheOtherDirectoryAsBytes() async throws {
+        let server = MockCouchServer()
+        let client = CouchDBClient(transport: server, database: "notes")
+
+        let otherRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bopa-couch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: otherRoot) }
+        let booxStore = FileCouchStore(rootURL: otherRoot, deviceID: "boox")
+
+        let ipad = CouchSyncEngine(client: client, store: store, deviceID: "ipad")
+        let boox = CouchSyncEngine(client: client, store: booxStore, deviceID: "boox")
+
+        try placePDFBackground(in: "nb1", on: "p1")
+        await ipad.markDirty(store.allDocumentIDs())
+        let pushed = await ipad.flush()
+        XCTAssertTrue(pushed.failures.isEmpty, "push failed: \(pushed.failures)")
+        // The bytes go first, so the peer never reads a page naming an asset that is not there.
+        XCTAssertEqual(pushed.pushed.first, pdfAssetID)
+
+        let pulled = try await boox.pull()
+        XCTAssertEqual(pulled.fetchedAssets, [pdfAssetID])
+        XCTAssertEqual(
+            try Data(contentsOf: otherRoot.appendingPathComponent("backgrounds/pdfs/\(pdfSHA).pdf")),
+            pdfBytes)
+
+        let landed = try XCTUnwrap(pageFile(in: otherRoot, notebook: "nb1", page: "p1"))
+        XCTAssertEqual(landed.background, "pdfs/\(pdfSHA).pdf")
+        XCTAssertEqual(landed.backgroundType, "pdf0")
+    }
+
     // MARK: Through the engine
 
     /// The scenario the adapter exists for: two devices, two directories, one server.
