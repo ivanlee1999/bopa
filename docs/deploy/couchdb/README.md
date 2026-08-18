@@ -44,12 +44,35 @@ Put it behind the same Synology reverse proxy that serves `webdav.liyifan.us`:
 `couch.liyifan.us` → `localhost:5984`, with a Let's Encrypt certificate. Mobile clients
 require an OS-trusted certificate, so a self-signed one will not work.
 
-**The one setting that matters: the proxy's read timeout.** Near-real-time sync works by
-holding a `GET /_changes?feed=longpoll` request open until something changes. The client asks
+Two proxy settings matter, and the second one is the one that bites silently.
+
+**The read timeout.** Near-real-time sync works by holding a
+`GET /_changes?feed=longpoll` request open until something changes. The client asks
 for a 55-second window, chosen to sit under the common 60-second proxy default — so most
 proxies need no change. If yours times out sooner, sync still works but each idle period ends
 in a reconnect; lower the client's `timeoutMs` to a few seconds under the proxy's limit rather
 than raising the proxy, since idle reconnects are cheap and a stuck connection is not.
+
+**The request body limit — `client_max_body_size`.** Pictures and PDF backgrounds travel as a
+single document with the bytes inlined as a base64 attachment, so an asset upload is the largest
+request the apps ever make. **nginx defaults this to 1 MB**, which — after base64 inflates the
+bytes by 4/3 — rejects any asset over roughly 768 KiB. That is every photograph a phone takes.
+
+The failure mode is the reason this is called out rather than left to defaults: notes and ink
+keep syncing perfectly, because a page document is 15–80 KB. Only pictures stop arriving, on
+both devices, with a `413` that never reaches CouchDB's log because CouchDB never saw the
+request.
+
+```nginx
+client_max_body_size 128m;    # headroom for a 60 MB PDF at 4/3 base64 inflation
+```
+
+On the Synology reverse proxy this lives in Control Panel → Login Portal → Advanced →
+Reverse Proxy → edit the entry → Custom Header, or in a snippet under
+`/usr/local/etc/nginx/conf.d/` if you manage nginx directly. Whichever way you set it,
+re-run `provision.sh`: it probes the ceiling by PUTting asset-shaped documents of 1, 8 and
+32 MiB through `COUCHDB_URL` — the same path the apps use, proxy included — and reports the
+largest that got through.
 
 Do not publish port 5984 to the internet directly. With `require_valid_user = true` there is
 no anonymous surface, but TLS terminates at the proxy and that is where it should stay.
@@ -99,8 +122,13 @@ curl -sS $AUTH "$URL/_changes?feed=longpoll&since=now&timeout=55000"
 
 ## Notes
 
-- Defaults are fine for document size: pages run 15–80 KB against an 8 MB limit, and image
-  bytes travel as attachments, which do not count toward it.
+- Defaults are fine for document size, and the reason is worth knowing because it is easy to
+  get backwards. `max_document_size` (8,000,000) is measured against the JSON body **with
+  attachment data removed**, so an asset is never refused by CouchDB no matter how large:
+  measured against stock 3.3 and 3.5, a 60 MiB PDF inlined as `_attachments.blob.data` is
+  accepted and reads back with a matching SHA-256. What the limit does govern is ordinary
+  fields, which means **pages** — 15–80 KB today, two orders of magnitude of headroom.
+  The limit that actually stops assets is the proxy's, above.
 - `revs_limit` needs no tuning. The engine pushes with the last known `_rev` and merges on
   409, so the revision tree stays linear instead of accumulating conflict branches.
 - The admin credentials are for setup and maintenance only. The apps hold the `sync` account,
