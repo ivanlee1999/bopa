@@ -13,6 +13,8 @@ set -a; . ./.env; set +a
 
 : "${COUCHDB_URL:?}" "${COUCHDB_ADMIN_USER:?}" "${COUCHDB_ADMIN_PASSWORD:?}"
 : "${COUCHDB_SYNC_USER:?}" "${COUCHDB_SYNC_PASSWORD:?}" "${COUCHDB_DATABASE:?}"
+# Older .env files predate recognized text; default rather than fail on them.
+COUCHDB_TEXT_DATABASE=${COUCHDB_TEXT_DATABASE:-notes_text}
 
 admin=(--user "${COUCHDB_ADMIN_USER}:${COUCHDB_ADMIN_PASSWORD}")
 
@@ -37,26 +39,33 @@ call PUT /_replicator   || true
 echo "== application database =="
 call PUT "/${COUCHDB_DATABASE}"
 
+echo "== recognized-text database =="
+call PUT "/${COUCHDB_TEXT_DATABASE}"
+
 echo "== sync account =="
 call PUT "/_users/org.couchdb.user:${COUCHDB_SYNC_USER}" \
   "{\"name\":\"${COUCHDB_SYNC_USER}\",\"password\":\"${COUCHDB_SYNC_PASSWORD}\",\"roles\":[],\"type\":\"user\"}" \
   || echo "  (already exists — delete it first if you need to rotate the password)"
 
-echo "== restrict the database to that account =="
-call PUT "/${COUCHDB_DATABASE}/_security" \
-  "{\"admins\":{\"names\":[],\"roles\":[]},\"members\":{\"names\":[\"${COUCHDB_SYNC_USER}\"],\"roles\":[]}}"
+echo "== restrict the databases to that account =="
+security="{\"admins\":{\"names\":[],\"roles\":[]},\"members\":{\"names\":[\"${COUCHDB_SYNC_USER}\"],\"roles\":[]}}"
+call PUT "/${COUCHDB_DATABASE}/_security"      "$security"
+call PUT "/${COUCHDB_TEXT_DATABASE}/_security" "$security"
 
 echo
 echo "== verifying as the sync user =="
 sync=(--user "${COUCHDB_SYNC_USER}:${COUCHDB_SYNC_PASSWORD}")
 curl -fsS "${admin[@]}" "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null && echo "admin can read the db"
 curl -fsS "${sync[@]}"  "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null && echo "sync user can read the db"
+curl -fsS "${sync[@]}"  "${COUCHDB_URL}/${COUCHDB_TEXT_DATABASE}" >/dev/null && echo "sync user can read the text db"
 
 # Anonymous access must fail: this is the check that catches require_valid_user not applying.
-if curl -fsS "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null 2>&1; then
-  echo "WARNING: the database is readable WITHOUT credentials — check config/10-sync.ini" >&2
-  exit 1
-fi
+for db in "${COUCHDB_DATABASE}" "${COUCHDB_TEXT_DATABASE}"; do
+  if curl -fsS "${COUCHDB_URL}/${db}" >/dev/null 2>&1; then
+    echo "WARNING: '${db}' is readable WITHOUT credentials — check config/10-sync.ini" >&2
+    exit 1
+  fi
+done
 echo "anonymous access correctly refused"
 
 # ---------------------------------------------------------------------------
@@ -140,4 +149,5 @@ fi
 rm -f /tmp/couch-provision-body
 echo
 echo "Done. Point both apps at ${COUCHDB_URL}, database '${COUCHDB_DATABASE}',"
-echo "user '${COUCHDB_SYNC_USER}'."
+echo "user '${COUCHDB_SYNC_USER}'. Recognized handwriting goes to '${COUCHDB_TEXT_DATABASE}'"
+echo "with the same account; the Obsidian plugin reads both."
