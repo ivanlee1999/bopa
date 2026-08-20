@@ -81,4 +81,45 @@ final class PageTurnOvershootTests: XCTestCase {
         XCTAssertEqual(short(threshold), threshold)
         XCTAssertEqual(short(-threshold), -threshold)
     }
+
+    // MARK: Which axis decides
+
+    /// The reported dead end: with 'Side to side' set, pulling past the bottom of the paper did
+    /// nothing whatsoever — no turn, no new page — so the only way to a second page was a
+    /// sideways swipe. The configured axis still wins when it carries the gesture; the other one
+    /// is only consulted when it does not, which is exactly the dead end.
+    func testVerticalPullTurnsThePageEvenWhenTurningIsSideways() {
+        XCTAssertEqual(
+            EditorCanvasView.Coordinator.pageTurnOvershoot(
+                vertical: 400, horizontal: 0, pageTurn: .horizontal),
+            400)
+    }
+
+    func testSidewaysPullTurnsThePageEvenWhenTurningIsVertical() {
+        XCTAssertEqual(
+            EditorCanvasView.Coordinator.pageTurnOvershoot(
+                vertical: 0, horizontal: -400, pageTurn: .vertical),
+            -400)
+    }
+
+    /// A diagonal drag is not ambiguous: the axis the reader configured is the one that decides,
+    /// so the setting still picks the gesture rather than being overridden by a stray wobble on
+    /// the other axis.
+    func testTheConfiguredAxisWinsWhenBothMoved() {
+        XCTAssertEqual(
+            EditorCanvasView.Coordinator.pageTurnOvershoot(
+                vertical: 400, horizontal: -400, pageTurn: .horizontal),
+            -400)
+        XCTAssertEqual(
+            EditorCanvasView.Coordinator.pageTurnOvershoot(
+                vertical: 400, horizontal: -400, pageTurn: .vertical),
+            400)
+    }
+
+    func testAStillReleaseTurnsNothing() {
+        XCTAssertEqual(
+            EditorCanvasView.Coordinator.pageTurnOvershoot(
+                vertical: 0, horizontal: 0, pageTurn: .vertical),
+            0)
+    }
 }
