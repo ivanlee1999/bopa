@@ -92,6 +92,14 @@ final class CanvasContainerView: UIView {
 
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
+        // Both axes bounce even when there is nothing to scroll on them. A page turn is read
+        // from how far a released drag pulled *past* the end, and without the bounce there is no
+        // past-the-end to pull into: a sheet that fits the screen — every page under the
+        // whole-page fit that "Side to side" opens with — simply refused to be pulled, so the
+        // gesture that asks for the next page could not be made at all. The overshoot threshold
+        // is what keeps an ordinary scroll from turning a page, not the absence of slack.
+        canvas.alwaysBounceVertical = true
+        canvas.alwaysBounceHorizontal = true
         addSubview(canvas)
     }
 

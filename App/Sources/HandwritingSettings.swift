@@ -21,10 +21,14 @@ extension NativeTemplate {
 /// A page is a sheet, so it has an end — and the gesture that carries you over that end is a
 /// preference, not a fact. Reading down a long document wants the next page below this one;
 /// working through a notebook the way you would a paper one wants it to the side.
+///
+/// What this does **not** decide is whether the end of the paper is a dead end. Running off the
+/// bottom always gets you the next page, and makes one if there is none, whichever way this is
+/// set; the setting picks the gesture, and how the sheet is fitted to the screen.
 enum PageTurn: String, CaseIterable, Identifiable, Sendable {
-    /// Drag past the bottom for the next page, past the top for the previous.
+    /// Fit the width and let the sheet run off the bottom; drag past it for the next page.
     case vertical
-    /// Swipe sideways, and vertical dragging only moves within the page.
+    /// Fit the whole sheet on screen and swipe sideways — one page at a time.
     case horizontal
 
     var id: String { rawValue }
@@ -38,8 +42,10 @@ enum PageTurn: String, CaseIterable, Identifiable, Sendable {
 
     var detail: String {
         switch self {
-        case .vertical: "Drag past the bottom of a page for the next one."
-        case .horizontal: "Swipe sideways for the next page."
+        case .vertical:
+            "Fits the page's width. Drag past the bottom for the next page."
+        case .horizontal:
+            "Fits the whole page on screen. Swipe sideways for the next page."
         }
     }
 }

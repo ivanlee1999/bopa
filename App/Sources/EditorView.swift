@@ -731,25 +731,41 @@ struct EditorCanvasView: UIViewRepresentable {
             _ scrollView: UIScrollView, willDecelerate decelerate: Bool
         ) {
             let inset = scrollView.adjustedContentInset
-            let overshoot: CGFloat
-            switch parent.config.pageTurn {
-            case .vertical:
-                overshoot = Self.overshoot(
-                    offset: scrollView.contentOffset.y,
-                    contentLength: scrollView.contentSize.height,
-                    boundsLength: scrollView.bounds.height,
-                    leadingInset: inset.top,
-                    trailingInset: inset.bottom)
-            case .horizontal:
-                overshoot = Self.overshoot(
-                    offset: scrollView.contentOffset.x,
-                    contentLength: scrollView.contentSize.width,
-                    boundsLength: scrollView.bounds.width,
-                    leadingInset: inset.left,
-                    trailingInset: inset.right)
-            }
+            let vertical = Self.overshoot(
+                offset: scrollView.contentOffset.y,
+                contentLength: scrollView.contentSize.height,
+                boundsLength: scrollView.bounds.height,
+                leadingInset: inset.top,
+                trailingInset: inset.bottom)
+            let horizontal = Self.overshoot(
+                offset: scrollView.contentOffset.x,
+                contentLength: scrollView.contentSize.width,
+                boundsLength: scrollView.bounds.width,
+                leadingInset: inset.left,
+                trailingInset: inset.right)
+            // Both axes, not only the configured one. Reading just the configured axis made
+            // "Side to side" mean the bottom of the paper was a wall: pulling past it did
+            // nothing at all, and the only way on — even to make the very first second page —
+            // was a sideways swipe. Which way a *swipe* turns pages is a preference; whether
+            // running off the bottom of the sheet gets you the next one is not.
+            //
+            // The configured axis wins when both moved, so the setting still decides the
+            // gesture the reader actually uses; the other axis is the way out of a dead end.
+            let overshoot = Self.pageTurnOvershoot(
+                vertical: vertical, horizontal: horizontal, pageTurn: parent.config.pageTurn)
             guard abs(overshoot) >= Self.pageTurnThreshold else { return }
             parent.turnPage(overshoot > 0 ? 1 : -1)
+        }
+
+        /// Which axis's overshoot decides the turn: the configured one whenever it carries one,
+        /// the other otherwise.
+        static func pageTurnOvershoot(
+            vertical: CGFloat, horizontal: CGFloat, pageTurn: PageTurn
+        ) -> CGFloat {
+            switch pageTurn {
+            case .vertical: return vertical != 0 ? vertical : horizontal
+            case .horizontal: return horizontal != 0 ? horizontal : vertical
+            }
         }
 
         /// How far a released drag pulled past where the axis can actually rest, signed —
