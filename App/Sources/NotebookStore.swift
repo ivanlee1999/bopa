@@ -575,7 +575,67 @@ final class NotebookStore: ObservableObject {
         // listed with no file — which is the one of the two that makes `loadPage` throw.
         try? FileManager.default.removeItem(
             at: pageURL(notebookId: notebookId, pageId: pageId))
+        // The recognized text goes with the ink it described. Its server copy is left to the
+        // Obsidian plugin, which holds the whole library and prunes text no notebook lists.
+        try? FileManager.default.removeItem(
+            at: pageTextURL(notebookId: notebookId, pageId: pageId))
         refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+    }
+
+    // MARK: - Recognized text
+
+    private func pageTextURL(notebookId: String, pageId: String) -> URL {
+        notebookDir(notebookId).appendingPathComponent("pagetext/\(pageId).json")
+    }
+
+    func loadPageText(notebookId: String, pageId: String) -> PageTextFile? {
+        guard let data = try? Data(contentsOf: pageTextURL(notebookId: notebookId, pageId: pageId))
+        else { return nil }
+        return try? decoder.decode(PageTextFile.self, from: data)
+    }
+
+    /// Persists a page's recognized text.
+    ///
+    /// Deliberately *not* through `refreshAfterLocalChange`: that posts the local-change
+    /// notification, which is what triggers recognition in the first place, and a recognizer whose
+    /// own writes wake it up recognizes forever. The publisher is told directly instead.
+    func savePageText(_ text: PageTextFile, in notebookId: String) throws {
+        // A page the notebook no longer lists is one whose ink is gone; writing text for it would
+        // leave a file nothing ever reads or removes.
+        guard let manifest = readManifestFromDisk(notebookId),
+              manifest.pageIds.contains(text.pageId)
+        else { return }
+
+        let url = pageTextURL(notebookId: notebookId, pageId: text.pageId)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try encoder.encode(text).write(to: url, options: .atomic)
+    }
+
+    /// Every page in this notebook whose text has not reached the server yet.
+    func pendingPageText(in notebookId: String) -> [PageTextFile] {
+        guard let manifest = readManifestFromDisk(notebookId) else { return [] }
+        return manifest.pageIds
+            .compactMap { loadPageText(notebookId: notebookId, pageId: $0) }
+            .filter(\.pendingPush)
+    }
+
+    /// Recognized text anywhere in the library that matches [query]. What makes handwriting
+    /// searchable — the library's own search only ever saw titles.
+    func notebooksMatchingText(_ query: String) -> Set<String> {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return [] }
+
+        var matches: Set<String> = []
+        for manifest in notebooks {
+            let hit = manifest.pageIds.contains { pageId in
+                guard let text = loadPageText(notebookId: manifest.notebookId, pageId: pageId)
+                else { return false }
+                return text.text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            }
+            if hit { matches.insert(manifest.notebookId) }
+        }
+        return matches
     }
 
     /// Reorders a page within its notebook.
@@ -1224,6 +1284,10 @@ final class NotebookStore: ObservableObject {
     func search(_ query: String) -> (folders: [FolderDTO], notebooks: [NotebookManifest]) {
         let trashedFolderIDs = trash.folderIDs
         let trashedNotebookIDs = trash.notebookIDs
+        // A notebook whose *handwriting* mentions the word is usually the result people are
+        // after — the reason to search is generally that the title was never going to be enough.
+        // Only pages a recognizer has read can answer, so this finds nothing until it has run.
+        let byHandwriting = notebooksMatchingText(query)
 
         return (
             folders: folders.filter {
@@ -1234,7 +1298,8 @@ final class NotebookStore: ObservableObject {
             notebooks: notebooks.filter {
                 !trashedNotebookIDs.contains($0.notebookId)
                     && isInLiveSubtree($0.parentFolderId, trashed: trashedFolderIDs)
-                    && LibrarySort.matches(title: $0.title, query: query)
+                    && (LibrarySort.matches(title: $0.title, query: query)
+                        || byHandwriting.contains($0.notebookId))
             }
         )
     }

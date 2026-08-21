@@ -84,9 +84,11 @@ enum LibrarySort {
     /// Whether [title] answers [query].
     ///
     /// Diacritic- and case-insensitive substring matching, not prefix: people search for the word
-    /// they remember from the middle of a title as readily as for how it starts. Handwriting is
-    /// not searched — that needs recognition, which is a later and much larger thing — so this is
-    /// deliberately "search by name" and the empty query matches everything.
+    /// they remember from the middle of a title as readily as for how it starts. The empty query
+    /// matches everything.
+    ///
+    /// Titles only. Handwriting is searched too, but through recognized text
+    /// (`NotebookStore.notebooksMatchingText`), which needs a file per page rather than a string.
     static func matches(title: String, query: String) -> Bool {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return true }

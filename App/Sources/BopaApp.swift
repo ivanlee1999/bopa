@@ -6,6 +6,7 @@ struct BopaApp: App {
     @StateObject private var syncCoordinator = SyncCoordinator()
     @StateObject private var handwriting = HandwritingSettings()
     @StateObject private var backendHost = SyncBackendHost()
+    @State private var recognition: RecognitionController?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -33,13 +34,22 @@ struct BopaApp: App {
                     // objects independently, so the host cannot take them as constructor
                     // arguments.
                     backendHost.attach(store: store, coordinator: syncCoordinator)
+                    // Same reason: the controller needs the store SwiftUI has just made.
+                    let controller = RecognitionController(store: store)
+                    recognition = controller
+                    controller.start()
                 }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     switch phase {
                     case .active:
                         backendHost.becameActive()
+                        // Text recognized while offline has been waiting for a network; this is
+                        // the moment there is most likely to be one.
+                        Task { await recognition?.publishPending() }
                     case .background:
                         backendHost.enteredBackground()
+                        // Recognition waits out a quiet period the app may not stay awake for.
+                        recognition?.flush()
                     default:
                         backendHost.willResignActive()
                     }

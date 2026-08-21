@@ -222,6 +222,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             HandwritingSettingsSections()
+            RecognitionSettingsSection()
             Section {
                 NavigationLink {
                     SyncSettingsView(backendHost: backendHost)
@@ -231,6 +232,41 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+    }
+}
+
+/// Whether to read handwriting, and where the text goes.
+///
+/// Its own section rather than part of Sync: recognition works with sync switched off, because
+/// the text database is reached directly rather than through the sync engine. What it publishes
+/// is still the user's handwriting going to a server, which is why it starts switched off.
+struct RecognitionSettingsSection: View {
+    @State private var settings = RecognitionSettings.load()
+
+    var body: some View {
+        Section {
+            Toggle("Read my handwriting", isOn: $settings.enabled)
+                .accessibilityIdentifier("settings.recognizeHandwriting")
+            if settings.enabled {
+                TextField("Text database", text: $settings.database)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .accessibilityIdentifier("settings.recognitionDatabase")
+            }
+        } header: {
+            Text("Handwriting recognition")
+        } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Reads your handwriting on this iPad, shortly after you finish a page. "
+                    + "The text makes your notes searchable, and reaches Obsidian if you use "
+                    + "the plugin. Nothing leaves the iPad until you set up sync.")
+                if settings.enabled {
+                    Text("Kept separate from your notes database. Recognized text can always be "
+                        + "read again from the ink, so it stays out of the sync your notebooks use.")
+                }
+            }
+        }
+        .onChange(of: settings) { _, updated in updated.save() }
     }
 }
 

@@ -1,7 +1,13 @@
 # CouchDB on the NAS
 
-Server side of [the CouchDB sync plan](../../couchdb-sync-plan.md). One container, one
-database, one non-admin account that both apps share.
+Server side of [the CouchDB sync plan](../../couchdb-sync-plan.md). One container, two
+databases, one non-admin account that both apps share.
+
+`notes` holds the synced library — notebooks, pages, ink, assets — and its documents are
+governed by [the sync protocol](../../couch-sync-protocol.md). `notes_text` holds recognized
+handwriting, one `pagetext:<pageId>` document per page. It is deliberately a separate
+database: the sync engines never open it, so the text documents can change shape without
+touching the sync protocol, and an app build that knows nothing about them is unaffected.
 
 ## Setup
 
@@ -28,9 +34,10 @@ docker compose logs -f couchdb     # wait for "Apache CouchDB has started"
 chmod +x provision.sh && ./provision.sh
 ```
 
-`provision.sh` creates the `notes` database and the `sync` account, restricts the database to
-that account, and then verifies that anonymous access is refused — that last check is the one
-that catches `require_valid_user` silently not applying.
+`provision.sh` creates the `notes` and `notes_text` databases and the `sync` account,
+restricts both databases to that account, and then verifies that anonymous access is refused —
+that last check is the one that catches `require_valid_user` silently not applying. It is
+idempotent, so running it again on an existing deployment just adds `notes_text`.
 
 Run it against the LAN address first if TLS is not up yet:
 
