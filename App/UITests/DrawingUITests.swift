@@ -77,6 +77,42 @@ final class DrawingUITests: XCTestCase {
         waitForStrokes(2, on: canvas, message: "expected 2 strokes")
     }
 
+    /// The reported Bopa dead end: with sideways turning stored, the first page used to disable
+    /// vertical bounce, so an upward pull could neither reach nor create page two. The app now
+    /// treats that pull as "more paper" independently of the preferred sideways turn gesture.
+    @MainActor
+    func testVerticalPullCreatesARealSecondPageWhenSidewaysTurningIsPreferred() throws {
+        let app = XCUIApplication()
+        // UserDefaults' argument domain lets the UI test exercise the persisted horizontal mode
+        // without adding a production-only settings hook.
+        app.launchArguments = [
+            "--uitest-reset-tool", "-handwriting.pageTurn", "horizontal",
+            "-handwriting.fingerDrawing", "false",
+        ]
+        app.launch()
+
+        let canvas = openFreshNotebook(app)
+        let pageCounter = app.buttons["editor.pages"]
+        XCTAssertTrue(pageCounter.waitForExistence(timeout: 5))
+        XCTAssertEqual(pageCounter.value as? String, "Page 1 of 1")
+
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.85))
+            .press(
+                forDuration: 0.05,
+                thenDragTo: canvas.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.50, dy: 0.10)))
+
+        let onSecondPage = NSPredicate(format: "value == 'Page 2 of 2'")
+        XCTAssertEqual(
+            XCTWaiter().wait(
+                for: [expectation(for: onSecondPage, evaluatedWith: pageCounter)], timeout: 5),
+            .completed,
+            "pulling past the bottom should create and enter the second real page")
+        XCTAssertEqual(
+            app.descendants(matching: .any)["editor.canvas"].firstMatch.value as? String,
+            "strokes:0")
+    }
+
     @MainActor
     func testUndoRemovesJustDrawnStrokeAndRedoRestoresIt() throws {
         let app = XCUIApplication()

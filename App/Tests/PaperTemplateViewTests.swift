@@ -32,6 +32,15 @@ final class PaperTemplateViewTests: XCTestCase {
         return view
     }
 
+    func testPageBreaksAreOffByDefaultForPhysicalPages() {
+        let view = PaperTemplateView(frame: CGRect(x: 0, y: 0, width: 800, height: 1000))
+        view.pageWidth = CGFloat(sheet.width)
+        view.sheetHeight = CGFloat(sheet.height)
+        view.setGeometry(zoomScale: zoom, contentOffset: .zero)
+
+        XCTAssertTrue(markedRows(view).isEmpty)
+    }
+
     /// Rows of the rendered view carrying a mark, in view points.
     ///
     /// "A mark" is a pixel darker than the paper, not merely an opaque one: the template renderer

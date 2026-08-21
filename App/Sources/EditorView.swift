@@ -167,6 +167,7 @@ struct EditorView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("All pages")
+            .accessibilityValue("Page \(pageIndex + 1) of \(manifest.pageIds.count)")
             .accessibilityIdentifier("editor.pages")
 
             // Never disabled: on the last page it makes the next one. A page ends at its sheet
@@ -226,7 +227,7 @@ struct EditorView: View {
                 handwriting.config.pageFit = .fitWidth
                 viewport.fitToWidth()
             } label: {
-                Label("Fit page width", systemImage: "arrow.left.and.right")
+                Label("Fit whole page", systemImage: "arrow.up.left.and.arrow.down.right")
             }
             .accessibilityIdentifier("editor.fitWidth")
         } label: {
@@ -465,7 +466,7 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.accessibilityValue = "strokes:0"
         container.pageWidth = CGFloat(pageSize.width)
         container.sheetHeight = declaredSheet.map { CGFloat($0.height) } ?? 0
-        container.fitsWholePage = config.pageTurn == .horizontal
+        container.fitsWholePage = true
         container.setContentExtent(
             pageSize: pageSize, ink: drawing.bounds,
             minimumHeight: Self.minimumHeight(for: pageSize))
@@ -507,7 +508,7 @@ struct EditorCanvasView: UIViewRepresentable {
         // canvas was created, and on a page switch it can differ from the page just closed.
         container.setPageWidth(CGFloat(pageSize.width))
         container.sheetHeight = declaredSheet.map { CGFloat($0.height) } ?? 0
-        container.fitsWholePage = config.pageTurn == .horizontal
+        container.fitsWholePage = true
         // Background and images may arrive/change without a page switch; both setters are
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)
@@ -570,16 +571,14 @@ struct EditorCanvasView: UIViewRepresentable {
 
             canvas.drawingPolicy = config.fingerDrawing ? .anyInput : .pencilOnly
             canvas.isScrollEnabled = !config.scrollLocked
-            // A page now fits the screen, so there is nothing to scroll and nothing to drag past
-            // unless the axis is allowed to give. Bounce is the gesture: it is what lets a page
-            // that fits exactly still be pulled off the end, and it is enabled only on the axis
-            // the reader turns pages on, so the other one stays still.
-            canvas.alwaysBounceVertical = config.pageTurn == .vertical && !config.scrollLocked
+            // A vertical pull past the bottom always reaches or creates the next real page,
+            // including when sideways page turns are preferred. Bounce is the overshoot signal;
+            // disabling it made the vertical fallback below mathematically unreachable.
+            canvas.alwaysBounceVertical = !config.scrollLocked
             canvas.alwaysBounceHorizontal = config.pageTurn == .horizontal && !config.scrollLocked
             container.keepsFitToWidth = config.pageFit == .fitWidth
-            // Sideways turning shows one whole page; downward turning fits the width and lets the
-            // page run off the bottom, which is the way you are about to travel.
-            container.fitsWholePage = config.pageTurn == .horizontal
+            // The preference chooses the turn gesture, not how many screenfuls one sheet occupies.
+            container.fitsWholePage = true
             // Switching the preference on acts on the page you are looking at, rather than
             // waiting for the next one to be opened.
             if let previousFit, previousFit != config.pageFit, config.pageFit == .fitWidth {
@@ -789,9 +788,10 @@ struct EditorCanvasView: UIViewRepresentable {
             return 0
         }
 
-        /// How far past the edge counts as asking for the next page. Generous enough that the
-        /// rubber-banding of an ordinary scroll to the bottom does not turn a page by itself.
-        static let pageTurnThreshold: CGFloat = 120
+        /// How far past the edge counts as asking for the next page. UIScrollView compresses a
+        /// finger's travel while rubber-banding, so the old 120pt content-offset threshold needed
+        /// an implausibly long pull and made vertical page creation appear broken.
+        static let pageTurnThreshold: CGFloat = 48
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             container?.canvasZoomDidChange()

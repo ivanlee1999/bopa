@@ -122,7 +122,7 @@ final class CanvasContainerViewTests: XCTestCase {
 
     // MARK: - Re-fitting on demand
 
-    /// The ••• menu's "Fit page width" after a pinch: back on the fit, and armed again, so
+    /// The ••• menu's "Fit whole page" after a pinch: back on the fit, and armed again, so
     /// the next rotation keeps it there rather than preserving the pinched-in zoom.
     func testFitToWidthReEngagesAfterAPinch() {
         let container = makeContainer(portrait)
@@ -408,6 +408,18 @@ final class CanvasContainerViewTests: XCTestCase {
             accuracy: 1)
     }
 
+    /// Ink can reach the last line without reserving another thousand points of phantom paper.
+    /// This is the geometry of the reported training notebook's first page.
+    func testInBoundsInkNearTheBottomDoesNotCreateAPhantomSubpage() {
+        let sheet = PageSizePreset.a4.size
+        let ink = CGRect(
+            x: 100, y: CGFloat(sheet.height) - 100,
+            width: 300, height: 60)
+        let container = makeContainer(portrait, pageSize: sheet, ink: ink)
+
+        XCTAssertEqual(container.contentExtent.height, CGFloat(sheet.height), accuracy: 1)
+    }
+
     /// Writing near the bottom must not push the bottom further away. This is what stops a page
     /// growing into the endless scroll the split then has to undo.
     func testWritingAtTheBottomDoesNotMakeThePageTaller() {
@@ -477,11 +489,9 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertEqual(container.canvas.zoomScale, 1, accuracy: 0.001)
     }
 
-    // MARK: - The fit follows the direction the page turns
+    // MARK: - One physical page is one fitted sheet
 
-    /// Turning sideways shows a whole page; turning downward fits the width and lets the page run
-    /// off the bottom. A sideways fit that cut the page off would be the worst of both — nothing
-    /// scrolls in that mode, so what is off screen cannot be reached at all.
+    /// A physical page fits wholly in the viewport; the turn direction changes only its gesture.
     func testTurningSidewaysFitsTheWholeSheet() {
         let sheet = PageSizePreset.a4.size
         let container = makeContainer(portrait, pageSize: sheet)
@@ -493,18 +503,15 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(onScreenHeight, portrait.height + 1)
     }
 
-    /// The counterpart: fitted to width, a page taller than the screen is meant to overflow —
-    /// that is the direction you are about to scroll in.
-    func testTurningDownwardFitsTheWidthAndLetsThePageOverflow() {
+    func testTurningDownwardAlsoFitsTheWholeSheet() {
         let sheet = PageSizePreset.a4.size
         let container = makeContainer(portrait, pageSize: sheet)
         container.sheetHeight = CGFloat(sheet.height)
-        container.fitsWholePage = false
+        container.fitsWholePage = true
         rotate(container, to: portrait)
 
-        XCTAssertEqual(
-            container.canvas.zoomScale,
-            portrait.width / CGFloat(sheet.width), accuracy: 0.001)
+        let onScreenHeight = CGFloat(sheet.height) * container.canvas.zoomScale
+        XCTAssertLessThanOrEqual(onScreenHeight, portrait.height + 1)
     }
 
     // MARK: - Ink lands on the paper
