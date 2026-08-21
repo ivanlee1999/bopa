@@ -16,38 +16,34 @@ extension NativeTemplate {
     }
 }
 
-/// Which way you move from one page to the next.
+/// How vertical movement travels through a notebook.
 ///
-/// A page is a sheet, so it has an end — and the gesture that carries you over that end is a
-/// preference, not a fact. Reading down a long document wants the next page below this one;
-/// working through a notebook the way you would a paper one wants it to the side.
-///
-/// What this does **not** decide is whether the end of the paper is a dead end. Running off the
-/// bottom always gets you the next page, and makes one if there is none, whichever way this is
-/// set; the setting picks the gesture, and how the sheet is fitted to the screen.
-enum PageTurn: String, CaseIterable, Identifiable, Sendable {
-    /// Pull past the bottom edge for the next page.
-    case vertical
-    /// Swipe sideways for the next page.
-    case horizontal
+/// Continuous scrolling fills the available width and follows the reader through real sheet
+/// boundaries. Pagination shows a complete sheet at once and advances it on a vertical pull.
+/// Either way, the bottom of the final sheet creates the next physical page.
+enum PageNavigation: String, CaseIterable, Identifiable, Sendable {
+    case continuous
+    case paged
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .vertical: "Up and down"
-        case .horizontal: "Side to side"
+        case .continuous: "Continuous scrolling"
+        case .paged: "One page at a time"
         }
     }
 
     var detail: String {
         switch self {
-        case .vertical:
-            "Drag past the bottom for the next page."
-        case .horizontal:
-            "Swipe sideways for the next page. Pulling past the bottom also works."
+        case .continuous:
+            "Fit each page to the screen width and scroll through real page boundaries."
+        case .paged:
+            "Fit one complete sheet onscreen; pull vertically to move to the next page."
         }
     }
+
+    var isPaged: Bool { self == .paged }
 }
 
 /// What an Apple Pencil gesture (double-tap, or squeeze on Pencil Pro) does.
@@ -114,9 +110,9 @@ struct HandwritingConfig: Equatable, Sendable {
     /// Freezes panning/zooming so a stray drag cannot shift the page mid-sentence.
     var scrollLocked = false
     var pageFit: PageFit = .fitWidth
-    /// Which way a page turn goes. Vertical by default: it is the direction the page
-    /// already scrolls, and the one writing runs in.
-    var pageTurn: PageTurn = .vertical
+    /// The single page-navigation preference. Continuous scrolling is the normal writing view:
+    /// it fills the width and moves through the notebook in the same direction as the writing.
+    var pageNavigation: PageNavigation = .continuous
     var doubleTapAction: PencilAction = .system
     var squeezeAction: PencilAction = .system
     /// Paper for newly created notebooks and pages. Existing pages keep the template
@@ -132,7 +128,7 @@ struct HandwritingConfig: Equatable, Sendable {
         /// Keeps its original name: the setting grew from "zoom applied on open" into the
         /// sticky page fit, and renaming the key would silently reset everyone's choice.
         static let pageFit = "handwriting.zoomOnOpen"
-        static let pageTurn = "handwriting.pageTurn"
+        static let pageNavigation = "handwriting.pageNavigation"
         static let doubleTapAction = "handwriting.pencilDoubleTap"
         static let squeezeAction = "handwriting.pencilSqueeze"
         static let defaultTemplate = "handwriting.defaultTemplate"
@@ -156,9 +152,9 @@ struct HandwritingConfig: Equatable, Sendable {
         if let raw = defaults.string(forKey: Key.pageFit), let value = PageFit(rawValue: raw) {
             config.pageFit = value
         }
-        if let raw = defaults.string(forKey: Key.pageTurn),
-           let value = PageTurn(rawValue: raw) {
-            config.pageTurn = value
+        if let raw = defaults.string(forKey: Key.pageNavigation),
+           let value = PageNavigation(rawValue: raw) {
+            config.pageNavigation = value
         }
         if let raw = defaults.string(forKey: Key.doubleTapAction),
            let value = PencilAction.stored(raw) {
@@ -186,7 +182,7 @@ struct HandwritingConfig: Equatable, Sendable {
         defaults.set(fingerDrawing, forKey: Key.fingerDrawing)
         defaults.set(scrollLocked, forKey: Key.scrollLocked)
         defaults.set(pageFit.rawValue, forKey: Key.pageFit)
-        defaults.set(pageTurn.rawValue, forKey: Key.pageTurn)
+        defaults.set(pageNavigation.rawValue, forKey: Key.pageNavigation)
         defaults.set(doubleTapAction.rawValue, forKey: Key.doubleTapAction)
         defaults.set(squeezeAction.rawValue, forKey: Key.squeezeAction)
         defaults.set(defaultTemplate.name, forKey: Key.defaultTemplate)
@@ -276,16 +272,16 @@ struct HandwritingSettingsSections: View {
         }
 
         Section {
-            Picker("Turn the page", selection: config.pageTurn) {
-                ForEach(PageTurn.allCases) { mode in
+            Picker("Page navigation", selection: config.pageNavigation) {
+                ForEach(PageNavigation.allCases) { mode in
                     Text(mode.title).tag(mode)
                 }
             }
-            .accessibilityIdentifier("settings.pageTurn")
+            .accessibilityIdentifier("settings.pageNavigation")
         } header: {
             Text("Pages")
         } footer: {
-            Text(config.pageTurn.wrappedValue.detail)
+            Text(config.pageNavigation.wrappedValue.detail)
         }
 
         Section {

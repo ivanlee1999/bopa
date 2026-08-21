@@ -77,16 +77,13 @@ final class DrawingUITests: XCTestCase {
         waitForStrokes(2, on: canvas, message: "expected 2 strokes")
     }
 
-    /// The reported Bopa dead end: with sideways turning stored, the first page used to disable
-    /// vertical bounce, so an upward pull could neither reach nor create page two. The app now
-    /// treats that pull as "more paper" independently of the preferred sideways turn gesture.
+    /// Continuous scrolling uses the sheet width first. Pulling past the physical bottom asks
+    /// Bopa to create and enter the next real page.
     @MainActor
-    func testVerticalPullCreatesARealSecondPageWhenSidewaysTurningIsPreferred() throws {
+    func testContinuousScrollCreatesARealSecondPageAtTheBottom() throws {
         let app = XCUIApplication()
-        // UserDefaults' argument domain lets the UI test exercise the persisted horizontal mode
-        // without adding a production-only settings hook.
         app.launchArguments = [
-            "--uitest-reset-tool", "-handwriting.pageTurn", "horizontal",
+            "--uitest-reset-tool", "-handwriting.pageNavigation", "continuous",
             "-handwriting.fingerDrawing", "false",
         ]
         app.launch()
@@ -101,6 +98,8 @@ final class DrawingUITests: XCTestCase {
                 forDuration: 0.05,
                 thenDragTo: canvas.coordinate(
                     withNormalizedOffset: CGVector(dx: 0.50, dy: 0.10)))
+        // This drag travels through the width-fitted first sheet and then past its bottom,
+        // which is the intentional request for page two.
 
         let onSecondPage = NSPredicate(format: "value == 'Page 2 of 2'")
         XCTAssertEqual(

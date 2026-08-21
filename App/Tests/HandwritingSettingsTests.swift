@@ -24,6 +24,7 @@ final class HandwritingSettingsTests: XCTestCase {
         XCTAssertTrue(config.fingerDrawing)
         XCTAssertFalse(config.scrollLocked)
         XCTAssertEqual(config.pageFit, .fitWidth)
+        XCTAssertEqual(config.pageNavigation, .continuous)
         XCTAssertEqual(config.doubleTapAction, .system)
         XCTAssertEqual(config.squeezeAction, .system)
         XCTAssertEqual(config.defaultTemplate, .blank)
@@ -34,6 +35,7 @@ final class HandwritingSettingsTests: XCTestCase {
         config.fingerDrawing = false
         config.scrollLocked = true
         config.pageFit = .actualSize
+        config.pageNavigation = .paged
         config.doubleTapAction = .eraser
         config.squeezeAction = .undo
         config.defaultTemplate = .dotted

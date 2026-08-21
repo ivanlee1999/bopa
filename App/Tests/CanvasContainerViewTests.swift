@@ -489,21 +489,27 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertEqual(container.canvas.zoomScale, 1, accuracy: 0.001)
     }
 
-    // MARK: - One physical page is one fitted sheet
+    // MARK: - Navigation-mode fitting
 
-    /// A physical page fits wholly in the viewport; the turn direction changes only its gesture.
-    func testTurningSidewaysFitsTheWholeSheet() {
-        let sheet = PageSizePreset.a4.size
+    func testContinuousScrollingFitsThePageWidth() {
+        // A standard A4 sheet happens to fit both width and height on the 13-inch iPad test
+        // viewport, so use a tall sheet to prove that continuous mode selects the width rather
+        // than silently shrinking the page to fit vertically.
+        let sheet = PageSize(width: 1400, height: 3000)
         let container = makeContainer(portrait, pageSize: sheet)
         container.sheetHeight = CGFloat(sheet.height)
-        container.fitsWholePage = true
+        container.fitsWholePage = false
         rotate(container, to: portrait)
 
         let onScreenHeight = CGFloat(sheet.height) * container.canvas.zoomScale
-        XCTAssertLessThanOrEqual(onScreenHeight, portrait.height + 1)
+        XCTAssertGreaterThan(onScreenHeight, portrait.height)
+        XCTAssertEqual(
+            container.canvas.zoomScale,
+            CanvasContainerView.fitZoom(viewWidth: portrait.width, pageWidth: CGFloat(sheet.width)),
+            accuracy: 0.001)
     }
 
-    func testTurningDownwardAlsoFitsTheWholeSheet() {
+    func testPaginationFitsOneWholeSheet() {
         let sheet = PageSizePreset.a4.size
         let container = makeContainer(portrait, pageSize: sheet)
         container.sheetHeight = CGFloat(sheet.height)

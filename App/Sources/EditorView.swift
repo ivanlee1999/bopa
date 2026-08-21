@@ -227,7 +227,7 @@ struct EditorView: View {
                 handwriting.config.pageFit = .fitWidth
                 viewport.fitToWidth()
             } label: {
-                Label("Fit whole page", systemImage: "arrow.up.left.and.arrow.down.right")
+                Label("Fit page width", systemImage: "arrow.left.and.right")
             }
             .accessibilityIdentifier("editor.fitWidth")
         } label: {
@@ -466,7 +466,7 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.accessibilityValue = "strokes:0"
         container.pageWidth = CGFloat(pageSize.width)
         container.sheetHeight = declaredSheet.map { CGFloat($0.height) } ?? 0
-        container.fitsWholePage = true
+        container.fitsWholePage = config.pageNavigation.isPaged
         container.setContentExtent(
             pageSize: pageSize, ink: drawing.bounds,
             minimumHeight: Self.minimumHeight(for: pageSize))
@@ -508,7 +508,7 @@ struct EditorCanvasView: UIViewRepresentable {
         // canvas was created, and on a page switch it can differ from the page just closed.
         container.setPageWidth(CGFloat(pageSize.width))
         container.sheetHeight = declaredSheet.map { CGFloat($0.height) } ?? 0
-        container.fitsWholePage = true
+        container.fitsWholePage = config.pageNavigation.isPaged
         // Background and images may arrive/change without a page switch; both setters are
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)
@@ -565,23 +565,23 @@ struct EditorCanvasView: UIViewRepresentable {
         func apply(_ newConfig: HandwritingConfig, to container: CanvasContainerView) {
             guard newConfig != config || !didApplyConfig else { return }
             let previousFit = didApplyConfig ? config.pageFit : nil
+            let previousNavigation = didApplyConfig ? config.pageNavigation : nil
             config = newConfig
             didApplyConfig = true
             let canvas = container.canvas
 
             canvas.drawingPolicy = config.fingerDrawing ? .anyInput : .pencilOnly
             canvas.isScrollEnabled = !config.scrollLocked
-            // A vertical pull past the bottom always reaches or creates the next real page,
-            // including when sideways page turns are preferred. Bounce is the overshoot signal;
-            // disabling it made the vertical fallback below mathematically unreachable.
+            // Bounce carries the intentional pull past a real sheet's edge. It is the signal for
+            // entering the next page, or making one when this is the final page.
             canvas.alwaysBounceVertical = !config.scrollLocked
-            canvas.alwaysBounceHorizontal = config.pageTurn == .horizontal && !config.scrollLocked
+            canvas.alwaysBounceHorizontal = false
             container.keepsFitToWidth = config.pageFit == .fitWidth
-            // The preference chooses the turn gesture, not how many screenfuls one sheet occupies.
-            container.fitsWholePage = true
-            // Switching the preference on acts on the page you are looking at, rather than
-            // waiting for the next one to be opened.
-            if let previousFit, previousFit != config.pageFit, config.pageFit == .fitWidth {
+            container.fitsWholePage = config.pageNavigation.isPaged
+            // A navigation-mode change must re-fit the page currently on screen. Otherwise a
+            // notebook would keep the previous mode's geometry until it was closed and reopened.
+            if config.pageFit == .fitWidth,
+               (previousFit != config.pageFit || previousNavigation != config.pageNavigation) {
                 container.fitToWidth()
             }
 
@@ -720,15 +720,13 @@ struct EditorCanvasView: UIViewRepresentable {
                 scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
         }
 
-        /// Turning the page by dragging past the end of this one.
+        /// Moving to the adjacent physical page by dragging past this one's vertical edge.
         ///
         /// Read on release rather than while dragging: a page turn mid-gesture would fire on the
         /// way past a boundary the reader was only scrolling through, and on an e-ink panel every
         /// one of those costs a full refresh. Distance decides it, not velocity — a flick and a
         /// slow deliberate pull should both turn exactly one page.
-        func scrollViewDidEndDragging(
-            _ scrollView: UIScrollView, willDecelerate decelerate: Bool
-        ) {
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate _: Bool) {
             let inset = scrollView.adjustedContentInset
             let vertical = Self.overshoot(
                 offset: scrollView.contentOffset.y,
@@ -736,35 +734,8 @@ struct EditorCanvasView: UIViewRepresentable {
                 boundsLength: scrollView.bounds.height,
                 leadingInset: inset.top,
                 trailingInset: inset.bottom)
-            let horizontal = Self.overshoot(
-                offset: scrollView.contentOffset.x,
-                contentLength: scrollView.contentSize.width,
-                boundsLength: scrollView.bounds.width,
-                leadingInset: inset.left,
-                trailingInset: inset.right)
-            // Both axes, not only the configured one. Reading just the configured axis made
-            // "Side to side" mean the bottom of the paper was a wall: pulling past it did
-            // nothing at all, and the only way on — even to make the very first second page —
-            // was a sideways swipe. Which way a *swipe* turns pages is a preference; whether
-            // running off the bottom of the sheet gets you the next one is not.
-            //
-            // The configured axis wins when both moved, so the setting still decides the
-            // gesture the reader actually uses; the other axis is the way out of a dead end.
-            let overshoot = Self.pageTurnOvershoot(
-                vertical: vertical, horizontal: horizontal, pageTurn: parent.config.pageTurn)
-            guard abs(overshoot) >= Self.pageTurnThreshold else { return }
-            parent.turnPage(overshoot > 0 ? 1 : -1)
-        }
-
-        /// Which axis's overshoot decides the turn: the configured one whenever it carries one,
-        /// the other otherwise.
-        static func pageTurnOvershoot(
-            vertical: CGFloat, horizontal: CGFloat, pageTurn: PageTurn
-        ) -> CGFloat {
-            switch pageTurn {
-            case .vertical: return vertical != 0 ? vertical : horizontal
-            case .horizontal: return horizontal != 0 ? horizontal : vertical
-            }
+            guard abs(vertical) >= Self.pageTurnThreshold else { return }
+            parent.turnPage(vertical > 0 ? 1 : -1)
         }
 
         /// How far a released drag pulled past where the axis can actually rest, signed —

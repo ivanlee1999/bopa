@@ -149,10 +149,9 @@ final class CanvasContainerView: UIView {
         return viewWidth / pageWidth
     }
 
-    /// A declared page is one whole sheet whichever gesture turns it. Keeping this as state makes
-    /// legacy undeclared canvases and focused layout tests explicit, but the editor always enables
-    /// it for physical pages.
-    var fitsWholePage = true
+    /// Pagination shows one complete sheet; continuous scrolling uses the width fit so the sheet
+    /// fills the writing surface and its lower part scrolls naturally into the next real page.
+    var fitsWholePage = false
 
     private var fitWidthZoom: CGFloat {
         let widthFit = Self.fitZoom(viewWidth: bounds.width, pageWidth: pageWidth)
