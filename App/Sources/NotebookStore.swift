@@ -471,14 +471,16 @@ final class NotebookStore: ObservableObject {
             template = fallbackTemplate
         }
         let fields = TemplateApplication.pageFields(for: .native(template))
-        // The sheet follows the notebook the same way the paper does. A notebook that declares
-        // none keeps declaring none: page sizes are not retrofitted onto old notebooks, so a
-        // notebook does not end up half-A4 and half-legacy.
-        let pageSize = manifest.declaredDefaultPageSize
+        // The sheet follows the notebook the same way the paper does — and every new page
+        // declares one. In a notebook without defaults the declared size is the same canonical
+        // legacy sheet its old pages already resolve to, so the notebook stays uniform and
+        // stops minting undeclared pages. The Android app applies the same rule, so a page
+        // created on either device is the same page on both.
+        let pageSize = manifest.declaredDefaultPageSize ?? .legacyUndeclared
         let page = PageFile(
             id: UUID().uuidString.lowercased(), notebookId: notebookId,
             background: fields.background, backgroundType: fields.backgroundType,
-            pageWidth: pageSize?.width, pageHeight: pageSize?.height,
+            pageWidth: pageSize.width, pageHeight: pageSize.height,
             createdAt: now, updatedAt: now)
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)

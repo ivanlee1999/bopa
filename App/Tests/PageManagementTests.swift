@@ -54,6 +54,30 @@ final class PageManagementTests: XCTestCase {
         XCTAssertEqual(pageIds.last, page.id)
     }
 
+    func testAnInsertedPageDeclaresTheNotebookDefaultSheet() throws {
+        let page = try store.insertPage(into: notebookId, at: nil)
+
+        XCTAssertEqual(page.pageWidth, PageSizePreset.default.size.width)
+        XCTAssertEqual(page.pageHeight, PageSizePreset.default.size.height)
+    }
+
+    /// A notebook from before page sizes existed declares no default, but its new pages still
+    /// declare a sheet — the canonical legacy one its old pages already resolve to. This is
+    /// what stops old notebooks minting fresh undeclared pages forever; the BOOX app applies
+    /// the same rule, so the page is the same page on both devices.
+    func testAPageInsertedIntoALegacyNotebookDeclaresTheCanonicalLegacySheet() throws {
+        let url = rootURL.appendingPathComponent("notebooks/\(notebookId)/manifest.json")
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        json["defaultPageWidth"] = nil
+        json["defaultPageHeight"] = nil
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+
+        let page = try store.insertPage(into: notebookId, at: nil)
+
+        XCTAssertEqual(page.pageWidth, PageSize.legacyUndeclared.width)
+        XCTAssertEqual(page.pageHeight, PageSize.legacyUndeclared.height)
+    }
+
     // MARK: Duplicating
 
     func testDuplicatingCopiesTheContentUnderFreshIDs() throws {

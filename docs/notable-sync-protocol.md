@@ -119,8 +119,12 @@ This table is normative: it exists in both repos (`NotableKit/PageSize.swift`, K
 between the two would put the apps back to laying out different pages.
 
 **Absent, null or non-positive means undeclared** — a notebook or page written before page sizes
-existed. Nothing retrofits a size onto one: each app falls back to what it always used (bopa 1404
-× 1872, Notable the device's own screen width), so old notebooks keep rendering as they did.
+existed. Nothing retrofits a size onto one, and both apps resolve it to the **canonical legacy
+sheet, 1404 × 1872** (`PageSize.legacyUndeclared` / `PageSize.LEGACY_UNDECLARED`) — the constant
+`PageSplit` divides undeclared pages by. (Notable used to fall back to the device's own screen
+width instead, which made an undeclared page a different page on every device; that fallback is
+gone.) New pages always declare a sheet — the notebook default, else this same constant — so
+undeclared pages are no longer created.
 
 Rules both implementations follow:
 
@@ -130,8 +134,9 @@ Rules both implementations follow:
 - A declaration is never lost to a peer that has none: on merge, `winner.pageWidth ?? loser
   .pageWidth`. Otherwise one sync from a build that has not learned the field would silently
   reflow every page it touched.
-- Height is the *sheet* height, not a limit on writing. Both apps keep scrolling past the bottom
-  of the sheet; the height is what pagination and export divide by.
+- Height is where the page ends: export divides by it, and writing past it belongs to the next
+  page (§6.6 divides legacy pages whose ink already ran past it). The only scroll past the
+  bottom of a sheet is the reach that keeps such not-yet-divided legacy ink accessible.
 - **The scrollable area must cover the ink even when the ink is outside the sheet.** Ink lands
   past the right edge whenever it was written on a device wider than the sheet (including every
   undeclared page). An area that stops at the sheet's edge does not merely park that ink

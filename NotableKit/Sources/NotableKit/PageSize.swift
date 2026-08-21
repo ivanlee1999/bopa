@@ -44,12 +44,15 @@ public struct PageSize: Equatable, Hashable, Sendable, Codable {
         self.height = height
     }
 
-    /// What bopa lays out for a page that declares no size: the 1404-wide page it hardcoded,
-    /// with the 1872 sheet height its 3744-unit initial scroll extent was two of.
+    /// The sheet a page that declares no size resolves to — on both apps: the 1404-wide page
+    /// bopa hardcoded, with the 1872 sheet height its 3744-unit initial scroll extent was two
+    /// of, which is also the BOOX screen the pre-page-size ink was written against.
     ///
-    /// Notable's fallback for the same page is its own screen width instead, which is exactly
-    /// why the two apps disagree about notebooks predating this field and agree about the rest.
-    /// Nothing retrofits it — an existing notebook keeps the geometry it was written with.
+    /// Notable used to fall back to its own screen instead, which made the two apps disagree
+    /// about notebooks predating this field; both lay an undeclared page out on this one
+    /// constant now, and `PageSplit` has always divided by it. Nothing retrofits a declaration
+    /// onto old pages — but new pages always declare one (this constant, absent a notebook
+    /// default), so undeclared pages are no longer minted.
     public static let legacyUndeclared = PageSize(width: 1404, height: 1872)
 
     public var widthInPoints: Double { PageUnits.points(fromUnits: Double(width)) }
