@@ -52,6 +52,16 @@ final class HandwritingSettingsTests: XCTestCase {
         XCTAssertFalse(HandwritingConfig.load(from: defaults).fingerDrawing)
     }
 
+    func testStringBackedBooleansFromArgumentDomainAreAccepted() {
+        defaults.set("false", forKey: HandwritingConfig.Key.fingerDrawing)
+        defaults.set("true", forKey: HandwritingConfig.Key.scrollLocked)
+
+        let config = HandwritingConfig.load(from: defaults)
+
+        XCTAssertFalse(config.fingerDrawing)
+        XCTAssertTrue(config.scrollLocked)
+    }
+
     func testUnknownStoredValuesFallBackToDefaults() {
         defaults.set("sparkles", forKey: HandwritingConfig.Key.defaultTemplate)
         defaults.set("teleport", forKey: HandwritingConfig.Key.doubleTapAction)

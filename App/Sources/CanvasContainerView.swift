@@ -46,13 +46,28 @@ final class CanvasContainerView: UIView {
     /// and so what the page-break hairlines are drawn at. Zero draws none: a page with no agreed
     /// sheet has no break to promise.
     var sheetHeight: CGFloat = 0 {
-        didSet { paperView.sheetHeight = sheetHeight }
+        didSet {
+            paperView.sheetHeight = sheetHeight
+            // A declared sheet is already a page. Export-break marks belong to old continuous
+            // canvases; drawing one at the bottom of a real page makes it look like that page has
+            // another hidden page inside it.
+            paperView.showsSheetBoundaries = false
+            guard sheetHeight != oldValue, laidOutWidth > 0 else { return }
+            let fit = fitWidthZoom
+            allowZoom(fit)
+            if keepsFitToWidth, isFitToWidth {
+                canvas.zoomScale = fit
+                isFitToWidth = true
+            }
+            updateContentGeometry()
+        }
     }
     /// Slack kept to the right of ink that overflows the sheet, so the last stroke is not flush
     /// against the edge of the scrollable area. Small on purpose: unlike the downward slack,
     /// which is room to keep writing, this only has to make the overflow legible.
     private static let horizontalInkSlack: CGFloat = 100
-    /// Room below the lowest thing on the page — space to keep writing, not just to see the edge.
+    /// Room after content that already lies below the sheet, so old overflow stays reachable.
+    /// In-bounds ink gets no slack: the sheet itself already covers it.
     private static let verticalInkSlack: CGFloat = 1000
     private(set) var backgroundImage: UIImage?
     private(set) var pageImages: [PageImage] = []
@@ -134,14 +149,10 @@ final class CanvasContainerView: UIView {
         return viewWidth / pageWidth
     }
 
-    /// Fit the whole sheet on screen rather than just its width.
-    ///
-    /// What "the page fits" means depends on which way you turn it, and the two established
-    /// answers are the ones reMarkable, the Kindle Scribe and GoodNotes all land on: turning
-    /// sideways shows one whole page at a time, because a page you cannot see all of is not a page
-    /// you can turn past; scrolling down fits the width and lets the page run off the bottom,
-    /// because that is the direction you are about to travel in.
-    var fitsWholePage = false
+    /// A declared page is one whole sheet whichever gesture turns it. Keeping this as state makes
+    /// legacy undeclared canvases and focused layout tests explicit, but the editor always enables
+    /// it for physical pages.
+    var fitsWholePage = true
 
     private var fitWidthZoom: CGFloat {
         let widthFit = Self.fitZoom(viewWidth: bounds.width, pageWidth: pageWidth)
@@ -335,8 +346,15 @@ final class CanvasContainerView: UIView {
     ) -> CGSize {
         var size = floor
         for rect in rects where Self.isReachable(rect) {
-            size.width = max(size.width, rect.maxX + Self.horizontalInkSlack)
-            size.height = max(size.height, rect.maxY + Self.verticalInkSlack)
+            // Slack starts after overflow; it is not added to ordinary ink already covered by the
+            // sheet. The old unconditional vertical +1000 is what reopened a normal page as a
+            // page-and-a-half whenever handwriting reached near its bottom.
+            if rect.maxX > size.width {
+                size.width = rect.maxX + Self.horizontalInkSlack
+            }
+            if rect.maxY > size.height {
+                size.height = rect.maxY + Self.verticalInkSlack
+            }
         }
         return size
     }
@@ -415,11 +433,14 @@ final class CanvasContainerView: UIView {
         centerPageHorizontally()
         let scale = canvas.zoomScale
         let offset = canvas.contentOffset
+        let paperHeight = sheetHeight > 0
+            ? sheetHeight * scale
+            : max(canvas.contentSize.height, bounds.height * 2)
         pageSheet.frame = CGRect(
             x: -offset.x,
             y: -offset.y,
             width: pageWidth * scale,
-            height: max(canvas.contentSize.height, bounds.height * 2))
+            height: paperHeight)
         paperView.setGeometry(zoomScale: scale, contentOffset: offset)
         if let image = backgroundImage {
             backgroundImageView.isHidden = false

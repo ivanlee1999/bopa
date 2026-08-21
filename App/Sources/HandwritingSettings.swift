@@ -26,9 +26,9 @@ extension NativeTemplate {
 /// bottom always gets you the next page, and makes one if there is none, whichever way this is
 /// set; the setting picks the gesture, and how the sheet is fitted to the screen.
 enum PageTurn: String, CaseIterable, Identifiable, Sendable {
-    /// Fit the width and let the sheet run off the bottom; drag past it for the next page.
+    /// Pull past the bottom edge for the next page.
     case vertical
-    /// Fit the whole sheet on screen and swipe sideways — one page at a time.
+    /// Swipe sideways for the next page.
     case horizontal
 
     var id: String { rawValue }
@@ -43,9 +43,9 @@ enum PageTurn: String, CaseIterable, Identifiable, Sendable {
     var detail: String {
         switch self {
         case .vertical:
-            "Fits the page's width. Drag past the bottom for the next page."
+            "Drag past the bottom for the next page."
         case .horizontal:
-            "Fits the whole page on screen. Swipe sideways for the next page."
+            "Swipe sideways for the next page. Pulling past the bottom also works."
         }
     }
 }
@@ -145,11 +145,13 @@ struct HandwritingConfig: Equatable, Sendable {
     static func load(from defaults: UserDefaults) -> HandwritingConfig {
         var config = HandwritingConfig()
         // `object(forKey:)` first: a missing key must keep the default, not read back false.
-        if let value = defaults.object(forKey: Key.fingerDrawing) as? Bool {
-            config.fingerDrawing = value
+        if defaults.object(forKey: Key.fingerDrawing) != nil {
+            // Also understands the string-backed argument domain used by managed defaults and
+            // UI-test launches; an `as? Bool` cast silently ignored those values.
+            config.fingerDrawing = defaults.bool(forKey: Key.fingerDrawing)
         }
-        if let value = defaults.object(forKey: Key.scrollLocked) as? Bool {
-            config.scrollLocked = value
+        if defaults.object(forKey: Key.scrollLocked) != nil {
+            config.scrollLocked = defaults.bool(forKey: Key.scrollLocked)
         }
         if let raw = defaults.string(forKey: Key.pageFit), let value = PageFit(rawValue: raw) {
             config.pageFit = value

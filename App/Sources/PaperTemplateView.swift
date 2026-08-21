@@ -23,7 +23,7 @@ final class PaperTemplateView: UIView {
     }
 
     /// Whether to mark where an export would break the page.
-    var showsSheetBoundaries = true {
+    var showsSheetBoundaries = false {
         didSet { redrawIfChanged(oldValue != showsSheetBoundaries) }
     }
 
@@ -70,7 +70,11 @@ final class PaperTemplateView: UIView {
         else { return }
         let scale = max(zoomScale, 0.01)
         let minY = max(contentOffset.y / scale, 0)
-        let maxY = (contentOffset.y + bounds.height) / scale
+        let viewportMaxY = (contentOffset.y + bounds.height) / scale
+        // A declared page's paper and template stop at its physical edge. Letting the white
+        // template continue into the scroll view's overshoot made that rubber-band area look like
+        // another page even when the canvas extent itself was correct.
+        let maxY = sheetHeight > 0 ? min(viewportMaxY, sheetHeight) : viewportMaxY
         guard maxY > minY else { return }
 
         context.saveGState()
