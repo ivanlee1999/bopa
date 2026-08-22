@@ -255,9 +255,11 @@ struct EditorView: View {
                     contentRevision: model.contentRevision,
                     background: model.pageBackground,
                     images: model.pageImages,
-                    pageScroll: model.page?.scroll ?? 0,
+                    pageScroll: model.openScroll,
                     template: pageTemplate,
                     pageSize: model.page?.pageSize ?? .legacyUndeclared,
+                    nextPage: model.nextPagePreview,
+                    hasNextPage: model.nextPageId != nil,
                     drawing: $model.drawing,
                     config: handwriting.config,
                     toolSelection: toolSelection,
@@ -265,6 +267,9 @@ struct EditorView: View {
                     liveState: model.liveState,
                     viewport: viewport,
                     turnPage: turnPage,
+                    crossSeam: crossSeam,
+                    appendPage: appendPageWithoutLeaving,
+                    fileInkBelowTheSeam: model.fileInkBelowTheSeam,
                     onChanged: model.scheduleSave,
                     onIdle: model.foldInRemoteInk)
 
@@ -297,6 +302,48 @@ struct EditorView: View {
         guard let manifest, manifest.pageIds.indices.contains(index) else { return }
         model.saveNow()
         model.open(pageId: manifest.pageIds[index])
+    }
+
+    /// Crossing the boundary between two pages by scrolling, in continuous mode.
+    ///
+    /// Not a page turn: nothing on screen moves. Forward, the scroll has already carried the
+    /// view past this page's end and filled the screen with the next page's preview, so the
+    /// real page opens at the position that draws the identical picture. Backward, the previous
+    /// page opens at *its* end, which is the position that draws this page under its seam.
+    ///
+    /// Forward at the end of the notebook makes the next page first — the same rule as running
+    /// off the end anywhere else, which is what keeps "scroll to keep writing" true on the last
+    /// page too.
+    /// - Returns: whether a page was actually entered. The caller latches on this, so a
+    ///   crossing that could not happen — pulling back at the very first page — does not leave
+    ///   the latch set with no page load coming to clear it, which silently killed every
+    ///   subsequent crossing for the rest of the session.
+    private func crossSeam(_ direction: Int, _ carried: CGFloat) -> Bool {
+        if direction > 0 {
+            return model.enterNextPageAcrossSeam(carrying: carried)
+        }
+        return model.enterPreviousPageAtItsEnd()
+    }
+
+    /// Grows the notebook by a page without going to it.
+    ///
+    /// What scrolling off the end of the last page does under continuous scrolling. The page is
+    /// *appended*, not opened: the seam and the new blank sheet appear below the one being
+    /// written on and the same scroll carries straight onto them, which is what "one long
+    /// surface" has to mean at the end of the notebook too. Entering it is then the ordinary
+    /// seam crossing, made by scrolling on. (Xournal++ appends on scroll-to-end the same way,
+    /// deliberately without jumping; the BOOX app does this as of 0.44.0.)
+    ///
+    /// Failure is reported through the same alert a failed save uses — a disk that is full
+    /// produces no page, and silence would read as the scroll simply not working.
+    private func appendPageWithoutLeaving() {
+        guard model.nextPageId == nil else { return }
+        do {
+            _ = try store.addPage(
+                to: notebookId, fallbackTemplate: handwriting.config.defaultTemplate)
+        } catch {
+            actionError = LibraryActionError(action: "Adding a page", underlying: error)
+        }
     }
 
     /// Adding a page is the one editor action that used to be able to fail in silence: a disk that
@@ -411,8 +458,9 @@ struct EditorCanvasView: UIViewRepresentable {
     var contentRevision: Int = 0
     var background: UIImage?
     var images: [PageImage] = []
-    /// Persisted unzoomed page-space y offset, applied on page switches.
-    var pageScroll: Int = 0
+    /// The unzoomed page-space y offset the page opens at — its persisted position, or the
+    /// one the scroll carried across a seam.
+    var pageScroll: CGFloat = 0
     /// Native paper drawn behind the ink (`.blank` for PDF-backed pages).
     var template: NativeTemplate = .blank
     /// The sheet this page is laid out on, in page units — the page's own declaration, or
@@ -421,6 +469,11 @@ struct EditorCanvasView: UIViewRepresentable {
     /// undeclared pages by (and the Android app now lays them out at), so an undeclared page
     /// is one ordinary bounded page, not an endless canvas.
     var pageSize: PageSize = .legacyUndeclared
+    /// The top of the page after this one, drawn below the seam under continuous scrolling.
+    var nextPage: NextPagePreview?
+    /// Whether a page exists below this one at all — known synchronously, unlike `nextPage`,
+    /// which is rendered off the main actor. This is what sizes the scroll.
+    var hasNextPage = false
     @Binding var drawing: PKDrawing
     var config = HandwritingConfig()
     /// The docked rail's choice of tool and ink. Authoritative: a tool picked anywhere
@@ -432,6 +485,13 @@ struct EditorCanvasView: UIViewRepresentable {
     /// Asked for the page before (-1) or after (+1) when a drag carries past the edge of this one.
     /// The editor decides whether there is one, and whether to make it.
     var turnPage: (Int) -> Void = { _ in }
+    /// Scrolling has carried the view across the boundary between two pages: direction, and the
+    /// scroll to carry onto the page being entered so nothing on screen moves.
+    var crossSeam: (Int, CGFloat) -> Bool = { _, _ in false }
+    /// Scrolling has run off the end of the last page: grow the notebook, without leaving.
+    var appendPage: () -> Void = {}
+    /// Hands ink drawn below the seam to the page under it, returning what is left on this one.
+    var fileInkBelowTheSeam: (PKDrawing, CGFloat) -> PKDrawing? = { _, _ in nil }
     var onChanged: () -> Void
     /// The pencil lifted. The editor uses it to retry work it would not do mid-stroke.
     var onIdle: () -> Void = {}
@@ -463,6 +523,8 @@ struct EditorCanvasView: UIViewRepresentable {
         container.pageWidth = CGFloat(pageSize.width)
         container.sheetHeight = CGFloat(pageSize.height)
         container.fitsWholePage = config.pageNavigation.isPaged
+        container.hasNextPage = !config.pageNavigation.isPaged && hasNextPage
+        container.nextPage = config.pageNavigation.isPaged ? nil : nextPage
         container.setContentExtent(
             pageSize: pageSize, ink: drawing.bounds,
             minimumHeight: Self.minimumHeight(for: pageSize))
@@ -495,6 +557,8 @@ struct EditorCanvasView: UIViewRepresentable {
     }
 
     func updateUIView(_ container: CanvasContainerView, context: Context) {
+        // Before anything reads it: the coordinator's copy is what every delegate callback sees.
+        context.coordinator.parent = self
         let canvas = container.canvas
         context.coordinator.apply(config, to: container)
         context.coordinator.toolSelection = toolSelection
@@ -505,6 +569,10 @@ struct EditorCanvasView: UIViewRepresentable {
         container.setPageWidth(CGFloat(pageSize.width))
         container.sheetHeight = CGFloat(pageSize.height)
         container.fitsWholePage = config.pageNavigation.isPaged
+        // What the seam shows, and whether there is anything under it. Set before the extent
+        // below, which is sized from `hasNextPage`.
+        container.hasNextPage = !config.pageNavigation.isPaged && hasNextPage
+        container.nextPage = config.pageNavigation.isPaged ? nil : nextPage
         // Background and images may arrive/change without a page switch; both setters are
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)
@@ -531,14 +599,23 @@ struct EditorCanvasView: UIViewRepresentable {
         // A page switch must not be undoable into the previous page's drawing.
         container.pageUndoManager.removeAllActions()
         undoController.refresh()
-        // Restore the persisted scroll position for this page.
-        container.setInitialScroll(pageY: CGFloat(pageScroll))
+        // Restore the scroll position this page opens at.
+        container.setInitialScroll(pageY: pageScroll)
+        // The page asked for by a seam crossing has arrived; further scrolling may ask again.
+        context.coordinator.noteSeamCrossingLanded()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate {
-        let parent: EditorCanvasView
+        /// The current value of the representable struct.
+        ///
+        /// A `var`, reassigned on every `updateUIView`. SwiftUI creates the coordinator once and
+        /// never refreshes what it captured, so a `let` here is frozen at the value the *first*
+        /// body evaluation produced — which happens before `.onAppear` opens a page at all. Any
+        /// delegate callback reading `parent.pageSize` through that copy was measuring the scroll
+        /// against `PageSize.legacyUndeclared` on every page of every notebook.
+        var parent: EditorCanvasView
         var programmaticUpdate = false
         var loadedPageId: String?
         /// Last `contentRevision` pushed onto the canvas. `-1` means "nothing loaded yet".
@@ -714,15 +791,100 @@ struct EditorCanvasView: UIViewRepresentable {
             container?.updateContentGeometry()
             parent.liveState.pageY =
                 scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
+            commitSeamCrossingIfReached(scrollView)
         }
 
-        /// Moving to the adjacent physical page by dragging past this one's vertical edge.
+        /// Whether a seam crossing has been asked for and the page has not arrived yet. Between
+        /// the two the scroll is still sitting past the old page's end, so every further tick
+        /// would ask again and skip a page. Cleared when the canvas loads the new page.
+        private var seamCrossingInFlight = false
+
+        func noteSeamCrossingLanded() { seamCrossingInFlight = false }
+
+        /// One page appended per drag, at most.
+        ///
+        /// The append is asked for from a scroll callback that runs at display rate, and it is
+        /// answered by a disk write. It happens that the store's change notification is posted
+        /// synchronously, so `nextPageId` is already set by the time the next callback runs and
+        /// the guard there holds — but "a notification is synchronous" is a thin thread to hang
+        /// the difference between one new page and thirty on. The Android app latches the same
+        /// way (`edgeTurnTaken`), released when the gesture ends.
+        private var appendedDuringThisDrag = false
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            appendedDuringThisDrag = false
+        }
+
+        /// The switch to the next page, made while scrolling rather than on release.
+        ///
+        /// Continuous scrolling has no page-turn gesture: the reader simply scrolls, the next
+        /// page comes up under the seam, and at the moment the seam reaches the top of the
+        /// screen the pages are showing the identical picture — so the swap is invisible and is
+        /// made there, not at a threshold or a release. That is what "one long surface" has to
+        /// mean; anything read on release is a page turn wearing a scroll's clothes.
+        private func commitSeamCrossingIfReached(_ scrollView: UIScrollView) {
+            guard let container, !seamCrossingInFlight, !parent.config.pageNavigation.isPaged
+            else { return }
+            let scale = max(scrollView.zoomScale, 0.01)
+            let offsetY = scrollView.contentOffset.y / scale
+            // From the container, which `updateUIView` sets from the open page every render.
+            let sheetHeight = container.sheetHeight
+
+            if container.seamActive,
+               SeamGeometry.shouldEnterNextPage(offsetY: offsetY, sheetHeight: sheetHeight) {
+                seamCrossingInFlight = parent.crossSeam(
+                    1, SeamGeometry.carriedScroll(offsetY: offsetY, sheetHeight: sheetHeight))
+                return
+            }
+            // The end of the notebook: there is no seam because there is no page below yet.
+            // Pulling past the end asks for one, and gets it appended in place — the seam then
+            // opens under the same scroll, which crosses it on its own if the finger keeps
+            // going. Guarded by the same threshold a page turn used, so an ordinary scroll that
+            // merely reaches the bottom does not silently grow the notebook.
+            if !container.seamActive, scrollView.isDragging {
+                let past = Self.overshoot(
+                    offset: scrollView.contentOffset.y,
+                    contentLength: scrollView.contentSize.height,
+                    boundsLength: scrollView.bounds.height,
+                    leadingInset: scrollView.adjustedContentInset.top,
+                    trailingInset: scrollView.adjustedContentInset.bottom)
+                if past >= Self.pageTurnThreshold, !appendedDuringThisDrag {
+                    appendedDuringThisDrag = true
+                    parent.appendPage()
+                    return
+                }
+                // Deliberately falls through when the drag is *not* past the bottom. Returning
+                // unconditionally here made the backward check below unreachable on the last
+                // page of every notebook — the page with no seam, and the one a reader is most
+                // often on — so scrolling back was impossible from exactly there.
+            }
+            // Backwards, and only while the finger is down: released momentum carries the
+            // scroll to rest at the top of every page, and entering the previous page on each
+            // of those would walk the notebook backwards on its own.
+            if scrollView.isDragging,
+               SeamGeometry.shouldEnterPreviousPage(
+                offsetY: scrollView.contentOffset.y,
+                leadingInset: scrollView.adjustedContentInset.top,
+                threshold: Self.pageTurnThreshold) {
+                seamCrossingInFlight = parent.crossSeam(-1, 0)
+            }
+        }
+
+        /// Moving to the adjacent physical page by dragging past this one's vertical edge —
+        /// **Pagination's** navigation, and only its own.
         ///
         /// Read on release rather than while dragging: a page turn mid-gesture would fire on the
         /// way past a boundary the reader was only scrolling through, and on an e-ink panel every
         /// one of those costs a full refresh. Distance decides it, not velocity — a flick and a
         /// slow deliberate pull should both turn exactly one page.
+        ///
+        /// Under continuous scrolling there is no such gesture: scrolling *is* the navigation,
+        /// and the crossing is committed at the seam while the finger moves. Leaving this live
+        /// in both modes gave continuous scrolling two ways to change page — the seam, and a
+        /// pull-release that jumped a whole page — which is the exact duplication the Android
+        /// side just removed.
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate _: Bool) {
+            guard parent.config.pageNavigation.isPaged else { return }
             let inset = scrollView.adjustedContentInset
             let vertical = Self.overshoot(
                 offset: scrollView.contentOffset.y,
@@ -775,7 +937,27 @@ struct EditorCanvasView: UIViewRepresentable {
 
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             parent.liveState.isDrawing = false
+            // At the lift, so a stroke is moved whole and only once it is finished.
+            fileAnyInkBelowTheSeam(canvasView)
             parent.onIdle()
+        }
+
+        /// Moves ink drawn in the band below the seam onto the page it was drawn on.
+        ///
+        /// The canvas is the current page's, and it is the live surface over the next page's
+        /// preview too — so without this, writing below the seam stored ink under the current
+        /// page's own sheet, where nothing that thinks in pages can reach it.
+        private func fileAnyInkBelowTheSeam(_ canvasView: PKCanvasView) {
+            guard let container, container.seamActive else { return }
+            guard let remaining = parent.fileInkBelowTheSeam(
+                canvasView.drawing, container.sheetHeight)
+            else { return }
+            programmaticUpdate = true
+            canvasView.drawing = remaining
+            programmaticUpdate = false
+            parent.drawing = remaining
+            canvasView.accessibilityValue = "strokes:\(remaining.strokes.count)"
+            parent.onChanged()
         }
 
         init(_ parent: EditorCanvasView) {

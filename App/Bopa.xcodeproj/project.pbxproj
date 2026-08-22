@@ -25,8 +25,10 @@
 		402052C8B168A671EBBAAC3E /* BackgroundFlushAssertion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B7E13E1B6B977C4D18D3F6 /* BackgroundFlushAssertion.swift */; };
 		41553EDB7232E60A06C58F8F /* Thumbnails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7346F25A719C7EB849AE025F /* Thumbnails.swift */; };
 		4283276297678BE54BBF534F /* LibrarySidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 760C1A94995C19FE535F60AB /* LibrarySidebar.swift */; };
+		43EB0F980795627D2C4146CD /* NextPagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E3760B82FBF58BD001BE759 /* NextPagePreview.swift */; };
 		498A8102F008B5009724766B /* TrashTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644E642232F1FF6B8C96F02D /* TrashTests.swift */; };
 		4B7D4955A3CE1C1DE4D0BEB9 /* CanvasSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF0DCF11DD97B800E68436AC /* CanvasSnapshotTests.swift */; };
+		4EB98901D0A38D4C8075F8DE /* SeamGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C44DEE709374FB7ED572377A /* SeamGeometry.swift */; };
 		502F56C0FD5818927AD81DC5 /* Modernist.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37599E4D83A385BCE5B8170D /* Modernist.swift */; };
 		51A4216ACBCFACE585AB9335 /* ToolSelectionWidthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51F1EB6848E29DD2054222A /* ToolSelectionWidthTests.swift */; };
 		5677850903A70C8887A2C384 /* NotableKit in Frameworks */ = {isa = PBXBuildFile; productRef = EAF3412FA66289006396A938 /* NotableKit */; };
@@ -50,6 +52,7 @@
 		A3D0730C529082C0A8291EA9 /* EditorPageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624C9DCA72BB5EC9F4CD6C41 /* EditorPageModel.swift */; };
 		A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */; };
 		A70C5C162D4647CADA1CE982 /* testEachPenRendersItsOwnInk.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 97F9329828F4B8B59849650D /* testEachPenRendersItsOwnInk.1.png */; };
+		B0FE2C02333C9FE8EEC0C5EF /* SeamGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C055958D03FC50BBD23F28B0 /* SeamGeometryTests.swift */; };
 		B188FC9BE3CDA7096D52D546 /* HandwritingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */; };
 		B885FEB1AA7B7E9BB8206935 /* CouchSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6178739BEED09C246CFF032 /* CouchSettingsView.swift */; };
 		C10E0057637247CCB7ED659A /* CanvasContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CE531A38B3D637083298DA9 /* CanvasContainerView.swift */; };
@@ -122,6 +125,7 @@
 		65F089A838509BF507244D0C /* CouchEndToEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchEndToEndTests.swift; sourceTree = "<group>"; };
 		660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
 		6BED7857BA1ED1AF56A3E901 /* PageManagementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageManagementTests.swift; sourceTree = "<group>"; };
+		6E3760B82FBF58BD001BE759 /* NextPagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextPagePreview.swift; sourceTree = "<group>"; };
 		7079102757F82D89F8EECEAE /* ServerBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerBrowserView.swift; sourceTree = "<group>"; };
 		7346F25A719C7EB849AE025F /* Thumbnails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Thumbnails.swift; sourceTree = "<group>"; };
 		74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasContainerViewTests.swift; sourceTree = "<group>"; };
@@ -142,7 +146,9 @@
 		B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
 		BE0FF747D670DE264447CF5D /* NotebookCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookCover.swift; sourceTree = "<group>"; };
 		BE21820564A6CE54CAC908C4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C055958D03FC50BBD23F28B0 /* SeamGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamGeometryTests.swift; sourceTree = "<group>"; };
 		C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchSyncControllerTests.swift; sourceTree = "<group>"; };
+		C44DEE709374FB7ED572377A /* SeamGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamGeometry.swift; sourceTree = "<group>"; };
 		C7CA46ABC2CDD559A3FFAECE /* RotationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationUITests.swift; sourceTree = "<group>"; };
 		D4126EFEF1F3BD43C4F0CEFD /* ThumbnailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailTests.swift; sourceTree = "<group>"; };
 		D536F4C792F192A319C22B7F /* ToolRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolRail.swift; sourceTree = "<group>"; };
@@ -257,6 +263,7 @@
 				82D99ACFA8F3954E67039180 /* LibrarySort.swift */,
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
 				37599E4D83A385BCE5B8170D /* Modernist.swift */,
+				6E3760B82FBF58BD001BE759 /* NextPagePreview.swift */,
 				BE0FF747D670DE264447CF5D /* NotebookCover.swift */,
 				DD5C5AAED817FFD0B00C7144 /* NotebookNavigatorView.swift */,
 				5C1F470FDAB39308F0A7795F /* NotebookStore.swift */,
@@ -265,6 +272,7 @@
 				E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */,
 				FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */,
 				59B5B24D30EBF003DBBA84C9 /* RemoteFolderPicker.swift */,
+				C44DEE709374FB7ED572377A /* SeamGeometry.swift */,
 				7079102757F82D89F8EECEAE /* ServerBrowserView.swift */,
 				99F8898B646F5E5EF3397B53 /* SyncBackendHost.swift */,
 				660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */,
@@ -298,6 +306,7 @@
 				8FE23B8F7C0FE00322785A8F /* PaperTemplateViewTests.swift */,
 				3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */,
 				5C708E78695B6C125620979F /* RemoteFolderPickerTests.swift */,
+				C055958D03FC50BBD23F28B0 /* SeamGeometryTests.swift */,
 				4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */,
 				D4126EFEF1F3BD43C4F0CEFD /* ThumbnailTests.swift */,
 				B51F1EB6848E29DD2054222A /* ToolSelectionWidthTests.swift */,
@@ -467,6 +476,7 @@
 				59E5859F8BC88EE2DF317D0D /* PaperTemplateViewTests.swift in Sources */,
 				29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */,
 				8AA222EE7E1E70A50620353E /* RemoteFolderPickerTests.swift in Sources */,
+				B0FE2C02333C9FE8EEC0C5EF /* SeamGeometryTests.swift in Sources */,
 				F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */,
 				64036BE1100F4299C1BD7CBC /* ThumbnailTests.swift in Sources */,
 				51A4216ACBCFACE585AB9335 /* ToolSelectionWidthTests.swift in Sources */,
@@ -495,6 +505,7 @@
 				6FDBE320E06856B13AC03D2A /* LibrarySort.swift in Sources */,
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
 				502F56C0FD5818927AD81DC5 /* Modernist.swift in Sources */,
+				43EB0F980795627D2C4146CD /* NextPagePreview.swift in Sources */,
 				020B2B60C10166F6B44D6904 /* NotebookCover.swift in Sources */,
 				E249AFDAEEC09F1533F5A822 /* NotebookNavigatorView.swift in Sources */,
 				EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */,
@@ -502,6 +513,7 @@
 				2CAA8B3BBB4BE8C4120A287E /* PaperTemplateView.swift in Sources */,
 				C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */,
 				E46386971C89909F5E7E0CB4 /* RemoteFolderPicker.swift in Sources */,
+				4EB98901D0A38D4C8075F8DE /* SeamGeometry.swift in Sources */,
 				669C9BEFB7448981118F2DB1 /* ServerBrowserView.swift in Sources */,
 				FA21BDF779D2388F37EBC05D /* SyncBackendHost.swift in Sources */,
 				122E21FD884486D3B1F6AEDC /* SyncCoordinator.swift in Sources */,

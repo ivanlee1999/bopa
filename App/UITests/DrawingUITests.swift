@@ -93,23 +93,62 @@ final class DrawingUITests: XCTestCase {
         XCTAssertTrue(pageCounter.waitForExistence(timeout: 5))
         XCTAssertEqual(pageCounter.value as? String, "Page 1 of 1")
 
-        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.85))
-            .press(
-                forDuration: 0.05,
-                thenDragTo: canvas.coordinate(
-                    withNormalizedOffset: CGVector(dx: 0.50, dy: 0.10)))
-        // This drag travels through the width-fitted first sheet and then past its bottom,
-        // which is the intentional request for page two.
+        // Each drag travels through the width-fitted sheet and then past its bottom. The first
+        // one runs off the end of the notebook, which appends page two *without leaving page
+        // one* — the notebook grows under the scroll rather than jumping. Further scrolling
+        // then crosses the seam onto it, which is the only thing that changes which page is
+        // open. Both halves are asserted, because a version that jumped straight to page two
+        // would pass an assertion about the count alone.
+        func dragPastTheBottom() {
+            canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.85))
+                .press(
+                    forDuration: 0.05,
+                    thenDragTo: canvas.coordinate(
+                        withNormalizedOffset: CGVector(dx: 0.50, dy: 0.10)))
+        }
 
-        let onSecondPage = NSPredicate(format: "value == 'Page 2 of 2'")
+        dragPastTheBottom()
+
+        let notebookGrew = NSPredicate(format: "value == 'Page 1 of 2'")
         XCTAssertEqual(
             XCTWaiter().wait(
-                for: [expectation(for: onSecondPage, evaluatedWith: pageCounter)], timeout: 5),
+                for: [expectation(for: notebookGrew, evaluatedWith: pageCounter)], timeout: 5),
             .completed,
-            "pulling past the bottom should create and enter the second real page")
+            "scrolling off the end should append a second page without leaving the first")
+
+        // Now there is a page below the seam, so scrolling on crosses onto it. Asserted on the
+        // page *index* rather than on "2 of 2": a drag that carries through the seam usually
+        // runs off the end of page two in the same movement, which appends a third page. The
+        // count growing is the feature working, not a failure — what matters is which page is
+        // open.
+        let onSecondPage = NSPredicate(format: "value BEGINSWITH 'Page 2 of'")
+        var crossed = false
+        for _ in 0..<4 where !crossed {
+            dragPastTheBottom()
+            crossed = XCTWaiter().wait(
+                for: [expectation(for: onSecondPage, evaluatedWith: pageCounter)], timeout: 3)
+                == .completed
+        }
+        XCTAssertTrue(crossed, "scrolling through the seam should enter the second page")
         XCTAssertEqual(
             app.descendants(matching: .any)["editor.canvas"].firstMatch.value as? String,
             "strokes:0")
+
+        // And back: scrolling up past the top returns to the page above, so the crossing works
+        // in both directions rather than being a one-way trip.
+        let backOnFirstPage = NSPredicate(format: "value BEGINSWITH 'Page 1 of'")
+        var returned = false
+        for _ in 0..<4 where !returned {
+            canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.15))
+                .press(
+                    forDuration: 0.05,
+                    thenDragTo: canvas.coordinate(
+                        withNormalizedOffset: CGVector(dx: 0.50, dy: 0.90)))
+            returned = XCTWaiter().wait(
+                for: [expectation(for: backOnFirstPage, evaluatedWith: pageCounter)], timeout: 3)
+                == .completed
+        }
+        XCTAssertTrue(returned, "scrolling back up through the seam should return to page one")
     }
 
     @MainActor

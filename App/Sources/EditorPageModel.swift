@@ -25,6 +25,13 @@ final class EditorPageModel: NSObject, ObservableObject {
     @Published private(set) var contentRevision = 0
     @Published private(set) var loadError: String?
     @Published var saveError: String?
+    /// The top of the page after this one, drawn below the seam under continuous scrolling.
+    /// Nil at the end of the notebook — there is nothing below the last page to look at.
+    @Published private(set) var nextPagePreview: NextPagePreview?
+    /// The neighbouring page ids, as of the last load. What the seam commits to, and what
+    /// scrolling off the top enters.
+    @Published private(set) var nextPageId: String?
+    @Published private(set) var previousPageId: String?
 
     /// The ids of the strokes the canvas is currently showing — what was loaded into it, or what
     /// was last exported out of it. Two jobs: it is the baseline `savePage` derives tombstones
@@ -47,6 +54,28 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// Asked to dismiss the editor when there is nothing left to show — the notebook itself is
     /// gone, or its last page is. Handed in by the view, which owns the navigation.
     var requestClose: (() -> Void)?
+    /// Where the page about to be opened should be scrolled to, when the scroll — not the
+    /// page's own saved position — decides. Set immediately before `open`, consumed by it.
+    ///
+    /// `.end` rather than a large number: the page's own height is only known once it is
+    /// loaded, and a sentinel offset would be published (and saved) as the page's scroll
+    /// position before the canvas ever laid out and clamped it.
+    enum EntryScroll {
+        case carried(CGFloat)
+        case end
+
+        func resolved(against page: PageFile) -> CGFloat {
+            switch self {
+            case .carried(let y): return max(y, 0)
+            case .end: return CGFloat(page.pageSize.height)
+            }
+        }
+    }
+
+    private var entryScroll: EntryScroll?
+    /// The scroll position the open page was entered at — what the canvas restores. Distinct
+    /// from `liveState.pageY`, which follows the finger from then on.
+    @Published private(set) var openScroll: CGFloat = 0
 
     /// Connects the store, the way the undo controller attaches to the undo manager — SwiftUI
     /// builds its state objects before the environment is readable, so this cannot be an
@@ -94,6 +123,10 @@ final class EditorPageModel: NSObject, ObservableObject {
         guard !manifest.pageIds.contains(vanished) else {
             // Still listed. Keep the order fresh, so a later vanish knows where the page *was*.
             lastKnownPageIds = manifest.pageIds
+            // The page order can change without this page moving — a page appended past the end
+            // (which is how scrolling off the notebook grows it), inserted by the overview, or
+            // arriving from a peer. The seam has to show what is actually next.
+            refreshNeighbors()
             return true
         }
 
@@ -139,6 +172,11 @@ final class EditorPageModel: NSObject, ObservableObject {
         // unsaved scroll offset. Flushing at the door kills the whole forgot-to-flush class —
         // callers that already saved cost nothing, because saveNow is a no-op when clean.
         saveNow()
+        // Consumed here, not on the success path: a load that throws used to leave the sentinel
+        // set, and the *next* page opened — an unrelated one, reached from the overview —
+        // silently inherited the position and persisted it as its own scroll.
+        let entry = entryScroll
+        entryScroll = nil
         guard let store else { return false }
         do {
             let loaded = try store.loadPage(notebookId: notebookId, pageId: newPageId)
@@ -154,9 +192,13 @@ final class EditorPageModel: NSObject, ObservableObject {
             shownSurfaces = SurfaceState(of: loaded)
             canvasStrokeIDs = Set(loaded.strokes.map(\.id))
             contentRevision += 1
-            // Seed with the persisted offset so a save before any scroll preserves it.
-            liveState.pageY = CGFloat(max(loaded.scroll, 0))
+            // Seed with the persisted offset so a save before any scroll preserves it, unless
+            // the page is being entered at a position the scroll itself chose — carried across
+            // a seam, or landing at the far end when scrolling backwards into it.
+            openScroll = entry?.resolved(against: loaded) ?? CGFloat(max(loaded.scroll, 0))
+            liveState.pageY = openScroll
             lastKnownPageIds = store.manifest(id: notebookId)?.pageIds ?? []
+            refreshNeighbors()
             dirty = false
             loadError = nil
             return true
@@ -164,6 +206,167 @@ final class EditorPageModel: NSObject, ObservableObject {
             loadError = String(describing: error)
             return false
         }
+    }
+
+    /// Enters the page below the seam, carrying the overshoot with it: what was scroll past this
+    /// page's end becomes ordinary scroll on the next one, so nothing on screen moves.
+    /// - Returns: whether a page was actually entered, so the caller only latches on a real
+    ///   crossing. A latch set for a crossing that never happened has no page load coming to
+    ///   clear it.
+    @discardableResult
+    func enterNextPageAcrossSeam(carrying scroll: CGFloat) -> Bool {
+        guard let nextPageId else { return false }
+        entryScroll = .carried(scroll)
+        return open(pageId: nextPageId)
+    }
+
+    /// Enters the previous page at its own end — the position where this page is what shows
+    /// under its seam, so scrolling up reads as one continuous surface rather than a jump.
+    /// - Returns: whether a page was actually entered — false at the first page, which is the
+    ///   case that used to leave the caller's latch stuck for the rest of the session.
+    @discardableResult
+    func enterPreviousPageAtItsEnd() -> Bool {
+        guard let previousPageId else { return false }
+        entryScroll = .end
+        return open(pageId: previousPageId)
+    }
+
+    /// Files ink drawn below the seam onto the page it was drawn *on*, rather than leaving it
+    /// on the current page past the bottom of its own sheet.
+    ///
+    /// Continuous scrolling puts a viewport of the next page on screen below the seam, and the
+    /// canvas — which belongs to the current page — is the live surface over all of it. Without
+    /// this, writing there produced exactly the thing a page-is-a-sheet model exists to prevent:
+    /// ink stored below the sheet, invisible to the overview, to export and to the BOOX, on a
+    /// page that reports itself one sheet tall.
+    ///
+    /// A stroke belongs to the sheet its *top edge* falls in and travels whole — the same rule
+    /// `PageSplit` applies, and the same one the BOOX app uses for the same case, so writing
+    /// across the seam from above stays put while writing below it lands where the eye says.
+    /// Deliberately not undoable here: the undo stack belongs to the page being edited, and an
+    /// entry pointing into another page would delete rows out from under it.
+    ///
+    /// - Returns: the drawing with those strokes removed, or nil when none crossed.
+    func fileInkBelowTheSeam(from drawing: PKDrawing, sheetHeight: CGFloat) -> PKDrawing? {
+        guard sheetHeight > 0, let nextPageId, let store else { return nil }
+        let below = drawing.strokes.filter { $0.renderBounds.minY >= sheetHeight }
+        guard !below.isEmpty else { return nil }
+
+        let moved = PKDrawing(strokes: below)
+            .transformed(using: CGAffineTransform(translationX: 0, y: -sheetHeight))
+        do {
+            var neighbor = try store.loadPage(notebookId: notebookId, pageId: nextPageId)
+            let existing = neighbor.strokes
+            neighbor.strokes = existing + PencilKitBridge.strokeDTOs(from: moved)
+            // The neighbour's own strokes are the baseline, so this reads as an addition rather
+            // than as "everything else was erased".
+            _ = try store.savePage(neighbor, baselineStrokeIDs: Set(existing.map(\.id)))
+        } catch {
+            // The ink is still on the canvas and still on this page; refusing to move it is
+            // better than dropping it, and the save alert already covers a broken store.
+            saveError = String(describing: error)
+            return nil
+        }
+        // Re-render the strip so what is under the seam matches what was just written there.
+        previewedNeighbor = nil
+        refreshNeighbors()
+        let kept = drawing.strokes.filter { $0.renderBounds.minY < sheetHeight }
+        return PKDrawing(strokes: kept)
+    }
+
+    /// Re-reads the neighbours of the open page and renders the strip drawn under the seam.
+    ///
+    /// The ids are settled synchronously — they are read from a manifest already in memory, and
+    /// everything that decides navigation depends on them. The *picture* is not: reading a page
+    /// file and rasterizing a strip of it is tens of milliseconds, and this is called from a
+    /// store notification that can arrive in the middle of a drag (appending a page off the end
+    /// of the notebook does exactly that). Doing it inline blocked the main thread hard enough
+    /// that the simulator could not even synthesize the rest of the gesture. So the strip is
+    /// rendered off the main actor and published when it is ready; until then the seam shows
+    /// blank paper, which is what a freshly appended page looks like anyway.
+    private func refreshNeighbors() {
+        guard let store, let pageId,
+              let manifest = store.manifest(id: notebookId),
+              let index = manifest.pageIds.firstIndex(of: pageId)
+        else {
+            nextPageId = nil
+            previousPageId = nil
+            nextPagePreview = nil
+            previewTask?.cancel()
+            return
+        }
+        previousPageId = index > 0 ? manifest.pageIds[index - 1] : nil
+        let following = index + 1 < manifest.pageIds.count ? manifest.pageIds[index + 1] : nil
+        nextPageId = following
+        guard let following else {
+            nextPagePreview = nil
+            previewTask?.cancel()
+            previewedNeighbor = nil
+            return
+        }
+        // Already rendered for this neighbour *as it currently stands*: re-reading it on every
+        // store notification would rasterize a strip per sync tick. Keyed on the file's
+        // revision as well as its id, so ink that arrives on the neighbour — written on the
+        // BOOX and synced in, or drawn there and scrolled back to — is picked up rather than
+        // frozen at whatever the strip held the first time it was rendered.
+        let revision = store.pageRevision(notebookId: notebookId, pageId: following)
+        guard previewedNeighbor?.id != following || previewedNeighbor?.revision != revision
+        else { return }
+        previewedNeighbor = (id: following, revision: revision)
+        previewTask?.cancel()
+        // The page below the seam changed identity; what is on screen belongs to the old one.
+        if nextPagePreview?.pageId != following { nextPagePreview = nil }
+        previewTask = Task { [notebookId] in
+            let rendered = await Self.renderPreview(
+                of: following, notebookId: notebookId, store: store)
+            guard !Task.isCancelled, previewedNeighbor?.id == following else { return }
+            if rendered == nil {
+                // Nothing came back — an unreadable file, or a page with nothing in its strip.
+                // Do not hold the latch shut on a failure: a page that could not be read must be
+                // retried on the next notification rather than previewing as blank for ever.
+                previewedNeighbor = nil
+            }
+            nextPagePreview = rendered
+        }
+    }
+
+    /// The neighbour the current preview (or the render in flight) is for, and the revision it
+    /// was rendered from. Kept separately from `nextPagePreview`, which is nil while a render is
+    /// in flight and for a page with nothing to show.
+    private var previewedNeighbor: (id: String, revision: String)?
+    private var previewTask: Task<Void, Never>?
+
+    /// Reads a neighbour off disk and renders what the seam shows of it, off the main actor.
+    ///
+    /// A page that cannot be read previews as blank paper rather than failing anything: this is
+    /// only a picture of where the scroll is heading, and the page itself is loaded properly
+    /// when the scroll commits to it.
+    private nonisolated static func renderPreview(
+        of neighborId: String, notebookId: String, store: NotebookStore
+    ) async -> NextPagePreview? {
+        let read: (PageFile, URL, URL)? = await MainActor.run {
+            guard let file = try? store.loadPage(notebookId: notebookId, pageId: neighborId)
+            else { return nil }
+            return (file, store.notebookDirURL(notebookId), store.rootURL)
+        }
+        guard let (file, notebookDir, storeRoot) = read else { return nil }
+
+        let background = PageBackground(
+            background: file.background, backgroundType: file.backgroundType)
+        var template = NativeTemplate.blank
+        if case .native(let native) = background, native.isDrawable { template = native }
+        let strip = NextPagePreviewRenderer.content(
+            strokes: PencilKitBridge.drawing(from: file.strokes),
+            images: BackgroundRenderer.pageImages(for: file, notebookDir: notebookDir),
+            pageSize: file.pageSize)
+        return NextPagePreview(
+            pageId: neighborId,
+            pageSize: file.pageSize,
+            template: template,
+            content: strip?.image,
+            contentHeight: strip?.height ?? 0,
+            background: BackgroundRenderer.image(
+                for: file, notebookDir: notebookDir, storeRoot: storeRoot))
     }
 
     /// Puts ink sync wrote underneath the editor onto the canvas.
