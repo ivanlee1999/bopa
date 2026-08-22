@@ -57,6 +57,51 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(renamed.createdAt, folder.createdAt)
     }
 
+    // MARK: - Moving a folder
+    //
+    // The BOOX has had this since folders existed; the iPad could only move notebooks, so any
+    // restructuring waited for the other device.
+
+    func testMoveFolderReparentsIt() throws {
+        let parent = try store.createFolder(title: "Work")
+        let child = try store.createFolder(title: "Invoices")
+
+        try store.moveFolder(id: child.id, toFolder: parent.id)
+
+        let moved = try XCTUnwrap(store.folder(id: child.id))
+        XCTAssertEqual(moved.parentFolderId, parent.id)
+        XCTAssertEqual(try foldersOnDisk().folders.first { $0.id == child.id }?.parentFolderId,
+                       parent.id)
+    }
+
+    func testMoveFolderToLibraryRoot() throws {
+        let parent = try store.createFolder(title: "Work")
+        let child = try store.createFolder(title: "Invoices", parentFolderId: parent.id)
+
+        try store.moveFolder(id: child.id, toFolder: nil)
+
+        XCTAssertNil(try XCTUnwrap(store.folder(id: child.id)).parentFolderId)
+    }
+
+    func testMoveFolderRefusesItsOwnSubtree() throws {
+        let outer = try store.createFolder(title: "Outer")
+        let inner = try store.createFolder(title: "Inner", parentFolderId: outer.id)
+
+        // Into itself, and into its own descendant. Either would strand the whole subtree
+        // somewhere no surface can reach.
+        XCTAssertThrowsError(try store.moveFolder(id: outer.id, toFolder: outer.id))
+        XCTAssertThrowsError(try store.moveFolder(id: outer.id, toFolder: inner.id))
+        XCTAssertNil(try XCTUnwrap(store.folder(id: outer.id)).parentFolderId)
+    }
+
+    func testMoveFolderRefusesATrashedDestination() throws {
+        let destination = try store.createFolder(title: "Gone")
+        let mover = try store.createFolder(title: "Mover")
+        try store.trashFolder(id: destination.id)
+
+        XCTAssertThrowsError(try store.moveFolder(id: mover.id, toFolder: destination.id))
+    }
+
     func testPurgeEmptyFolder() throws {
         let folder = try store.createFolder(title: "Scratch")
 
