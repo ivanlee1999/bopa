@@ -5,7 +5,11 @@ rollout live in [couchdb-sync-plan.md](couchdb-sync-plan.md); this file is the p
 implementations must agree on byte-for-byte.
 
 Conformance is checked by [couch-sync-vectors/vectors.json](couch-sync-vectors/vectors.json),
-which both test suites execute. The file is identical in both repos (CI asserts it).
+which both test suites execute. The file is duplicated in both repos and each suite reads its
+own copy, so the two can drift silently — a vector only tests what both sides parse. Both repos'
+PR workflows therefore diff the two copies against each other (`vectors` here, `unit-tests` in
+notable), and `scripts/couch-vectors-parity.sh` runs the same check locally. A change to the
+vectors belongs in both repos in the same change.
 
 ---
 
