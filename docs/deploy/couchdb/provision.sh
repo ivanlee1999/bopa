@@ -14,6 +14,11 @@ set -a; . ./.env; set +a
 : "${COUCHDB_URL:?}" "${COUCHDB_ADMIN_USER:?}" "${COUCHDB_ADMIN_PASSWORD:?}"
 : "${COUCHDB_SYNC_USER:?}" "${COUCHDB_SYNC_PASSWORD:?}" "${COUCHDB_DATABASE:?}"
 
+# Recognized handwriting lives in its own database, deliberately outside the sync protocol: an
+# unknown document type in `notes` would be conflict-copied into junk notebooks by both apps.
+# scribe defaults to the same name (SCRIBE_TEXT_DB), and its -check refuses to start without it.
+COUCHDB_TEXT_DATABASE="${COUCHDB_TEXT_DATABASE:-notes_text}"
+
 admin=(--user "${COUCHDB_ADMIN_USER}:${COUCHDB_ADMIN_PASSWORD}")
 
 # Body first, status code last, so both can be reported.
@@ -34,23 +39,30 @@ echo "== system databases (single_node should have made these) =="
 call PUT /_users        || true
 call PUT /_replicator   || true
 
-echo "== application database =="
+echo "== application databases =="
 call PUT "/${COUCHDB_DATABASE}"
+call PUT "/${COUCHDB_TEXT_DATABASE}"
 
 echo "== sync account =="
 call PUT "/_users/org.couchdb.user:${COUCHDB_SYNC_USER}" \
   "{\"name\":\"${COUCHDB_SYNC_USER}\",\"password\":\"${COUCHDB_SYNC_PASSWORD}\",\"roles\":[],\"type\":\"user\"}" \
   || echo "  (already exists — delete it first if you need to rotate the password)"
 
-echo "== restrict the database to that account =="
-call PUT "/${COUCHDB_DATABASE}/_security" \
-  "{\"admins\":{\"names\":[],\"roles\":[]},\"members\":{\"names\":[\"${COUCHDB_SYNC_USER}\"],\"roles\":[]}}"
+echo "== restrict both databases to that account =="
+security="{\"admins\":{\"names\":[],\"roles\":[]},\"members\":{\"names\":[\"${COUCHDB_SYNC_USER}\"],\"roles\":[]}}"
+call PUT "/${COUCHDB_DATABASE}/_security"      "$security"
+call PUT "/${COUCHDB_TEXT_DATABASE}/_security" "$security"
 
 echo
 echo "== verifying as the sync user =="
 sync=(--user "${COUCHDB_SYNC_USER}:${COUCHDB_SYNC_PASSWORD}")
 curl -fsS "${admin[@]}" "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null && echo "admin can read the db"
 curl -fsS "${sync[@]}"  "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null && echo "sync user can read the db"
+# The text database is checked as thoroughly as the notes one: a deployment that provisions only
+# `notes` looks entirely healthy right up to the moment scribe is pointed at it and refuses to
+# start, with nothing on either device to explain why no page is ever searchable.
+curl -fsS "${sync[@]}"  "${COUCHDB_URL}/${COUCHDB_TEXT_DATABASE}" >/dev/null \
+  && echo "sync user can read ${COUCHDB_TEXT_DATABASE}"
 
 # Anonymous access must fail: this is the check that catches require_valid_user not applying.
 if curl -fsS "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null 2>&1; then
@@ -141,3 +153,4 @@ rm -f /tmp/couch-provision-body
 echo
 echo "Done. Point both apps at ${COUCHDB_URL}, database '${COUCHDB_DATABASE}',"
 echo "user '${COUCHDB_SYNC_USER}'."
+echo "Recognized text: database '${COUCHDB_TEXT_DATABASE}' (scribe's SCRIBE_TEXT_DB)."

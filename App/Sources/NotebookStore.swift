@@ -164,7 +164,11 @@ final class NotebookStore: ObservableObject {
         try FileManager.default.createDirectory(
             at: notebookDir(notebookId).appendingPathComponent("pages"),
             withIntermediateDirectories: true)
-        try encoder.encode(page).write(to: pageURL(notebookId: notebookId, pageId: pageId))
+        // Atomic like every other page write. This one was the exception, and it is the first
+        // write a notebook ever gets: a tear here leaves a manifest naming a page whose file is
+        // half-written, which the editor then fails to load.
+        try encoder.encode(page)
+            .write(to: pageURL(notebookId: notebookId, pageId: pageId), options: .atomic)
         try writeManifest(manifest)
         refreshAfterLocalChange(
             documents: [CouchDocID.notebook(notebookId), CouchDocID.page(pageId)])
@@ -1074,6 +1078,41 @@ final class NotebookStore: ObservableObject {
         return folder
     }
 
+    /// Re-parents a folder.
+    ///
+    /// The BOOX has had this since folders existed and the sync model has always carried it —
+    /// `parentFolderId` is an ordinary synced scalar — but the iPad could only move *notebooks*,
+    /// so any restructuring waited for the other device with nothing on screen explaining why.
+    ///
+    /// Two guards, both of which the store already knows how to express: the destination has to
+    /// be somewhere you can actually put things (`isReachable`), and a folder may not be moved
+    /// inside itself or its own descendants. The cycle check walks with a visited set rather
+    /// than trusting the chain, for the same reason `deletionScope` does — `folders.json` is
+    /// merged data and can come back from a peer already looping.
+    func moveFolder(id: String, toFolder parentFolderId: String?) throws {
+        guard isReachable(parentFolderId) else { throw FolderUnavailableError() }
+        var all = folders
+        guard let index = all.firstIndex(where: { $0.id == id }) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        if let parentFolderId {
+            guard parentFolderId != id else { throw FolderCycleError() }
+            guard !deletionScope(ofFolder: id).folderIDs.contains(parentFolderId) else {
+                throw FolderCycleError()
+            }
+        }
+        all[index].parentFolderId = parentFolderId
+        all[index].updatedAt = clock.stamp()
+        try writeFolders(all)
+    }
+
+    /// Refusing a move that would strand a folder inside itself.
+    struct FolderCycleError: LocalizedError {
+        var errorDescription: String? {
+            "A folder can't be moved inside itself."
+        }
+    }
+
     func renameFolder(id: String, title: String) throws {
         var all = folders
         guard let index = all.firstIndex(where: { $0.id == id }) else {
@@ -1093,7 +1132,9 @@ final class NotebookStore: ObservableObject {
             folders: folders.sorted { $0.id < $1.id },
             serverTimestamp: clock.stamp())
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        try encoder.encode(file).write(to: foldersURL)
+        // Atomic: folders.json is the whole tree in one file, so a torn write is not one lost
+        // folder, it is the library's shape. Every other write in this store already is.
+        try encoder.encode(file).write(to: foldersURL, options: .atomic)
         // Tombstones before the change signal, for the same reason as a notebook's: the folder is
         // already out of the file, so a push that got there first would find nothing to send.
         if !deleting.isEmpty { didDeleteDocuments?(deleting) }

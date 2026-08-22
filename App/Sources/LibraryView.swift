@@ -592,6 +592,27 @@ private struct FolderContentsView: View {
             } label: {
                 Label("Rename", systemImage: "pencil")
             }
+            Menu {
+                Button("Library") {
+                    perform("Moving the folder", error: $actionError) {
+                        try store.moveFolder(id: folder.id, toFolder: nil)
+                    }
+                }
+                // The folder itself and its own descendants are left out rather than offered and
+                // refused: the store guards the cycle anyway, but a menu that lists a destination
+                // it will not accept is a menu that lies.
+                let ownSubtree = Set(store.deletionScope(ofFolder: folder.id).folderIDs)
+                ForEach(store.liveFolders.filter { !ownSubtree.contains($0.id) }, id: \.id) {
+                    destination in
+                    Button(destination.title) {
+                        perform("Moving the folder", error: $actionError) {
+                            try store.moveFolder(id: folder.id, toFolder: destination.id)
+                        }
+                    }
+                }
+            } label: {
+                Label("Move to folder", systemImage: "folder")
+            }
             // No longer restricted to empty folders. Refusing to delete a populated one was the
             // only protection there was against losing a subtree; now the Trash is, and it is a
             // better one — a populated folder can be thrown away and brought back.

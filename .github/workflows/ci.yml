@@ -11,6 +11,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The merge vectors are a contract between two codebases, and the only thing that checks the
+  # two implementations of the merge agree. They are duplicated by design — each suite reads its
+  # own copy — so nothing but a diff catches them drifting, and they have drifted once: this repo
+  # grew two page-rename vectors notable never got, and because notable's decoder dropped the
+  # field they described, its suite went on passing while a rename made here was erased by the
+  # BOOX. A vector only tests what both sides parse.
+  #
+  # docs/couch-sync-protocol.md claimed CI asserted this long before CI did. It does now.
+  vectors:
+    name: Merge vectors match notable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out notable
+        uses: actions/checkout@v4
+        with:
+          repository: ivanlee1999/notable
+          path: .notable
+        # A transient checkout failure should warn, not red-flag an unrelated PR; the diff below
+        # is what actually gates.
+        continue-on-error: true
+
+      - name: Diff the vectors
+        run: |
+          mine=docs/couch-sync-vectors/vectors.json
+          theirs=.notable/app/src/test/resources/couch-sync-vectors/vectors.json
+          if [ ! -f "$theirs" ]; then
+            echo "::warning::notable checkout unavailable; vector parity not checked."
+            exit 0
+          fi
+          if ! diff -u "$mine" "$theirs"; then
+            echo "::error::couch-sync vectors differ between the repos. They are one contract;"
+            echo "::error::copy the newer file across both repos in the same change."
+            exit 1
+          fi
+          echo "couch sync vectors match"
+
   notablekit:
     name: NotableKit
     runs-on: macos-latest
