@@ -61,6 +61,19 @@ struct TemplateApplicationTests {
         ) == nil)
     }
 
+    @Test("Paper chosen for a page becomes the notebook's default — except cover art")
+    func stickyDefaults() {
+        #expect(PageBackground.native(.squared).canBeNotebookDefault)
+        #expect(PageBackground(fields: TemplateApplication.pageFields(for: planner)).canBeNotebookDefault)
+        #expect(PageBackground(
+            fields: BackgroundFields(background: "pdfs/weekly.pdf", backgroundType: "autoPdf")
+        ).canBeNotebookDefault)
+        // Cover art fronts one page; every page after it is not a cover.
+        #expect(!PageBackground(
+            fields: BackgroundFields(background: "covers/art.png", backgroundType: "coverImage")
+        ).canBeNotebookDefault)
+    }
+
     @Test("Assets land under the notebook's backgrounds collection, flat")
     func remotePaths() {
         let ref = TemplateRef(folder: .pdfs, fileName: "weekly.pdf")
