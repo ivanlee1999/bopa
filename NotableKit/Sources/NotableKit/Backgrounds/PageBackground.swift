@@ -76,6 +76,21 @@ public enum PageBackground: Hashable, Sendable {
         }
     }
 
+    /// Whether paper chosen for one page should also become the notebook's default — the paper
+    /// every page made after it starts on.
+    ///
+    /// Choosing paper is a statement about the notebook rather than about one sheet: someone who
+    /// switches to grid means the grid to still be there on the next page, and re-picking it for
+    /// every page is an errand, not a choice. Both apps keep that default in the same field —
+    /// `manifest.json` here, the `notebook` row on the BOOX — so the choice holds on either device.
+    ///
+    /// Cover art is the exception. It is chosen for the one page it fronts, and printing it on
+    /// every page after would be nobody's intent.
+    public var canBeNotebookDefault: Bool {
+        if case .coverImage = self { return false }
+        return true
+    }
+
     /// The asset this background needs, if any.
     public var templateRef: TemplateRef? {
         switch self {

@@ -47,6 +47,31 @@ final class PageManagementTests: XCTestCase {
         XCTAssertEqual(pageIds[2], second.id)
     }
 
+    /// The point of the sticky template: paper chosen once is the paper every page made after it
+    /// starts on, without the choice being made again.
+    func testPagesAddedAfterAPaperChangeStartOnThatPaper() throws {
+        try store.setNotebookDefaultBackground(
+            notebookId, to: BackgroundFields(background: "squared", backgroundType: "native"))
+
+        let next = try store.insertPage(into: notebookId, at: nil)
+
+        XCTAssertEqual(next.background, "squared")
+        XCTAssertEqual(next.backgroundType, "native")
+        // And it is on the notebook, which is what travels to the BOOX.
+        XCTAssertEqual(store.manifest(id: notebookId)?.defaultBackground, "squared")
+    }
+
+    /// Pages already written stay on the paper they were written on — the default says what comes
+    /// next, not what has already happened.
+    func testChangingTheDefaultLeavesExistingPagesAlone() throws {
+        let firstId = pageIds[0]
+
+        try store.setNotebookDefaultBackground(
+            notebookId, to: BackgroundFields(background: "dotted", backgroundType: "native"))
+
+        XCTAssertEqual(try store.loadPage(notebookId: notebookId, pageId: firstId).background, "blank")
+    }
+
     /// An index arrives from a drag gesture or from a peer's page list, neither of which is
     /// obliged to be in range — and an out-of-range insert traps rather than misbehaving.
     func testAnOutOfRangeIndexIsClampedRatherThanTrapping() throws {

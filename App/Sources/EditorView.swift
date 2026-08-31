@@ -372,6 +372,16 @@ struct EditorView: View {
         guard canChangeTemplate else { return }
         let fields = TemplateApplication.pageFields(for: .native(template))
         model.setPaper(background: fields.background, backgroundType: fields.backgroundType)
+        // Paper is chosen for the notebook, not for the sheet: the pages added after this one
+        // start on it too — here and on the BOOX, which reads the same manifest field. Reported
+        // through the same alert a failed page add uses, because a choice that silently did not
+        // stick reads as the picker having missed.
+        guard PageBackground(fields: fields).canBeNotebookDefault else { return }
+        do {
+            try store.setNotebookDefaultBackground(notebookId, to: fields)
+        } catch {
+            actionError = LibraryActionError(action: "Changing the paper", underlying: error)
+        }
     }
 }
 

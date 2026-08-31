@@ -446,6 +446,27 @@ final class NotebookStore: ObservableObject {
         return added
     }
 
+    /// Makes `fields` the paper new pages in this notebook are created with.
+    ///
+    /// The notebook default is the one place the answer can live: `insertPage` below reads it, and
+    /// so does the BOOX's own `Notebook.newPage`, so a paper chosen here is the paper a page added
+    /// on either device starts on. Existing pages are left alone — this says what comes next, not
+    /// what has already been written.
+    func setNotebookDefaultBackground(_ notebookId: String, to fields: BackgroundFields) throws {
+        guard var manifest = readManifestFromDisk(notebookId) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        guard manifest.defaultBackground != fields.background
+            || manifest.defaultBackgroundType != fields.backgroundType
+        else { return }
+        manifest.defaultBackground = fields.background
+        manifest.defaultBackgroundType = fields.backgroundType
+        manifest.updatedAt = clock.stamp()
+        manifest.updatedBy = deviceID
+        try writeManifest(manifest)
+        refreshAfterLocalChange(documents: [CouchDocID.notebook(notebookId)])
+    }
+
     /// Appends a page. Its paper follows the notebook's own default (what Notable does);
     /// `fallbackTemplate` applies only when that default is not a native template —
     /// a PDF-backed notebook's per-page PDF binding is not something we can invent here.
