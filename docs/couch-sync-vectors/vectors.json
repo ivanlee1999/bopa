@@ -2953,6 +2953,1467 @@
         "updatedAt": "2026-08-16T10:00:00Z",
         "updatedBy": "\u00e9-pad"
       }
+    },
+    {
+      "name": "page-blocks-absent-reads-as-empty",
+      "kind": "page",
+      "why": "A build that has never heard of blocks writes a page with no `blocks` key at all. Absent must decode as empty rather than fail, and the union must hand the blocks back rather than treat the silence as a deletion. This is what makes the staged rollout survivable: an unknown scalar is erased and gone, an unknown collection is erased and re-offered.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "text": "Second paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-block-move-and-edit-both-survive",
+      "kind": "page",
+      "why": "One device reorders a paragraph while the other fixes a typo in a different one. Both edits must survive. Under a page-level ordered array this fails: order would be a scalar, \u00a75.5 would hand the whole envelope to the later writer, and the move would be silently undone by an unrelated typo fix. Per-block keys make them two independent edits.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "b9",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:01:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:01:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:02:00Z",
+            "deviceId": "boox",
+            "text": "Second paragraph, fixed."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:02:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "text": "Second paragraph, fixed.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:02:00Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "b1",
+            "orderKey": "b9",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:01:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:02:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-blocks-sorted-by-order-key",
+      "kind": "page",
+      "why": "Both sides hold the same blocks in opposite array order. The result is sorted by key, so an implementation that preserves either input's order \u2014 or that appends the loser's \u2014 fails.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph."
+          },
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "text": "Second paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-blocks-order-key-compared-as-bytes",
+      "kind": "page",
+      "why": "Keys spanning the fractional index's alphabet must sort by UTF-8 byte order (\u00a74): '_' (0x5F) falls between 'A' (0x41) and 'a' (0x61). A comparator using either language's default string ordering can disagree, which is exactly the class of bug the tiebreak vectors exist for.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "bt",
+            "orderKey": "a",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "lower"
+          },
+          {
+            "id": "bh",
+            "orderKey": "_",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "underscore"
+          },
+          {
+            "id": "bl",
+            "orderKey": "A",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "upper"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "bl",
+            "orderKey": "A",
+            "text": "upper",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "bh",
+            "orderKey": "_",
+            "text": "underscore",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "bt",
+            "orderKey": "a",
+            "text": "lower",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-blocks-equal-order-keys-broken-by-id",
+      "kind": "page",
+      "why": "Two devices inserting at the same point offline mint the same key from the same neighbours. That is legal and expected \u2014 nothing detects or repairs it \u2014 and the id breaks the tie the same way on both devices, so they converge.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-zzz",
+            "orderKey": "a0V",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "typed on the iPad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-aaa",
+            "orderKey": "a0V",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "boox",
+            "text": "typed on the BOOX"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-aaa",
+            "orderKey": "a0V",
+            "text": "typed on the BOOX",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "b-zzz",
+            "orderKey": "a0V",
+            "text": "typed on the iPad",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-blocks-concurrent-insert-at-same-point-stays-adjacent",
+      "kind": "page",
+      "why": "Both devices insert a paragraph between the same two blocks while offline. Both land between them, adjacent, rather than either being appended to the end of the document \u2014 which is what ordered add-wins would have done to whichever side lost the scalar tiebreak.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b-ins-a",
+            "orderKey": "a0h",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "inserted on the iPad"
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b-ins-b",
+            "orderKey": "a0m",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "boox",
+            "text": "inserted on the BOOX"
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b-ins-a",
+            "orderKey": "a0h",
+            "text": "inserted on the iPad",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b-ins-b",
+            "orderKey": "a0m",
+            "text": "inserted on the BOOX",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "text": "Second paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-blocks-empty-order-key-sorts-first",
+      "kind": "page",
+      "why": "An empty key is legal and sorts first. A block from a writer that had no opinion about where it goes must still merge and still render, never be dropped and never fail to decode.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-unkeyed",
+            "orderKey": "",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "written by something that set no key"
+          },
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-unkeyed",
+            "orderKey": "",
+            "text": "written by something that set no key",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-block-edit-lww",
+      "kind": "page",
+      "why": "The same paragraph edited on both devices. The later write wins the block whole \u2014 the granularity of the conflict is the paragraph, not the page. Recovering the losing text is the applier's job (\u00a76.1b), not the merge's.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:00:00Z",
+            "deviceId": "ipad",
+            "text": "milk and eggs"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:04:00Z",
+            "deviceId": "boox",
+            "text": "milk, eggs and bread"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:04:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "milk, eggs and bread",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:04:00Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:04:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-block-delete-beats-edit",
+      "kind": "page",
+      "why": "One device still holds a block the other deleted. The tombstone wins on both. Sound for the same reason as a stroke: a retyped paragraph is a new block with a new id, so remove-wins can never suppress later work.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          }
+        ],
+        "deletedBlocks": [
+          {
+            "id": "b2",
+            "deletedAt": "2026-09-01T10:03:00Z"
+          }
+        ],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [
+          {
+            "id": "b2",
+            "deletedAt": "2026-09-01T10:03:00Z"
+          }
+        ],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-block-tombstone-keeps-earliest-deletedAt",
+      "kind": "page",
+      "why": "Both devices recorded the same deletion at different instants. The union keeps the earliest, matching `unionTombstones` for strokes and images.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [
+          {
+            "id": "b2",
+            "deletedAt": "2026-09-01T10:03:00Z"
+          }
+        ],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [
+          {
+            "id": "b2",
+            "deletedAt": "2026-09-01T09:50:00Z"
+          }
+        ],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [
+          {
+            "id": "b2",
+            "deletedAt": "2026-09-01T09:50:00Z"
+          }
+        ],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-block-unknown-kind-round-trips",
+      "kind": "page",
+      "why": "A block whose `kind` neither app recognises is carried verbatim, so a fifth kind can ship on one app before the other without \u00a76.5 quarantining every page that uses it. This pins the `kind` string only \u2014 unknown *fields* are still erased, because neither side keeps an overflow bag.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b-video",
+            "orderKey": "c",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "kind": "video",
+            "imageAssetId": "asset:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b-video",
+            "kind": "video",
+            "orderKey": "c",
+            "imageAssetId": "asset:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-blocks-positioned-and-flowing-coexist",
+      "kind": "page",
+      "why": "A page can be a document and a canvas at once. Positioned and flowing blocks live in one array under one sort rule; neither is dropped and neither reorders the other.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b-box",
+            "orderKey": "a2",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "a note in the margin",
+            "x": 900,
+            "y": 120,
+            "width": 400,
+            "height": 200
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b2",
+            "orderKey": "a1",
+            "text": "Second paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b-box",
+            "orderKey": "a2",
+            "text": "a note in the margin",
+            "x": 900,
+            "y": 120,
+            "width": 400,
+            "height": 200,
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-audio-segments-not-element-merged",
+      "kind": "page",
+      "why": "A recording that grew by a segment against the same recording before it grew. The longer one wins *whole* on its later `updatedAt`: `segments` travels as an opaque value inside the block, and is never unioned element-wise the way strokes are.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-rec",
+            "orderKey": "d",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:00:00Z",
+            "deviceId": "ipad",
+            "kind": "audio",
+            "startedAt": "2026-09-01T09:40:00Z",
+            "segments": [
+              {
+                "assetId": "asset:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "startMs": 0,
+                "durationMs": 120000
+              }
+            ]
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-rec",
+            "orderKey": "d",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:02:00Z",
+            "deviceId": "boox",
+            "kind": "audio",
+            "startedAt": "2026-09-01T09:40:00Z",
+            "segments": [
+              {
+                "assetId": "asset:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "startMs": 0,
+                "durationMs": 120000
+              },
+              {
+                "assetId": "asset:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "startMs": 120000,
+                "durationMs": 95000
+              }
+            ]
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:02:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-rec",
+            "kind": "audio",
+            "orderKey": "d",
+            "startedAt": "2026-09-01T09:40:00Z",
+            "segments": [
+              {
+                "assetId": "asset:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "startMs": 0,
+                "durationMs": 120000
+              },
+              {
+                "assetId": "asset:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "startMs": 120000,
+                "durationMs": 95000
+              }
+            ],
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:02:00Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:02:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-block-edit-same-instant-tiebreak",
+      "kind": "page",
+      "why": "The same block written in the same millisecond on both devices. `blockTiebreak` decides, by UTF-8 bytes, with `text` last because it is the only component that can contain the separator. Both implementations must pick the same one or they diverge in silence.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-tie",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:00:00Z",
+            "deviceId": "ipad",
+            "text": "written on the iPad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-tie",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:00:00Z",
+            "deviceId": "boox",
+            "text": "written on the BOOX"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-tie",
+            "orderKey": "a0",
+            "text": "written on the iPad",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:00:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-blocks-deep-order-key",
+      "kind": "page",
+      "why": "Repeated insertion at one point grows a key one character at a time, and nothing ever rebalances \u2014 a rebalance would rewrite every block on the page and so collide with every concurrent edit. A deep key is therefore ordinary input and must merge and sort normally.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "b-deep",
+            "orderKey": "a0VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "pressed Enter in the same spot rather a lot"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b1",
+            "orderKey": "a0",
+            "text": "First paragraph.",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          },
+          {
+            "id": "b-deep",
+            "orderKey": "a0VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
+            "text": "pressed Enter in the same spot rather a lot",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-01T09:00:00Z",
+        "updatedAt": "2026-09-01T10:05:00Z",
+        "updatedBy": "boox"
+      }
     }
   ]
 }
