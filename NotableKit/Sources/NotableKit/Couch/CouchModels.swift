@@ -448,7 +448,21 @@ public struct CouchBlock: Codable, Equatable, Sendable {
     /// The assets this block's bytes live in, whatever its kind — what the push ordering, the
     /// "still to download" enumeration and §3.5.1's referenced set all read.
     public var referencedAssetIDs: [String] {
-        (imageAssetId.map { [$0] } ?? []) + segments.map(\.assetId)
+        wantedAssets.map(\.assetID)
+    }
+
+    /// The same assets, each paired with the folder a device keeps that kind of blob in.
+    ///
+    /// The folder is not protocol — where a device stores bytes is its own business and never
+    /// travels — but the two apps agree on it anyway so that a library copied between them by hand
+    /// still resolves. A picture belongs with the notebook's other pictures; a recording's segments
+    /// belong in `audio/`, kept apart because an `.m4a` filed under `images/` is the sort of thing
+    /// that survives one refactor and confuses the next.
+    public var wantedAssets: [(assetID: String, folder: String)] {
+        var assets: [(assetID: String, folder: String)] = []
+        if let imageAssetId { assets.append((assetID: imageAssetId, folder: "images")) }
+        for segment in segments { assets.append((assetID: segment.assetId, folder: "audio")) }
+        return assets
     }
 }
 

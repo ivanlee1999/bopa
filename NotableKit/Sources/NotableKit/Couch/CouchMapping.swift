@@ -64,7 +64,8 @@ public enum CouchMapping {
         from page: CouchPage, id: String, existing: PageFile?, notebookDir: URL,
         backgroundsDirectory: URL? = nil,
         sha256: (URL) -> String? = CouchAssetID.sha256Hex,
-        keeping surviving: [StrokeDTO] = []
+        keeping surviving: [StrokeDTO] = [],
+        keepingBlocks survivingBlocks: [CouchBlock] = []
     ) -> PageFile {
         let existingImages = Dictionary(
             (existing?.images ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -107,7 +108,13 @@ public enum CouchMapping {
             deletedStrokes: page.deletedStrokes,
             deletedImages: page.deletedImages,
             updatedBy: page.updatedBy,
-            blocks: page.blocks,
+            // Appended, then re-sorted by the flow key rather than left at the end: unlike a
+            // stroke, where last also means topmost, a paragraph typed during the merge belongs
+            // where its key says and nowhere else.
+            blocks: (page.blocks + survivingBlocks).sorted {
+                let byKey = CouchMerge.byteCompare($0.orderKey, $1.orderKey)
+                return byKey != 0 ? byKey < 0 : CouchMerge.byteCompare($0.id, $1.id) < 0
+            },
             deletedBlocks: page.deletedBlocks)
     }
 

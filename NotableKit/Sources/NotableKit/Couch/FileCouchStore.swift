@@ -155,7 +155,8 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             let file = CouchMapping.pageFile(
                 from: page, id: id, existing: existing, notebookDir: dir,
                 backgroundsDirectory: backgroundsURL, sha256: cachedSHA256(of:),
-                keeping: survivingStrokes(in: existing, merged: page, basedOn: basedOn))
+                keeping: survivingStrokes(in: existing, merged: page, basedOn: basedOn),
+                keepingBlocks: survivingBlocks(in: existing, merged: page, basedOn: basedOn))
             try write(encoder.encode(file), to: pageURL(notebookId: notebookId, pageId: id))
             lock.withLock { pageIndex[id] = notebookId }
             noteWantedAssets(of: file, notebookDir: dir)
@@ -265,6 +266,23 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         let kept = Set(merged.strokes.map(\.id))
         let tombstoned = Set(merged.deletedStrokes.map(\.id))
         return existing.strokes.filter {
+            !seen.contains($0.id) && !kept.contains($0.id) && !tombstoned.contains($0.id)
+        }
+    }
+
+    /// Blocks on disk that this merge never saw — the typed-content twin of `survivingStrokes`,
+    /// and it exists for the same window: a paragraph typed while the merge was in flight reads as
+    /// "present locally, absent from the result", and would be dropped with no tombstone written
+    /// and nothing left dirty. Losing a sentence somebody just typed that way is worse than losing
+    /// a stroke, because they watched themselves type it.
+    private func survivingBlocks(
+        in existing: PageFile?, merged: CouchPage, basedOn: CouchDocBody?
+    ) -> [CouchBlock] {
+        guard let existing, case .page(let snapshot)? = basedOn else { return [] }
+        let seen = Set(snapshot.blocks.map(\.id))
+        let kept = Set(merged.blocks.map(\.id))
+        let tombstoned = Set(merged.deletedBlocks.map(\.id))
+        return existing.blocks.filter {
             !seen.contains($0.id) && !kept.contains($0.id) && !tombstoned.contains($0.id)
         }
     }
@@ -418,6 +436,24 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
             else { continue }
             wanted[assetID, default: []].append(relative)
             added = true
+        }
+        // A block's bytes are wanted on exactly the same terms, and this half is not optional: a
+        // recording that arrives with no want recorded merges, renders as a pill, and never plays,
+        // because nothing ever asks the server for it. A picture goes to the notebook's `images/`
+        // like any other; a recording's segments go to its `audio/`, filed under the hash that
+        // names them.
+        for block in file.blocks {
+            for (assetID, folder) in block.wantedAssets {
+                let url = notebookDir
+                    .appendingPathComponent(folder, isDirectory: true)
+                    .appendingPathComponent(CouchAssetID.sha256Hex(ofAssetID: assetID) ?? assetID)
+                guard !FileManager.default.fileExists(atPath: url.path),
+                      let relative = relativeToRoot(url),
+                      !(wanted[assetID] ?? []).contains(relative)
+                else { continue }
+                wanted[assetID, default: []].append(relative)
+                added = true
+            }
         }
         guard added else { return }
         writeWantedAssets(wanted.mapValues { $0.sorted() })
