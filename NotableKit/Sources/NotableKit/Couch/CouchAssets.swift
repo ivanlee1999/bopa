@@ -148,6 +148,16 @@ public enum CouchAssetID {
         }
         if starts(with: Array("ftypheic".utf8), at: 4) { return "image/heic" }
         if starts(with: Array("%PDF".utf8)) { return "application/pdf" }
+        // Recordings. `M4A ` — trailing space, it is a four-character box type — is what an audio
+        // file *should* be branded, but Android's MediaRecorder routinely writes an audio-only
+        // .m4a branded `isom` or `mp42`, so sniffing only `M4A ` would label most recordings made
+        // on the BOOX as raw bytes. Those three are also video-MP4 brands; this protocol carries no
+        // video, so the ambiguity is unreachable — and a future video kind must pass its content
+        // type explicitly rather than rely on this.
+        for brand in ["ftypM4A ", "ftypisom", "ftypiso2", "ftypmp41", "ftypmp42"]
+        where starts(with: Array(brand.utf8), at: 4) {
+            return "audio/mp4"
+        }
         return "application/octet-stream"
     }
 

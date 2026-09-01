@@ -19,6 +19,21 @@
 				<string>CA92.1</string>
 			</array>
 		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!--
+				  C617.1: timestamps of files inside this app's own container.
+				  `NotebookStore.pageRevision` stats a page file for its modification date, which is
+				  the cache key thumbnails and the next-page preview are built on; reading the page's
+				  own `updatedAt` instead would mean decoding megabytes of ink for every cell of a
+				  scrolling grid. This was under-declared until now — the API was already in use.
+				-->
+				<string>C617.1</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

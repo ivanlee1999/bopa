@@ -112,6 +112,38 @@ struct PageBlockWireTests {
         #expect(halfDeclared.isFlowing)
     }
 
+    /// A recording's segments are wanted in `audio/`, a picture in `images/`. Where a device keeps
+    /// bytes is not protocol, but the two apps agree on it so a library copied between them by hand
+    /// still resolves.
+    @Test("A block's assets each name the folder they belong in")
+    func wantedAssetsNameTheirFolder() {
+        #expect(recording.wantedAssets.map(\.folder) == ["audio", "audio"])
+
+        var picture = paragraph
+        picture.kind = "image"
+        picture.imageAssetId = "asset:cc"
+        #expect(picture.wantedAssets.map(\.folder) == ["images"])
+        #expect(paragraph.wantedAssets.isEmpty)
+    }
+
+    /// A paragraph typed while a merge was in flight is kept — the twin of the surviving-strokes
+    /// rule — but unlike a stroke, where last also means topmost, it has to land where its key says.
+    @Test("A block kept through a merge lands in flow order, not at the end")
+    func blocksKeptThroughAMergeLandInFlowOrder() {
+        let dir = URL(fileURLWithPath: "/tmp/does-not-need-to-exist")
+        let typedDuringTheMerge = CouchBlock(
+            id: "b-mid", kind: "md", orderKey: "a0V", text: "typed while syncing",
+            createdAt: "2026-09-01T10:07:00Z", updatedAt: "2026-09-01T10:07:00Z")
+
+        let merged = page([paragraph, recording])
+        let file = CouchMapping.pageFile(
+            from: merged, id: "p1", existing: nil, notebookDir: dir,
+            keepingBlocks: [typedDuringTheMerge])
+
+        // a0 < a0V < a1 — between the two it was typed between, not appended after them.
+        #expect(file.blocks.map(\.id) == ["b1", "b-mid", "b2"])
+    }
+
     /// What the push ordering and the asset collector both read.
     @Test("A block reports the assets its bytes live in")
     func referencedAssets() {
