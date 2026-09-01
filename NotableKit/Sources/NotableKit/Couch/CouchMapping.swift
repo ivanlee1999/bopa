@@ -40,6 +40,12 @@ public enum CouchMapping {
                 couchImage(from: $0, notebookDir: notebookDir, sha256: sha256)
             },
             deletedImages: file.deletedImages,
+            // Verbatim in both directions. Unlike a placed image, whose `uri` is a local path that
+            // has to be translated into the asset holding its bytes, a block already names its
+            // assets by id on both sides — so there is nothing here to translate, and nothing to
+            // get wrong.
+            blocks: file.blocks,
+            deletedBlocks: file.deletedBlocks,
             createdAt: file.createdAt,
             updatedAt: file.updatedAt,
             updatedBy: file.updatedBy.isEmpty ? deviceID : file.updatedBy)
@@ -100,7 +106,9 @@ public enum CouchMapping {
             },
             deletedStrokes: page.deletedStrokes,
             deletedImages: page.deletedImages,
-            updatedBy: page.updatedBy)
+            updatedBy: page.updatedBy,
+            blocks: page.blocks,
+            deletedBlocks: page.deletedBlocks)
     }
 
     // MARK: Backgrounds

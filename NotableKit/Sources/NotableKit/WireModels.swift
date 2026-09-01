@@ -149,6 +149,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         case version, id, notebookId, title, background, backgroundType, parentFolderId, scroll
         case pageWidth, pageHeight
         case createdAt, updatedAt, strokes, images, deletedStrokes, deletedImages, updatedBy
+        case blocks, deletedBlocks
     }
 
     public var version: Int
@@ -185,6 +186,16 @@ public struct PageFile: Codable, Equatable, Sendable {
     public var deletedImages: [CouchTombstone]
     /// Which device last wrote this page. Breaks scalar ties in the merge.
     public var updatedBy: String
+    /// Typed text, pictures, recordings and ink groupings — see `CouchBlock`.
+    ///
+    /// Carried here as well as in the CouchDB document because this file *is* the local on-disk
+    /// format: a field the page file has no room for is a field that does not survive a restart.
+    /// A stock Notable install syncing over WebDAV parses with unknown keys allowed and rewrites
+    /// the file without them, so blocks are safe over CouchDB and lost through that route — the
+    /// same limitation, and the same answer, as bookmarks and the outline.
+    public var blocks: [CouchBlock]
+    /// The block half of [deletedStrokes].
+    public var deletedBlocks: [CouchTombstone]
 
     public init(
         version: Int = 1,
@@ -203,7 +214,9 @@ public struct PageFile: Codable, Equatable, Sendable {
         images: [ImageDTO] = [],
         deletedStrokes: [CouchTombstone] = [],
         deletedImages: [CouchTombstone] = [],
-        updatedBy: String = ""
+        updatedBy: String = "",
+        blocks: [CouchBlock] = [],
+        deletedBlocks: [CouchTombstone] = []
     ) {
         self.version = version
         self.id = id
@@ -222,6 +235,8 @@ public struct PageFile: Codable, Equatable, Sendable {
         self.deletedStrokes = deletedStrokes
         self.deletedImages = deletedImages
         self.updatedBy = updatedBy
+        self.blocks = blocks
+        self.deletedBlocks = deletedBlocks
     }
 
     public init(from decoder: Decoder) throws {
@@ -246,6 +261,8 @@ public struct PageFile: Codable, Equatable, Sendable {
         deletedStrokes = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedStrokes) ?? []
         deletedImages = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedImages) ?? []
         updatedBy = try c.decodeIfPresent(String.self, forKey: .updatedBy) ?? ""
+        blocks = try c.decodeIfPresent([CouchBlock].self, forKey: .blocks) ?? []
+        deletedBlocks = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedBlocks) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -267,6 +284,8 @@ public struct PageFile: Codable, Equatable, Sendable {
         try c.encode(deletedStrokes, forKey: .deletedStrokes)
         try c.encode(deletedImages, forKey: .deletedImages)
         try c.encode(updatedBy, forKey: .updatedBy)
+        try c.encode(blocks, forKey: .blocks)
+        try c.encode(deletedBlocks, forKey: .deletedBlocks)
     }
 }
 

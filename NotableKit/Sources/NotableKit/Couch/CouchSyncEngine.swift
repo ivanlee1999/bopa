@@ -108,13 +108,21 @@ public enum CouchDocBody: Equatable, Sendable {
         }
     }
 
-    /// The `asset:` documents this body names — a page's pictures and background, a notebook's
-    /// default background. The engine uses this to send an asset's bytes before the document that
-    /// places them, and to fetch them when one arrives.
+    /// The `asset:` documents this body names — a page's pictures, the pictures and recordings its
+    /// blocks carry, and its background; a notebook's default background. The engine uses this to
+    /// send an asset's bytes before the document that places them, and to fetch them when one
+    /// arrives.
+    ///
+    /// It is also the referenced set the asset collector works from (protocol §3.5.1), which is why
+    /// blocks belong here from the moment the field can be read rather than from the moment
+    /// something writes one: a device that did not count a block's assets as referenced could
+    /// publish a ledger declaring a recording garbage.
     var referencedAssetIDs: [String] {
         switch self {
         case .page(let page):
-            return (page.images.compactMap(\.assetId) + [page.background])
+            return (page.images.compactMap(\.assetId)
+                    + page.blocks.flatMap(\.referencedAssetIDs)
+                    + [page.background])
                 .filter { CouchAssetID.sha256Hex(ofAssetID: $0) != nil }
         case .notebook(let notebook):
             return [notebook.defaultBackground]

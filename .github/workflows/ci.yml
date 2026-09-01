@@ -34,6 +34,29 @@ jobs:
         # is what actually gates.
         continue-on-error: true
 
+      # A vectors change has to land in both repos and git cannot make that one commit, so the two
+      # PRs are each red until the other merges: this repo diffs against notable's *default* branch,
+      # which does not have the new file yet, and notable's job diffs against ours for the same
+      # reason. Neither can go first without someone overriding the check, and a check that is
+      # routinely overridden stops being a check.
+      #
+      # So when notable has a branch named the same as this PR's, diff against that. The twin PRs go
+      # green together and merge together, which is the workflow the shared-vector design assumes.
+      # Anything else — a lone change here, a push to main — falls back to the default branch and
+      # gates exactly as before.
+      - name: Prefer notable's matching branch
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        working-directory: .notable
+        run: |
+          branch='${{ github.head_ref }}'
+          if git fetch --depth 1 origin "$branch" 2>/dev/null; then
+            git checkout -q FETCH_HEAD
+            echo "::notice::notable has a branch named $branch; diffing the vectors against it."
+          else
+            echo "notable has no $branch; diffing against its default branch."
+          fi
+
       - name: Diff the vectors
         run: |
           mine=docs/couch-sync-vectors/vectors.json
