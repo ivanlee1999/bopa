@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "note": "Shared markdown block-segmentation cases. Identical file in bopa and notable. Every case asserts split(source) == blocks, and additionally that split(join(blocks)) == blocks: joining with a blank line is reversible for anything this function produced, provided at most one block leaves a fence open and it is the last. See docs/couch-sync-protocol.md.",
+  "cases": [
+    {
+      "name": "empty-yields-no-blocks",
+      "why": "A page with no text is a page with no blocks, not a page with one empty one.",
+      "source": "",
+      "blocks": []
+    },
+    {
+      "name": "only-whitespace-yields-no-blocks",
+      "why": "Spaces and tabs are separators, so a document of nothing but separators has nothing to separate.",
+      "source": "   \n\t\n",
+      "blocks": []
+    },
+    {
+      "name": "single-paragraph",
+      "why": "The ordinary case.",
+      "source": "hello world",
+      "blocks": [
+        "hello world"
+      ]
+    },
+    {
+      "name": "two-paragraphs",
+      "why": "A blank line is the boundary, and the only boundary.",
+      "source": "one\n\ntwo",
+      "blocks": [
+        "one",
+        "two"
+      ]
+    },
+    {
+      "name": "many-blank-lines-are-one-separator",
+      "why": "A run of blank lines separates once. Otherwise a document with breathing room in it would mint empty blocks, each with an id, each merging for ever.",
+      "source": "one\n\n\n  \n\ntwo",
+      "blocks": [
+        "one",
+        "two"
+      ]
+    },
+    {
+      "name": "leading-and-trailing-blank-lines-dropped",
+      "why": "No block begins or ends with a blank line, which is what makes joining with a blank line reversible.",
+      "source": "\n\n  \nbody\n\n\n",
+      "blocks": [
+        "body"
+      ]
+    },
+    {
+      "name": "crlf-normalized",
+      "why": "A file written on Windows, or pasted from one, must split the same as one written here.",
+      "source": "one\r\n\r\ntwo",
+      "blocks": [
+        "one",
+        "two"
+      ]
+    },
+    {
+      "name": "lone-cr-normalized",
+      "why": "Classic-Mac line endings are rare but cost one line to handle, and would otherwise read as a single unsplittable block.",
+      "source": "one\r\rtwo",
+      "blocks": [
+        "one",
+        "two"
+      ]
+    },
+    {
+      "name": "bom-stripped",
+      "why": "A leading byte-order mark would otherwise ride inside the first block's text for ever, invisible and merged.",
+      "source": "\ufeffhello",
+      "blocks": [
+        "hello"
+      ]
+    },
+    {
+      "name": "heading-and-paragraph",
+      "why": "The shape of almost every note: a heading, a blank line, prose.",
+      "source": "# Title\n\nSome prose.",
+      "blocks": [
+        "# Title",
+        "Some prose."
+      ]
+    },
+    {
+      "name": "fenced-code-with-blank-line-stays-one-block",
+      "why": "The reason the rule is not simply 'split on blank lines'. A blank line inside a code fence is part of the code.",
+      "source": "```swift\nlet a = 1\n\nlet b = 2\n```",
+      "blocks": [
+        "```swift\nlet a = 1\n\nlet b = 2\n```"
+      ]
+    },
+    {
+      "name": "tilde-fence",
+      "why": "Tildes open a fence exactly as backticks do, and a tilde fence is not closed by backticks.",
+      "source": "~~~\na\n\nb\n~~~",
+      "blocks": [
+        "~~~\na\n\nb\n~~~"
+      ]
+    },
+    {
+      "name": "unclosed-fence-runs-to-end",
+      "why": "A fence nobody closed swallows the rest of the document, rather than silently reverting to blank-line splitting halfway through.",
+      "source": "```\na\n\nb",
+      "blocks": [
+        "```\na\n\nb"
+      ]
+    },
+    {
+      "name": "fence-indented-up-to-three-spaces",
+      "why": "Up to three leading spaces still opens a fence \u2014 the same allowance CommonMark makes, and the one a nested list item needs.",
+      "source": "   ```\na\n\nb\n   ```",
+      "blocks": [
+        "   ```\na\n\nb\n   ```"
+      ]
+    },
+    {
+      "name": "four-space-indent-is-not-a-fence",
+      "why": "Four spaces is indented code, not a fence. Treating it as one would swallow the rest of the document.",
+      "source": "    ```\n\ntext",
+      "blocks": [
+        "    ```",
+        "text"
+      ]
+    },
+    {
+      "name": "shorter-run-does-not-close-a-longer-fence",
+      "why": "A closing fence must be at least as long as the one that opened it. A four-backtick fence is how you show three backticks inside code, so a three-backtick line within it must not end the block and let the blank line above split it.",
+      "source": "````\na\n\n```\nb\n````",
+      "blocks": [
+        "````\na\n\n```\nb\n````"
+      ]
+    },
+    {
+      "name": "front-matter-is-one-block",
+      "why": "A note's front matter is a unit: splitting it would put an id on each key and let two devices merge half of one and half of another.",
+      "source": "---\ntitle: Note\ntags: [a, b]\n---\n\nbody",
+      "blocks": [
+        "---\ntitle: Note\ntags: [a, b]\n---",
+        "body"
+      ]
+    },
+    {
+      "name": "unterminated-front-matter-is-not-special",
+      "why": "Three dashes with no closing pair before the first blank line is a thematic break followed by prose, not front matter. Requiring the closer inside the first paragraph is what keeps the decision local: otherwise gluing this document in front of one that happens to contain `---` would retroactively turn its opening into front matter and swallow everything between.",
+      "source": "---\ntitle: Note\n\nbody",
+      "blocks": [
+        "---\ntitle: Note",
+        "body"
+      ]
+    },
+    {
+      "name": "front-matter-closer-after-a-blank-line-is-not-front-matter",
+      "why": "The closer has to arrive before the first blank line. That is what keeps the decision local to the opening paragraph: if a `---` anywhere later could turn the opening into front matter, then gluing this document in front of one that happens to contain a thematic break would silently swallow everything between them.",
+      "source": "---\ntitle: Note\n\nbody\n\n---\n\nmore",
+      "blocks": [
+        "---\ntitle: Note",
+        "body",
+        "---",
+        "more"
+      ]
+    },
+    {
+      "name": "tight-list-is-one-block",
+      "why": "A list with no blank lines between items is one block, so editing an item is one edit.",
+      "source": "- milk\n- eggs\n- bread",
+      "blocks": [
+        "- milk\n- eggs\n- bread"
+      ]
+    },
+    {
+      "name": "loose-list-splits",
+      "why": "The accepted cost, written down so it is not mistaken for a bug: a list with blank lines between its items becomes a block per item. Rejoining reproduces the source byte for byte, so the file is unchanged and only the merge granularity differs. The rule never asks either implementation what markdown means, which is what lets two of them agree.",
+      "source": "- milk\n\n- eggs",
+      "blocks": [
+        "- milk",
+        "- eggs"
+      ]
+    }
+  ]
+}
