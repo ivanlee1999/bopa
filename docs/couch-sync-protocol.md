@@ -241,6 +241,13 @@ implementations clamp identically, or they would render different outlines from 
   "images": [ { "id": "<uuid>", "assetId": "asset:<sha256>", "x": 0, "y": 0,
                 "width": 0, "height": 0, "createdAt": "…", "updatedAt": "…" } ],
   "deletedImages": [ { "id": "<uuid>", "deletedAt": "…" } ],
+  "blocks": [ { "id": "<uuid>", "kind": "md", "orderKey": "a0",
+                "text": "## Groceries", "imageAssetId": null,
+                "segments": [], "strokeIds": [],
+                "x": null, "y": null, "width": null, "height": null,
+                "startedAt": null,
+                "createdAt": "…", "updatedAt": "…", "deviceId": "ipad" } ],
+  "deletedBlocks": [ { "id": "<uuid>", "deletedAt": "…" } ],
   "createdAt": "…", "updatedAt": "…", "updatedBy": "boox" }
 ```
 
@@ -248,6 +255,83 @@ Stroke geometry fields (`pen`, `color`, `size`, `maxPressure`, bounds, `pointsDa
 the existing WebDAV wire semantics unchanged — see
 [notable-sync-protocol.md](notable-sync-protocol.md) §4. `color` is a **signed** 32-bit
 Android ARGB int. `pointsData` is base64 of the SB binary encoding.
+
+#### 3.3.1 block
+
+Content that is not ink: typed markdown, a placed picture, a recording, a grouping of strokes.
+
+| field | meaning |
+|---|---|
+| `id` | merge key. Never reused — retyping a deleted paragraph mints a new id, the rule that makes remove-wins sound here as it is for a stroke. |
+| `kind` | `md` \| `image` \| `audio` \| `ink`. Matches `[a-z][a-z0-9-]*`. An unrecognized value is **carried verbatim and rendered as a placeholder**, never dropped or coerced — this is what lets a fifth kind ship on one app before the other without §6.5 quarantining every page that uses it. |
+| `orderKey` | position in the page's flow; see below. Compared as UTF-8 bytes (§4). Empty is legal and sorts first. |
+| `text` | markdown **source**, for `kind: "md"`. Not a parsed tree, not rendered HTML, not attributed runs: those oblige two implementations to agree on a parser, which the vectors cannot pin and which a peer with a different flavour rewrites on re-encode. |
+| `imageAssetId` | the `asset:<sha256>` holding the picture, for `kind: "image"`. |
+| `segments` | the recording, in playback order, for `kind: "audio"` — see §3.3.2. |
+| `strokeIds` | the `strokes[]` this block groups, for `kind: "ink"`. The strokes **stay in `strokes[]`**; see below. |
+| `x`, `y`, `width`, `height` | page units, top-left, same space and same integer type as an image's. **Both `x` and `y` absent means the block joins the flow; both present means it sits at that point. Exactly one present means flowing** — a reader rule, never a decode failure. |
+| `startedAt` | when a recording began, on the corrected clock (§7.1a). A stroke's offset into it is `stroke.createdAt − startedAt`, so no per-stroke wire field is needed. |
+| `createdAt`, `updatedAt`, `deviceId` | as elsewhere. |
+
+The flowing blocks of a page, in `(orderKey, id)` order, with their `text` joined by a blank
+line, are a markdown document — see §9 for where the boundaries fall.
+
+**Order is carried per block, not by the array.** An ordered array makes a page's document order
+an implicit *scalar*: §5.5 hands one writer the whole scalar envelope, so a paragraph dragged up
+on one device would be silently put back by an unrelated typo fix on the other. A per-block key
+makes those two independent edits and both survive. It also means only the **comparison** of keys
+has to agree between implementations, which §4 already guarantees — never their generation. Two
+devices minting different keys for concurrent inserts at one point are not in disagreement; the
+blocks sort adjacent, broken by `id`.
+
+Key generation is **advisory**. Both apps use the 64 characters `0-9 A-Z _ a-z -` in ASCII order
+— all single UTF-8 bytes, none of them the `blockTiebreak` separator — and no key ends in the
+lowest character, which is what makes "strictly between" always solvable. Appending does not grow
+a key; prepending or inserting between two adjacent blocks grows it by at most one character per
+insertion at that point.
+
+**Keys are never rebalanced.** A rebalance rewrites `orderKey` and `updatedAt` on every block of
+the page, which under §5.5 is a concurrent edit against every block a peer touched: either the
+rebalance is newer and the peer's text edits die, or the peer's edit is newer and its block keeps
+a pre-rebalance key and lands somewhere arbitrary. There is no safe outcome and no way for the
+rebalancing device to know an edit is in flight. Keys grow instead — a user pressing Return ten
+thousand times in one spot costs a 10 KB key on a page whose `pointsData` runs to tens of
+kilobytes. A writer MAY log a key over 128 bytes; it MUST NOT act on one.
+
+**An `ink` block names strokes rather than containing them.** With the strokes flat, a peer that
+has not learned about blocks strips the *grouping*, and the union merge restores it from the
+device that still holds it. Nested, the same push would strip the *strokes*, and they would be
+gone from the array the peer would have re-offered them from — the difference between losing a
+feature and losing content. It also keeps §6.6's sheet division and §6.1a's "content the merge
+saw" single-level. Ids naming strokes that no longer exist are kept, not filtered; readers skip
+them, as §5.2.2 keeps an outline entry whose page is gone. If two live blocks name one stroke
+after a merge, the block with the byte-lower `id` owns it.
+
+#### 3.3.2 audio segment
+
+```json
+{ "assetId": "asset:<sha256>", "startMs": 0, "durationMs": 120000 }
+```
+
+A recording is several assets rather than one because an asset travels as a single base64-inlined
+`PUT` with no chunking layer (§3.4), and the smallest request-body cap on the path refuses much
+over 768 KiB of raw bytes. Segmenting also bounds what a crash loses and lets a recording still in
+progress reach the peer.
+
+A writer closes the current segment at **640 KiB of finalized output or 120 seconds, whichever
+comes first**, and always on stop. Sizing by bytes rather than by time is what makes the rule
+independent of whatever bitrate a device's encoder actually produced. 640 KiB inflates to roughly
+874 KB on the wire, which leaves headroom under a default nginx `client_max_body_size` of 1 MB —
+so audio works on an unconfigured deployment, unlike photographs.
+
+`startMs` is authoritative and is **not** derived by summing durations: a reader that has not
+fetched segment 2 still needs to know where segment 3 begins, or everything after a gap plays at
+the wrong offset. A missing segment is a silent gap, never a shift. `durationMs` is advisory, and
+a disagreement with the next segment's `startMs` resolves in `startMs`'s favour.
+
+A segment becomes an asset **only after the recorder finalizes its container**, so a partial
+upload can never mean a corrupt asset. Segments are pushed as they finalize, ahead of the page
+that names them.
 
 ### 3.4 asset
 
@@ -341,8 +425,15 @@ a swept asset that is still referenced is never repaired by the one device that 
 
 An asset is **referenced** if any **live** document names it:
 
-- a page's `images[].assetId`, or its `background`;
+- a page's `images[].assetId`, its `background`, or any asset one of its `blocks` names —
+  `imageAssetId`, and every entry of `segments[].assetId` (§3.3.1);
 - a notebook's `defaultBackground`.
+
+The block clause is the reason this section had to be amended in the same release that taught the
+apps to *read* a block, rather than in the one that lets them write one. §3.5.3 makes a sweep
+require unanimity among active devices, and unanimity reached because one voter could not see a
+reference is not unanimity — it is a device deleting somebody's lecture recording on the strength
+of not knowing what a block is.
 
 **Live** means not a `_deleted` tombstone. A **trashed** document — one carrying `deletedAt`
 (§3.2) — is live and its references count, because trashing is not deleting and its pages are
@@ -529,7 +620,28 @@ signed). Rendering unsigned on both sides matters only for floats with the sign 
 which no vector covers, so the vectors cannot catch getting this wrong. Bit patterns are
 used at all because the two languages' default float *printing* does not agree, while their
 bit patterns are identical by definition. For an image, the same shape over
-`assetId|createdAt|updatedAt|x|y|width|height` (no floats involved).
+`assetId|createdAt|updatedAt|x|y|width|height` (no floats involved). For a block:
+
+```
+deviceId|createdAt|updatedAt|kind|orderKey|
+x|y|width|height|startedAt|imageAssetId|
+segments|strokeIds|text
+```
+
+where an absent optional renders as the empty string, `segments` renders as
+`assetId:startMs:durationMs` triples joined by `,`, and `strokeIds` joins by `,`. **No floats
+appear**, by construction rather than by luck: a block's geometry is integer page units exactly
+like an image's, so the bit-pattern rendering above is unreachable here.
+
+`text` is **last, and last deliberately**: it is the only component that can itself contain a `|`
+or a newline. Every field before it is drawn from a grammar that excludes the separator — ids and
+asset ids are UUID- or `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal, and
+`kind` is normatively `[a-z][a-z0-9-]*`. With exactly one separator-bearing component, and it
+terminal, the map from block to key is injective and the order is genuinely total.
+
+> Comparing a *decoded field's* string value, as `pen`, `pointsData` and `text` all do, is not the
+> same thing as comparing raw document text, which the note below forbids. The prohibition is on
+> the JSON — because the two languages print floats differently — not on the values.
 
 > **Float rendering differs between the two apps and that is fine.** Swift's encoder writes a
 > whole-valued float as `0`/`1`; Kotlin writes `0.0`/`1.0`. The same document therefore does
@@ -560,9 +672,14 @@ strokes = unionById(a.strokes, b.strokes, pick: by (millis(updatedAt), id, canon
             .filter { $0.id ∉ tombS }
             .sorted  by (millis(createdAt) asc, id asc)
 images  = same shape, tombI, sorted by (millis(createdAt) asc, id asc)
+tombB   = unionTombstones(a.deletedBlocks, b.deletedBlocks)
+blocks  = unionById(a.blocks, b.blocks, pick: by (millis(updatedAt), blockTiebreak) desc)
+            .filter { $0.id ∉ tombB }
+            .sorted  by (orderKey bytes asc, id bytes asc)
 w       = pick(a, b)
 result  = { notebookId, background, backgroundType from w
             strokes, images, deletedStrokes: tombS, deletedImages: tombI
+            blocks, deletedBlocks: tombB
             createdAt: whichever source string has the smaller millis (ties keep either)
             updatedAt: whichever source string has the larger  millis (ties keep either)
             updatedBy: w.updatedBy
@@ -572,7 +689,27 @@ result  = { notebookId, background, backgroundType from w
 
 Erasure beats drawing: a stroke present on one side and tombstoned on the other is
 absent from the result on both devices. Because stroke ids are never reused (a redraw
-mints a new id), "remove wins" cannot suppress later work.
+mints a new id), "remove wins" cannot suppress later work. The same holds for a block, for the
+same reason: a retyped paragraph is a new block with a new id.
+
+The block clause is the image clause with a different sort key, and the difference is the point.
+Strokes and images order by *when they were made*, because that decides which of two overlapping
+marks is on top. A document orders by *where its paragraphs are*, and a creation instant cannot
+say "between these two" — so a block carries its own key (§3.3.1) and the merge sorts on it. The
+sort is total because `unionById` has already made the ids unique, and the sorted result makes
+the encoded document byte-stable across devices, the property `deletedStrokes` and `bookmarks`
+already get.
+
+`blocks` and `deletedBlocks` are **collections, not scalars**, and are excluded from `scalarKey`
+like every other collection — so `pageScalarKey` is unchanged and commutativity is untouched.
+This is also what makes the staged rollout survivable: a peer that has never heard of blocks
+writes the page back without them, and the union hands them straight back on the next merge. An
+unknown *scalar* is erased and gone; an unknown *collection* is erased and re-offered. The
+shipped page-title bug destroyed data because `title` is a scalar.
+
+Block tombstones prune on the 30-day horizon with stroke and image tombstones (§6.6). Unlike
+`deletedPageIds` and removed outline entries, a block tombstone names content, not a position, so
+it carries no structural identity the merge needs indefinitely.
 
 ### 5.2 mergeNotebook(a, b)
 
@@ -1171,3 +1308,58 @@ else**. The second is the one that fails if §6.4's content clock is ever droppe
 goes back to reading the envelope alone. It runs a step longer than every other scenario because
 the survival happens on the drawing device and reaches the deleting one only on a further pull —
 see §5.5, which also states the `draw` fidelity requirement both runners must meet.
+
+## 9. Markdown block segmentation
+
+Where a markdown document is cut into blocks. **Normative**, because the boundaries decide block
+ids, ids decide what §5.1 treats as the same paragraph, and a rule that drifts between the apps
+does not merely render differently — it duplicates the user's paragraphs on the next merge.
+
+```
+split(source) -> [String]
+```
+
+1. **Normalize.** Strip a leading UTF-8 BOM. Replace `\r\n` and lone `\r` with `\n`. Nothing else:
+   tabs are not expanded and interior whitespace is untouched, because both would edit the text.
+2. **Front matter.** If the first line is exactly `---` *and* a line exactly `---` occurs before
+   the first blank line, everything through that closer is one block and segmentation resumes
+   after it. The "before the first blank line" clause keeps the decision local: without it,
+   whether a document opens with front matter would depend on whether a `---` turned up anywhere
+   later, so joining two documents could retroactively change the meaning of the first one's
+   opening.
+3. **Fences.** A fence opens on a line whose first non-space run, after at most three leading
+   spaces, is three or more backticks or three or more tildes. It closes on the next line with at
+   most three leading spaces, a run of at least as many of the *same* character, and nothing after
+   it but whitespace. "At least as many" is what lets a four-backtick fence hold three backticks
+   as content. Lines inside a fence are never separators; an unclosed fence runs to the end.
+4. **Separators.** Outside a fence, a maximal run of lines that are empty or only spaces and tabs
+   is one separator.
+5. **Blocks.** Each maximal run of non-separator lines is a block, its lines joined by `\n`.
+6. Empty input, or input that is only separators, yields no blocks.
+
+`join(blocks)` is `blocks` joined by `\n\n`.
+
+**Round trip.** `split(join(blocks)) == blocks` for any `blocks` this function produced, provided
+at most one block leaves a fence open and it is the last. That proviso is not theoretical: a block
+that opens a fence and never closes it absorbs whatever is joined after it, so an editor that
+reorders or pastes blocks must not move one out of last position. Both apps expose the predicate.
+
+**It does not have to agree with any markdown parser, and deliberately does not.** A list with
+blank lines between its items becomes a block per item. That is a stated granularity loss, not a
+bug: rejoining reproduces the source byte for byte, so the *file* is unchanged and only the merge
+granularity differs.
+
+CommonMark leaf blocks were considered and rejected. A list is a *container*, so its leaf blocks
+are the paragraphs inside its items — `- milk\n- eggs` would split into two paragraphs that rejoin
+as a *loose* list, and the round trip fails. It would also put two third-party parsers on the
+critical path of block identity, tracking spec revisions on their own schedules, so a dependency
+bump on one side could move a boundary and duplicate a paragraph. The rule above is defined over
+the one thing two implementations cannot disagree about — where the blank lines are — and never
+asks either of them what markdown *means*.
+
+Splitting is a **transport granularity, not a rendering decision.** Each app renders a block with
+whatever markdown renderer it prefers, and the two may legitimately disagree about rendering while
+never disagreeing about the merge.
+
+Pinned by `docs/couch-sync-vectors/markdown-blocks.json`, byte-identical in both repos and diffed
+by both CIs alongside the merge vectors.
