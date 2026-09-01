@@ -76,6 +76,30 @@ jobs:
           [ $status -eq 0 ] && echo "couch sync vectors match"
           exit $status
 
+  # Build-only, deliberately. The regression that actually happens on a Catalyst target is
+  # "someone wrote iOS-only code and the Mac stopped compiling", and a build catches all of it in
+  # a couple of minutes. The unit tests stay on the iPad simulator: their snapshots are recorded
+  # at iPad metrics and would not match Mac ones.
+  catalyst:
+    name: App (Mac Catalyst)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: App
+        run: xcodegen generate
+
+      - name: Build
+        working-directory: App
+        run: |
+          xcodebuild build -project Bopa.xcodeproj -scheme Bopa \
+            -destination 'platform=macOS,variant=Mac Catalyst,arch=arm64' \
+            CODE_SIGNING_ALLOWED=NO
+
   notablekit:
     name: NotableKit
     runs-on: macos-latest

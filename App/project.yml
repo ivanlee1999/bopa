@@ -59,7 +59,16 @@ targets:
         MARKETING_VERSION: 0.2.0
         CURRENT_PROJECT_VERSION: 1
         TARGETED_DEVICE_FAMILY: "1,2"
-        SUPPORTS_MACCATALYST: NO
+        # The Mac build. Catalyst rather than a native AppKit target because there is no AppKit
+        # `PKCanvasView` — macOS PencilKit gives you the model and no canvas view — so a native
+        # target would mean writing a stroke renderer and an input pipeline from scratch, plus a
+        # paired implementation of every iOS-only SwiftUI modifier this app uses. NotableKit is
+        # already `.macOS(.v13)` and imports nothing but Foundation/CoreGraphics/CryptoKit, so
+        # sync, merge, storage, templates and page geometry come across for free.
+        SUPPORTS_MACCATALYST: YES
+        # Defaults to YES, which would make the Mac build `maccatalyst.dev.ivan.bopa` and give it
+        # its own container — a second, invisible library on the same machine.
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
