@@ -59,18 +59,22 @@ jobs:
 
       - name: Diff the vectors
         run: |
-          mine=docs/couch-sync-vectors/vectors.json
-          theirs=.notable/app/src/test/resources/couch-sync-vectors/vectors.json
-          if [ ! -f "$theirs" ]; then
-            echo "::warning::notable checkout unavailable; vector parity not checked."
-            exit 0
-          fi
-          if ! diff -u "$mine" "$theirs"; then
-            echo "::error::couch-sync vectors differ between the repos. They are one contract;"
-            echo "::error::copy the newer file across both repos in the same change."
-            exit 1
-          fi
-          echo "couch sync vectors match"
+          status=0
+          for name in vectors.json markdown-blocks.json; do
+            mine="docs/couch-sync-vectors/$name"
+            theirs=".notable/app/src/test/resources/couch-sync-vectors/$name"
+            if [ ! -f "$theirs" ]; then
+              echo "::warning::notable has no $name; parity for it not checked."
+              continue
+            fi
+            if ! diff -u "$mine" "$theirs"; then
+              echo "::error::$name differs between the repos. It is one contract;"
+              echo "::error::copy the newer file across both repos in the same change."
+              status=1
+            fi
+          done
+          [ $status -eq 0 ] && echo "couch sync vectors match"
+          exit $status
 
   notablekit:
     name: NotableKit

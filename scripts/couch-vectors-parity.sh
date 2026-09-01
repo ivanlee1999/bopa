@@ -17,11 +17,13 @@ fail() { printf '\033[1;31m%s\033[0m\n' "$*" >&2; }
 
 [ -d "$THEIRS" ] || { fail "no notable vectors at $THEIRS — set NOTABLE_DIR to your checkout"; exit 1; }
 
-# Only `vectors.json` is duplicated. The scenario file is read straight from this repo by both
-# runners (`couch-scenarios.sh` hands notable the path as a Gradle property), so it has one copy and
-# cannot drift.
+# Two files are duplicated: `vectors.json` (the merge) and `markdown-blocks.json` (where a document
+# is cut into blocks, which decides block ids and therefore what the merge treats as the same
+# paragraph). The scenario file is read straight from this repo by both runners
+# (`couch-scenarios.sh` hands notable the path as a Gradle property), so it has one copy and cannot
+# drift.
 status=0
-for name in vectors.json; do
+for name in vectors.json markdown-blocks.json; do
   if [ ! -f "$MINE/$name" ]; then
     fail "missing $MINE/$name"; status=1; continue
   fi
