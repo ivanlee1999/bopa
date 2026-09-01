@@ -291,17 +291,29 @@ public enum CouchMerge {
     /// `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal, and `kind` is
     /// normatively `[a-z][a-z0-9-]*` — so with exactly one separator-bearing component, and it
     /// terminal, the map from block to key is injective and this order is genuinely total.
+    /// Broken into named steps with explicit types rather than written as one array literal: the
+    /// literal mixed `String.init` — which is overloaded dozens of ways — with interpolation inside
+    /// a closure, and the type checker gave up on it ("unable to type-check this expression in
+    /// reasonable time"). The pieces below say what they are, so there is nothing to infer.
     private static func blockTiebreak(_ b: CouchBlock) -> String {
-        [
+        let segments: String = b.segments
+            .map { segment in "\(segment.assetId):\(segment.startMs):\(segment.durationMs)" }
+            .joined(separator: ",")
+        let strokeIDs: String = b.strokeIds.joined(separator: ",")
+        let parts: [String] = [
             b.deviceId, b.createdAt, b.updatedAt, b.kind, b.orderKey,
-            b.x.map(String.init) ?? "", b.y.map(String.init) ?? "",
-            b.width.map(String.init) ?? "", b.height.map(String.init) ?? "",
+            decimal(b.x), decimal(b.y), decimal(b.width), decimal(b.height),
             b.startedAt ?? "", b.imageAssetId ?? "",
-            b.segments.map { "\($0.assetId):\($0.startMs):\($0.durationMs)" }
-                .joined(separator: ","),
-            b.strokeIds.joined(separator: ","),
-            b.text ?? "",
-        ].joined(separator: "|")
+            segments, strokeIDs, b.text ?? "",
+        ]
+        return parts.joined(separator: "|")
+    }
+
+    /// An optional page-unit coordinate as the tiebreak spells it: its decimal form, or the empty
+    /// string when the block declares none.
+    private static func decimal(_ value: Int?) -> String {
+        guard let value else { return "" }
+        return String(value)
     }
 
     /// Sorts page content by `orderKey` with the key built **once per element** instead of once per
