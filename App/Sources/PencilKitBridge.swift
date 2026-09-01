@@ -268,6 +268,29 @@ enum PencilKitBridge {
             // stroke again by this value on the *next* save, so stamping "now" here — with the
             // save debounce putting "now" seconds after the draw — guaranteed the lookup missed
             // for every stroke drawn this session, and each save re-minted (and tombstoned) it.
+            //
+            // Note this is the *device* clock, not `SyncClock`'s corrected one, which every other
+            // stamp in a synced document reads (protocol §7.1a). That is a real inconsistency with
+            // the BOOX, whose `Stroke.createdAt` is corrected — and it is deliberate, because the
+            // field is doing double duty. It is a timestamp *and* it is the only identity channel
+            // PencilKit gives us, and the two want different things:
+            //
+            //   - correcting on export makes a loaded stroke's probe double-corrected, so it stops
+            //     matching the DTO it came from;
+            //   - correcting the probe as well fixes that only until the correction is re-measured
+            //     mid-session, after which every stroke loaded before the change misses.
+            //
+            // Either way the lookup misses and the churn described above comes back, which is
+            // worse than a clock that is off by the measured skew. Nothing today reads this as a
+            // wall-clock instant — §5.1 uses it only for z-order, where a device-wide constant
+            // offset changes nothing.
+            //
+            // Ink replay (§3.3.2) is the first thing that will, and it must not read it raw: the
+            // offset into a recording is `stroke.createdAt - block.startedAt`, and `startedAt` is
+            // corrected. Replay applies this device's current correction to the stroke instead of
+            // to the stamp, which costs nothing, needs no wire field, and leaves the identity
+            // channel alone. The residual error is then the drift in the correction itself between
+            // drawing and playing, rather than the correction's whole value.
             createdAt: NotableDate.format(stroke.path.creationDate),
             // Freshly encoded content is a real edit: the timestamp is what lets a trimmed
             // stroke beat the peer's intact copy of the same id in the merge.

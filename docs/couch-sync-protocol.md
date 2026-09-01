@@ -270,7 +270,7 @@ Content that is not ink: typed markdown, a placed picture, a recording, a groupi
 | `segments` | the recording, in playback order, for `kind: "audio"` — see §3.3.2. |
 | `strokeIds` | the `strokes[]` this block groups, for `kind: "ink"`. The strokes **stay in `strokes[]`**; see below. |
 | `x`, `y`, `width`, `height` | page units, top-left, same space and same integer type as an image's. **Both `x` and `y` absent means the block joins the flow; both present means it sits at that point. Exactly one present means flowing** — a reader rule, never a decode failure. |
-| `startedAt` | when a recording began, on the corrected clock (§7.1a). A stroke's offset into it is `stroke.createdAt − startedAt`, so no per-stroke wire field is needed. |
+| `startedAt` | when a recording began, on the corrected clock (§7.1a). A stroke's offset into it is `stroke.createdAt − startedAt`, so no per-stroke wire field is needed — but see the note below. |
 | `createdAt`, `updatedAt`, `deviceId` | as elsewhere. |
 
 The flowing blocks of a page, in `(orderKey, id)` order, with their `text` joined by a blank
@@ -332,6 +332,22 @@ a disagreement with the next segment's `startMs` resolves in `startMs`'s favour.
 A segment becomes an asset **only after the recorder finalizes its container**, so a partial
 upload can never mean a corrupt asset. Segments are pushed as they finalize, ahead of the page
 that names them.
+
+> **A stroke's `createdAt` is not always on the corrected clock, and replay must allow for it.**
+> §7.1a says every stamp landing in a synced document reads the corrected clock. The BOOX obeys
+> that for a stroke; the iPad does not, and cannot easily: there, `createdAt` is stamped from
+> PencilKit's `path.creationDate`, which is simultaneously the stroke's *identity* — the only
+> channel by which an untouched stroke is recognised across a save. Correcting it on export makes
+> a loaded stroke's probe double-corrected; correcting the probe too works until the measurement
+> changes mid-session. Either way strokes stop matching and every save re-mints and tombstones
+> them, which is worse than a clock off by the measured skew.
+>
+> Nothing else reads the field as a wall-clock instant — §5.1 uses it only for z-order, where a
+> device-wide constant offset changes nothing — so this has been invisible. Replay is the first
+> consumer that would notice, and the rule for it is: **apply the reader's correction to the
+> stroke, not to the stamp.** The residual error is then the drift in the correction between
+> drawing and playing rather than its whole value, no wire field is added, and the identity channel
+> is left alone.
 
 ### 3.4 asset
 
