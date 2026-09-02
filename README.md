@@ -1,4 +1,4 @@
-# bopa — BOOX ↔ iPad handwriting notes over WebDAV
+# bopa — BOOX ↔ iPad (and Mac) handwriting notes over WebDAV
 
 Handwritten notes editable on both a BOOX e-ink tablet and an iPad, synced through any generic
 WebDAV server. No proprietary cloud, no manual import taps.
@@ -59,11 +59,28 @@ produces a signed `.ipa` in `build/export`. Create the app record in App Store C
 yourself as an internal tester. The app icon, privacy manifest (UserDefaults, reason
 CA92.1) and export-compliance declaration are already in place.
 
+## Running it on a Mac
+
+The same target builds as a Mac Catalyst app (Xcode: pick *My Mac (Mac Catalyst)* and Run;
+`./scripts/test.sh mac` is the build-only check CI runs). It is the whole app — library, editor,
+CouchDB and WebDAV sync — with the trackpad drawing and ⌘[ / ⌘] / ⌘⇧N turning and adding pages,
+since a mouse wheel cannot pull past the bottom of a sheet. Apple Pencil settings are hidden
+there because there is no Pencil. To hand a build to someone:
+
+```bash
+NOTARY_PROFILE=<notarytool keychain profile> ./scripts/archive.sh <YOUR_TEAM_ID> "" mac
+```
+
+exports a Developer ID-signed, notarised `.app` into `build/export-mac`. Without
+`NOTARY_PROFILE` it still builds, but Gatekeeper will call it damaged until it is opened once via
+right-click › Open. [docs/mac-checklist.md](docs/mac-checklist.md) is what to try by hand after
+a change that touches the Mac.
+
 ## Repo layout
 
 ```
 docs/          protocol spec and design notes
-scripts/       archive.sh (TestFlight builds), webdav-check.sh (server diagnosis)
+scripts/       archive.sh (TestFlight / notarised Mac builds), webdav-check.sh (server diagnosis)
 tools/         dbverify / dbimport / dbexport / icongen
 NotableKit/    Swift package: format codec + sync engine (M1/M3)
 App/           iPad app (M2+)
