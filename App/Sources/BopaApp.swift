@@ -2,6 +2,10 @@ import SwiftUI
 
 @main
 struct BopaApp: App {
+    #if targetEnvironment(macCatalyst)
+    // Only for the scene delegate that sizes the window; see `MacWindow.swift`.
+    @UIApplicationDelegateAdaptor(MacAppDelegate.self) private var appDelegate
+    #endif
     @StateObject private var store = NotebookStore()
     @StateObject private var syncCoordinator = SyncCoordinator()
     @StateObject private var handwriting = HandwritingSettings()
