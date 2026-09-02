@@ -433,6 +433,10 @@ final class EditorPageModel: NSObject, ObservableObject {
         page.backgroundType = onDisk.backgroundType
         page.pageWidth = onDisk.pageWidth
         page.pageHeight = onDisk.pageHeight
+        // Nothing here draws a block yet, but `page` is what the next save writes, and a copy
+        // that stopped tracking the file would hand `savePage` a stale list to fold back in.
+        page.blocks = onDisk.blocks
+        page.deletedBlocks = onDisk.deletedBlocks
         self.page = page
         let notebookDir = store.notebookDirURL(notebookId)
         pageBackground = BackgroundRenderer.image(
@@ -452,6 +456,8 @@ final class EditorPageModel: NSObject, ObservableObject {
         let backgroundType: String
         let pageWidth: Int?
         let pageHeight: Int?
+        let blocks: [CouchBlock]
+        let deletedBlocks: [CouchTombstone]
 
         init(of page: PageFile) {
             images = page.images
@@ -459,6 +465,8 @@ final class EditorPageModel: NSObject, ObservableObject {
             backgroundType = page.backgroundType
             pageWidth = page.pageWidth
             pageHeight = page.pageHeight
+            blocks = page.blocks
+            deletedBlocks = page.deletedBlocks
         }
     }
 

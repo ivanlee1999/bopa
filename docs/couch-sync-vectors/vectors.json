@@ -2855,6 +2855,226 @@
       ]
     },
     {
+      "name": "split-flowing-blocks-stay-on-sheet-zero",
+      "kind": "split",
+      "why": "A flowing block has no y to divide by: the document it belongs to has no height in page units until it is laid out, and layout is a rendering decision the two apps may disagree about. So every flowing block stays on sheet 0 and no child carries any (\u00a76.6 rule 10). A writer that copied the document onto every child would file each paragraph once per sheet under the same id, and the merge would keep all of them.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-08-15T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-f",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "scroll": 0,
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 100,
+            "bottom": 200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+          },
+          {
+            "id": "s2",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 1100,
+            "bottom": 1200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF96dUVfcFIAgACA"
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-1",
+            "kind": "md",
+            "orderKey": "a",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "text": "# Notes"
+          },
+          {
+            "id": "b-2",
+            "kind": "md",
+            "orderKey": "b",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph, still on the first sheet."
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-f",
+          "strokes": [
+            {
+              "id": "s1",
+              "top": 100,
+              "bottom": 200,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+            }
+          ],
+          "images": [],
+          "blocks": [
+            {
+              "id": "b-1"
+            },
+            {
+              "id": "b-2"
+            }
+          ],
+          "pageWidth": 1400,
+          "pageHeight": 1000,
+          "deletedStrokes": [
+            {
+              "id": "s2",
+              "deletedAt": "2026-08-15T12:00:00Z"
+            }
+          ],
+          "deletedBlocks": []
+        },
+        {
+          "id": "50258677-b717-4c48-5379-25e0cbb58004",
+          "strokes": [
+            {
+              "id": "s2",
+              "top": 100,
+              "bottom": 200,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+            }
+          ],
+          "images": [],
+          "blocks": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        }
+      ]
+    },
+    {
+      "name": "split-positioned-block-divides-like-an-image",
+      "kind": "split",
+      "why": "A positioned block is content at a point on the page and divides exactly like an image: it counts toward the number of sheets, belongs to the sheet its y falls in, its y shifts with that sheet, and sheet 0 records its departure in deletedBlocks. Here the block alone makes the page three sheets tall \u2014 there is no ink at all \u2014 and the flowing block beside it stays on sheet 0.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-08-15T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-p",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "scroll": 0,
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "b-flow",
+            "kind": "md",
+            "orderKey": "a",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "text": "Caption text."
+          },
+          {
+            "id": "b-box",
+            "kind": "md",
+            "orderKey": "b",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "text": "A text box far down the page.",
+            "x": 200,
+            "y": 2100,
+            "width": 400,
+            "height": 80
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-10T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-p",
+          "strokes": [],
+          "images": [],
+          "blocks": [
+            {
+              "id": "b-flow"
+            }
+          ],
+          "pageWidth": 1400,
+          "pageHeight": 1000,
+          "deletedBlocks": [
+            {
+              "id": "b-box",
+              "deletedAt": "2026-08-15T12:00:00Z"
+            }
+          ]
+        },
+        {
+          "id": "472b2466-8eee-8e8e-a8a7-42e3bb315e6e",
+          "strokes": [],
+          "images": [],
+          "blocks": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        },
+        {
+          "id": "a7243185-73fb-a638-6eb9-f16679773888",
+          "strokes": [],
+          "images": [],
+          "blocks": [
+            {
+              "id": "b-box",
+              "y": 100
+            }
+          ],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        }
+      ]
+    },
+    {
       "name": "tiebreak-supplementary-updated-by-orders-by-bytes",
       "kind": "page",
       "why": "Same-instant scalar conflicts fall to the updatedBy tiebreak, and the two languages' default string orders disagree beyond ASCII: UTF-16 code units file a supplementary-plane character below parts of the BMP that UTF-8 files it above, so each app would pick a different winner for the same conflict. The protocol's string order is UTF-8 bytes (\u00a72.4): U+1D49C (F0 9D 92 9C) outranks U+FB00 (EF AC 80).",

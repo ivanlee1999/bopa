@@ -177,10 +177,8 @@ public enum CouchMerge {
     public static func merge(_ a: CouchPage, _ b: CouchPage) -> CouchPage {
         let deletedStrokes = unionTombstones(a.deletedStrokes, b.deletedStrokes)
         let deletedImages = unionTombstones(a.deletedImages, b.deletedImages)
-        let deletedBlocks = unionTombstones(a.deletedBlocks, b.deletedBlocks)
         let removedStrokeIDs = Set(deletedStrokes.map(\.id))
         let removedImageIDs = Set(deletedImages.map(\.id))
-        let removedBlockIDs = Set(deletedBlocks.map(\.id))
 
         // Erasure beats drawing: a stroke one side still holds and the other tombstoned is gone on
         // both. Safe because a redrawn stroke always gets a fresh id, so "remove wins" can never
@@ -199,19 +197,8 @@ public enum CouchMerge {
             .filter { !removedImageIDs.contains($0.id) },
             createdAt: \.createdAt, id: \.id)
 
-        // Blocks are the images clause with a different sort key, and the difference is the whole
-        // point: strokes and images order by when they were made, because that is what decides
-        // which is on top. A document orders by where its paragraphs are, and a creation instant
-        // cannot say "between these two" — so a block carries its own key and the merge sorts on
-        // it, bytewise like every other string here (§4).
-        let blocks = unionById(a.blocks, b.blocks, id: \.id) { x, y in
-            preferredBlock(x, y)
-        }
-        .filter { !removedBlockIDs.contains($0.id) }
-        .sorted { x, y in
-            let byKey = byteCompare(x.orderKey, y.orderKey)
-            return byKey != 0 ? byKey < 0 : byteCompare(x.id, y.id) < 0
-        }
+        let (blocks, deletedBlocks) = mergeBlocks(
+            (a.blocks, a.deletedBlocks), (b.blocks, b.deletedBlocks))
 
         let winner = pageWins(a, over: b) ? a : b
         let loser = pageWins(a, over: b) ? b : a
@@ -242,6 +229,32 @@ public enum CouchMerge {
     /// Strokes are immutable once drawn, so two copies of one id are normally identical; this only
     /// has to be deterministic, not clever. It does have to be *total*, though — falling back to a
     /// comparison that can itself tie reintroduces argument-order dependence.
+    /// The block clause of the page merge (§5.1), on its own so a writer can carry a file's
+    /// blocks through a save it does not edit them in — `NotebookStore.savePage` folds what
+    /// reached the file back into what the caller holds, exactly as it does for images.
+    ///
+    /// Blocks are the images clause with a different sort key, and the difference is the whole
+    /// point: strokes and images order by when they were made, because that is what decides which
+    /// is on top. A document orders by where its paragraphs are, and a creation instant cannot say
+    /// "between these two" — so a block carries its own key and the merge sorts on it, bytewise
+    /// like every other string here (§4).
+    public static func mergeBlocks(
+        _ a: (blocks: [CouchBlock], deleted: [CouchTombstone]),
+        _ b: (blocks: [CouchBlock], deleted: [CouchTombstone])
+    ) -> (blocks: [CouchBlock], deleted: [CouchTombstone]) {
+        let deleted = unionTombstones(a.deleted, b.deleted)
+        let removed = Set(deleted.map(\.id))
+        let blocks = unionById(a.blocks, b.blocks, id: \.id) { x, y in
+            preferredBlock(x, y)
+        }
+        .filter { !removed.contains($0.id) }
+        .sorted { x, y in
+            let byKey = byteCompare(x.orderKey, y.orderKey)
+            return byKey != 0 ? byKey < 0 : byteCompare(x.id, y.id) < 0
+        }
+        return (blocks, deleted)
+    }
+
     private static func preferredStroke(_ x: CouchStroke, _ y: CouchStroke) -> CouchStroke {
         let (mx, my) = (millis(x.updatedAt), millis(y.updatedAt))
         if mx != my { return mx > my ? x : y }

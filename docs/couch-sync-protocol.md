@@ -655,6 +655,15 @@ asset ids are UUID- or `asset:<hex>`-shaped, timestamps are ISO-8601, integers a
 `kind` is normatively `[a-z][a-z0-9-]*`. With exactly one separator-bearing component, and it
 terminal, the map from block to key is injective and the order is genuinely total.
 
+Two honest gaps in that claim, neither worth a wire change. An absent optional and an empty one
+render the same (`text` null versus `""`, `strokeIds` `[]` versus `[""]`), so two copies of a
+block differing *only* in that way tie, and `pick` keeps its first argument — reachable only for
+two copies with the same id from the same device in the same millisecond. And `deviceId` is
+free text that nothing validates; a device named with a `|` in it can collide two otherwise
+different keys. Both apps compute the identical string in every case, so the *outcome* still
+agrees on both sides; only the "distinct blocks never tie" guarantee is weaker than stated.
+The same two caveats apply to `strokeTiebreak` and `imageTiebreak`.
+
 > Comparing a *decoded field's* string value, as `pen`, `pointsData` and `text` all do, is not the
 > same thing as comparing raw document text, which the note below forbids. The prohibition is on
 > the JSON — because the two languages print floats differently — not on the values.
@@ -1013,8 +1022,8 @@ tombstones = existing ++ { (id, deletedAt: now) : id ∈ departed }, sorted by i
 An id that is already tombstoned **keeps its original `deletedAt`**. Re-stamping it on every
 save would let an arbitrarily later timestamp win a delete-vs-edit comparison it should lose.
 
-**Pruning.** A writer prunes stroke and image tombstones whose `deletedAt` is more than **30
-days** old, whenever it is rewriting the document anyway — never as an edit of its own (no
+**Pruning.** A writer prunes stroke, image and block tombstones whose `deletedAt` is more than
+**30 days** old, whenever it is rewriting the document anyway — never as an edit of its own (no
 `updatedAt` bump, no push of an otherwise-unchanged document). A tombstone whose `deletedAt`
 cannot be parsed is never pruned, since it cannot be shown to be old enough.
 
@@ -1025,8 +1034,8 @@ bounds is the device that *stopped syncing*: one that last pulled before an eras
 returns after 30 days re-offers the erased ink as if new. That is the accepted cost of not
 growing every page document forever.
 
-Only stroke and image tombstones are ever pruned. `deletedPageIds`, bookmarks, and removed
-outline entries are kept indefinitely: they carry structural identity the merge needs (a
+Only stroke, image and block tombstones are ever pruned. `deletedPageIds`, bookmarks, and
+removed outline entries are kept indefinitely: they carry structural identity the merge needs (a
 pruned outline tombstone resurrects its entry — see §5.2.2), and they grow with deliberate
 user actions, not with every sweep of the eraser.
 
@@ -1132,9 +1141,20 @@ same page before either has seen the other, so the result MUST be a function of 
    peer's tall copy merged back in is the usual way — and rebuilding its children from the parent
    alone would discard every stroke drawn on them since. The produced child is folded into the
    existing one through the ordinary page merge (§5) instead.
+10. **Blocks divide by whether they have a place.** A *positioned* block (§3.3.1: both `x` and
+    `y` present) is content at a point on the page and divides exactly like an image: its sheet
+    index is `floor(y / sheetHeight)`, it counts toward the number of sheets (rule 3), its `y`
+    shifts with its sheet (rule 6), and sheet 0 records a tombstone in `deletedBlocks` for every
+    one that moved (rule 7). A *flowing* block has no `y` to divide by — the document it belongs
+    to has no height in page units until it is laid out, and layout is a rendering decision the
+    two apps are free to disagree about (§9) — so **every flowing block stays on sheet 0** and no
+    child carries any. Children start with empty `deletedBlocks` (rule 8). A writer that copied
+    the whole document onto every child would file each paragraph once per sheet, under the same
+    id, and the merge would keep all of them.
 
 Vectors: `split-*` in `docs/couch-sync-vectors/vectors.json`, which both suites run —
-`split-children-start-clean` pins rules 7 and 8, and the merge vector
+`split-children-start-clean` pins rules 7 and 8, `split-flowing-blocks-stay-on-sheet-zero` and
+`split-positioned-block-divides-like-an-image` pin rule 10, and the merge vector
 `page-split-parent-beats-its-tall-past` pins the convergence they exist for.
 
 ## 7. Transport
@@ -1337,12 +1357,16 @@ split(source) -> [String]
 
 1. **Normalize.** Strip a leading UTF-8 BOM. Replace `\r\n` and lone `\r` with `\n`. Nothing else:
    tabs are not expanded and interior whitespace is untouched, because both would edit the text.
-2. **Front matter.** If the first line is exactly `---` *and* a line exactly `---` occurs before
-   the first blank line, everything through that closer is one block and segmentation resumes
-   after it. The "before the first blank line" clause keeps the decision local: without it,
-   whether a document opens with front matter would depend on whether a `---` turned up anywhere
-   later, so joining two documents could retroactively change the meaning of the first one's
-   opening.
+2. **Front matter.** If the first *non-blank* line is exactly `---` *and* a line exactly `---`
+   occurs after it before the next blank line, everything from the opener through that closer is
+   one block and segmentation resumes after it. The "before the first blank line" clause keeps the
+   decision local: without it, whether a document opens with front matter would depend on whether
+   a `---` turned up anywhere later, so joining two documents could retroactively change the
+   meaning of the first one's opening. The test is on the first non-blank line, not the first
+   line, because leading blank lines are separators (rule 4) and are dropped: the first block
+   always begins at the first non-blank line, and `join` never puts anything before it, so a rule
+   that looked at line 1 would see front matter in `join(split(x))` that it had not seen in `x`
+   and split the two differently.
 3. **Fences.** A fence opens on a line whose first non-space run, after at most three leading
    spaces, is three or more backticks or three or more tildes. It closes on the next line with at
    most three leading spaces, a run of at least as many of the *same* character, and nothing after

@@ -162,6 +162,15 @@
       ]
     },
     {
+      "name": "front-matter-after-leading-blank-lines",
+      "why": "The front-matter test is on the first non-blank line, not on line 1. Leading blank lines are separators and are dropped, so the first block always starts at the first non-blank line and join never puts anything before it: a rule that looked at line 1 would not see front matter here, glue the closer to the body as one block, and then find front matter in the joined document and split the two apart \u2014 split(join(x)) would no longer equal x.",
+      "source": "\n\n---\ntitle: notes\n---\nbody",
+      "blocks": [
+        "---\ntitle: notes\n---",
+        "body"
+      ]
+    },
+    {
       "name": "tight-list-is-one-block",
       "why": "A list with no blank lines between items is one block, so editing an item is one edit.",
       "source": "- milk\n- eggs\n- bread",

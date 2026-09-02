@@ -41,6 +41,17 @@ final class CouchMergeVectorTests: XCTestCase {
         // apps must emit the same tombstones or the peer's tall copy never converges.
         var deletedStrokes: [ExpectedTombstone]?
         var deletedImages: [ExpectedTombstone]?
+        // Absent in the vectors written before pages had blocks, which is the same as expecting
+        // none: a split must not invent blocks on a page that had none.
+        var blocks: [ExpectedBlock]?
+        var deletedBlocks: [ExpectedTombstone]?
+    }
+
+    /// A block on a produced sheet: which it is and, when it is positioned, where it now sits.
+    /// A flowing block has no `y` and the vector leaves it out.
+    private struct ExpectedBlock: Decodable {
+        var id: String
+        var y: Int?
     }
 
     private struct ExpectedTombstone: Decodable {
@@ -211,6 +222,17 @@ final class CouchMergeVectorTests: XCTestCase {
                 made.page.deletedImages.map { [$0.id, $0.deletedAt] },
                 (want.deletedImages ?? []).map { [$0.id, $0.deletedAt] },
                 "\(vector.name): image tombstones on \(want.id)")
+            XCTAssertEqual(
+                made.page.blocks.map(\.id), (want.blocks ?? []).map(\.id),
+                "\(vector.name): blocks on \(want.id)")
+            for (block, wantBlock) in zip(made.page.blocks, want.blocks ?? []) {
+                XCTAssertEqual(
+                    block.y, wantBlock.y, "\(vector.name): \(block.id) y on \(want.id)")
+            }
+            XCTAssertEqual(
+                made.page.deletedBlocks.map { [$0.id, $0.deletedAt] },
+                (want.deletedBlocks ?? []).map { [$0.id, $0.deletedAt] },
+                "\(vector.name): block tombstones on \(want.id)")
         }
 
         for (id, page) in produced {

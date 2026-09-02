@@ -30,8 +30,8 @@ jobs:
         with:
           repository: ivanlee1999/notable
           path: .notable
-        # A transient checkout failure should warn, not red-flag an unrelated PR; the diff below
-        # is what actually gates.
+        # The diff below is what gates, and it fails when this checkout left it nothing to diff:
+        # a job that goes green because the other repo could not be fetched has checked nothing.
         continue-on-error: true
 
       # A vectors change has to land in both repos and git cannot make that one commit, so the two
@@ -64,7 +64,9 @@ jobs:
             mine="docs/couch-sync-vectors/$name"
             theirs=".notable/app/src/test/resources/couch-sync-vectors/$name"
             if [ ! -f "$theirs" ]; then
-              echo "::warning::notable has no $name; parity for it not checked."
+              echo "::error::notable has no $name, so its parity cannot be checked. Either the"
+              echo "::error::checkout above failed (rerun the job) or the twin file is missing there."
+              status=1
               continue
             fi
             if ! diff -u "$mine" "$theirs"; then
