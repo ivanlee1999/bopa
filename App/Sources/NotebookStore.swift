@@ -298,6 +298,18 @@ final class NotebookStore: ObservableObject {
         page.images += (onDisk?.images ?? []).filter {
             !savedImages.contains($0.id) && !erasedImages.contains($0.id)
         }
+        // Blocks: nothing in this app writes one yet, so the file's are at least as fresh as the
+        // caller's load-time copy, and writing the caller's back would strip every paragraph the
+        // BOOX added while the page was open — and every tombstone, which is worse: a stripped
+        // tombstone lets the deleted block come back on the next merge. The merge's own block
+        // clause is the rule, so that when this app does start editing blocks nothing here has to
+        // change: a block the caller edited carries a fresh `updatedAt`, and that is what wins.
+        // (Erasing a block locally will need a baseline the way strokes have one — see above.)
+        let (blocks, deletedBlocks) = CouchMerge.mergeBlocks(
+            (page.blocks, page.deletedBlocks),
+            (onDisk?.blocks ?? [], onDisk?.deletedBlocks ?? []))
+        page.blocks = blocks
+        page.deletedBlocks = CouchTombstones.prune(deletedBlocks, now: clock.now())
 
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: page.id), options: .atomic)
@@ -523,8 +535,9 @@ final class NotebookStore: ObservableObject {
 
     /// Copies a page, contents and all, and files the copy right after the original.
     ///
-    /// A fresh id for the page and for every stroke and image on it: the copy is a new document,
-    /// and reusing an id would have the merge treat the two as the same page on the other device.
+    /// A fresh id for the page and for every stroke, image and block on it: the copy is a new
+    /// document, and reusing an id would have the merge treat the two as the same page on the
+    /// other device.
     @discardableResult
     func duplicatePage(in notebookId: String, pageId: String) throws -> PageFile {
         guard var manifest = readManifestFromDisk(notebookId),
@@ -542,14 +555,26 @@ final class NotebookStore: ObservableObject {
         // Nothing was erased from a page that did not exist a moment ago; carrying the original's
         // tombstones over would tell peers to delete strokes from the copy by id.
         copy.deletedStrokes = []
+        copy.deletedImages = []
+        copy.deletedBlocks = []
+        // Remembered rather than discarded, because an ink block names its strokes by id and the
+        // copy's block has to name the copy's strokes.
+        var freshStrokeIDs: [String: String] = [:]
         copy.strokes = source.strokes.map { stroke in
             var fresh = stroke
             fresh.id = UUID().uuidString.lowercased()
+            freshStrokeIDs[stroke.id] = fresh.id
             return fresh
         }
         copy.images = source.images.map { image in
             var fresh = image
             fresh.id = UUID().uuidString.lowercased()
+            return fresh
+        }
+        copy.blocks = source.blocks.map { block in
+            var fresh = block
+            fresh.id = UUID().uuidString.lowercased()
+            fresh.strokeIds = block.strokeIds.compactMap { freshStrokeIDs[$0] }
             return fresh
         }
 

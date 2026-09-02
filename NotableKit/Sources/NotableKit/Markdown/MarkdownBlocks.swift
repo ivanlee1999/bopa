@@ -31,20 +31,26 @@ public enum MarkdownBlocks {
 
         // Front matter is one block. Splitting it would put an id on each key and let two devices
         // merge half of one document's front matter with half of another's. It only counts when the
-        // very first line opens it *and* a line closes it *before the first blank line*: three
+        // first non-blank line opens it *and* a line closes it *before the next blank line*: three
         // dashes on their own are a thematic break, and a document beginning with one must not be
         // swallowed whole.
         //
-        // The "before the first blank line" clause is what keeps the decision local. Without it,
+        // The "before the next blank line" clause is what keeps the decision local. Without it,
         // whether a document opens with front matter depends on whether a `---` turns up anywhere
         // later — so gluing two documents together could retroactively change the meaning of the
         // first one's opening, and the blocks would no longer split back into the blocks they were
         // built from.
-        if lines.first == "---",
-           let close = lines.dropFirst()
+        //
+        // The first *non-blank* line, not line 1, for the same reason: leading blank lines are
+        // separators and are dropped, so the first block always starts at the first non-blank line
+        // and `join` never puts anything in front of it. A test on line 1 would find front matter
+        // in `join(split(x))` that it had not found in `x`, and split the two differently.
+        let start = lines.firstIndex { !isBlank($0) } ?? lines.count
+        if start < lines.count, lines[start] == "---",
+           let close = lines[(start + 1)...]
                .prefix(while: { !isBlank($0) })
                .firstIndex(of: "---") {
-            blocks.append(lines[...close].joined(separator: "\n"))
+            blocks.append(lines[start...close].joined(separator: "\n"))
             index = close + 1
         }
 
@@ -121,7 +127,7 @@ public enum MarkdownBlocks {
     }
 
     private struct Fence {
-        let marker: Character
+        let marker: Unicode.Scalar
         let count: Int
     }
 
@@ -144,8 +150,14 @@ public enum MarkdownBlocks {
     }
 
     /// The run of fence characters this line starts with after its indent, and what follows it.
-    private static func markerRun(_ line: String) -> (Character?, Int, String) {
-        var rest = Substring(line)
+    ///
+    /// Counted in Unicode scalars, not `Character`s. A grapheme cluster is a rendering unit — a
+    /// backtick followed by a combining accent is *one* `Character` and no longer equal to "`" —
+    /// whereas the BOOX counts UTF-16 code units, which for these ASCII markers is the same as
+    /// counting scalars. Counting graphemes here would open a fence on one device and not the
+    /// other, and the two would split the same text into different blocks.
+    private static func markerRun(_ line: String) -> (Unicode.Scalar?, Int, String) {
+        var rest = Substring(line).unicodeScalars
         var indent = 0
         while indent < 3, rest.first == " " {
             rest.removeFirst()

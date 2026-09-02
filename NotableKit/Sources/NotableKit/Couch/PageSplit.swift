@@ -89,8 +89,32 @@ public enum PageSplit {
 
     public static func sheetCount(of page: PageFile, sheet: PageSize) -> Int {
         sheetCount(
-            tops: page.strokes.map(\.top) + page.images.map { Float($0.y) },
+            tops: tops(strokeTops: page.strokes.map(\.top), imageYs: page.images.map(\.y),
+                       blocks: page.blocks),
             sheetHeight: sheet.height)
+    }
+
+    /// Where every piece of content on a page starts — what the sheet count is taken over.
+    private static func tops(
+        strokeTops: [Float], imageYs: [Int], blocks: [CouchBlock]
+    ) -> [Float] {
+        strokeTops + imageYs.map { Float($0) } + blocks.compactMap { top(of: $0) }
+    }
+
+    /// The top edge a block divides by, or nil for one that has none — protocol §6.6 rule 10.
+    ///
+    /// A positioned block sits at a point on the page exactly as an image does, so it belongs to
+    /// the sheet its `y` falls in. A flowing block has no `y`: it is part of the page's document,
+    /// which does not have a height in page units until it is laid out, and a layout is a
+    /// rendering decision the two apps are free to disagree about. So the document stays whole on
+    /// sheet 0, and nothing of it travels to a child.
+    private static func top(of block: CouchBlock) -> Float? {
+        guard !block.isFlowing, let y = block.y else { return nil }
+        return Float(y)
+    }
+
+    private static func sheetIndex(of block: CouchBlock, sheetHeight: Int) -> Int {
+        top(of: block).map { sheetIndex(ofTop: $0, sheetHeight: sheetHeight) } ?? 0
     }
 
     /// Divides [page] into one page per sheet, in order, the first of which *is* [page].
@@ -114,6 +138,9 @@ public enum PageSplit {
         let movedImages = page.images
             .filter { sheetIndex(ofTop: Float($0.y), sheetHeight: sheet.height) > 0 }
             .map { CouchTombstone(id: $0.id, deletedAt: now) }
+        let movedBlocks = page.blocks
+            .filter { sheetIndex(of: $0, sheetHeight: sheet.height) > 0 }
+            .map { CouchTombstone(id: $0.id, deletedAt: now) }
 
         let height = Float(sheet.height)
         var pages: [PageFile] = []
@@ -129,16 +156,19 @@ public enum PageSplit {
                     moved.y -= Int(offset)
                     return moved
                 }
+            let blocks = shiftedBlocks(page.blocks, onSheet: index, sheet: sheet)
 
             if index == 0 {
                 var first = declaring(sheet, on: page)
                 first.strokes = strokes
                 first.images = images
+                first.blocks = blocks
                 first.scroll = 0
                 first.updatedAt = now
                 first.updatedBy = updatedBy
                 first.deletedStrokes = page.deletedStrokes + movedStrokes
                 first.deletedImages = page.deletedImages + movedImages
+                first.deletedBlocks = page.deletedBlocks + movedBlocks
                 pages.append(first)
             } else {
                 pages.append(
@@ -163,7 +193,9 @@ public enum PageSplit {
                         // already alive on this child and erase it on the next merge.
                         deletedStrokes: [],
                         deletedImages: [],
-                        updatedBy: updatedBy))
+                        updatedBy: updatedBy,
+                        blocks: blocks,
+                        deletedBlocks: []))
             }
         }
         return pages
@@ -206,7 +238,8 @@ public enum PageSplit {
     public static func split(
         _ page: CouchPage, id: String, sheet: PageSize, now: String, updatedBy: String
     ) throws -> [(id: String, page: CouchPage)] {
-        let tops = page.strokes.map(\.top) + page.images.map { Float($0.y) }
+        let tops = tops(
+            strokeTops: page.strokes.map(\.top), imageYs: page.images.map(\.y), blocks: page.blocks)
         let count = sheetCount(tops: tops, sheetHeight: sheet.height)
         guard count > 1 else { return [(id, declaring(sheet, on: page))] }
 
@@ -217,6 +250,9 @@ public enum PageSplit {
             .map { CouchTombstone(id: $0.id, deletedAt: now) }
         let movedImages = page.images
             .filter { sheetIndex(ofTop: Float($0.y), sheetHeight: sheet.height) > 0 }
+            .map { CouchTombstone(id: $0.id, deletedAt: now) }
+        let movedBlocks = page.blocks
+            .filter { sheetIndex(of: $0, sheetHeight: sheet.height) > 0 }
             .map { CouchTombstone(id: $0.id, deletedAt: now) }
 
         let height = Float(sheet.height)
@@ -234,18 +270,37 @@ public enum PageSplit {
                     moved.y -= Int(offset)
                     return moved
                 }
+            divided.blocks = shiftedBlocks(page.blocks, onSheet: index, sheet: sheet)
             if index == 0 {
                 divided.deletedStrokes = page.deletedStrokes + movedStrokes
                 divided.deletedImages = page.deletedImages + movedImages
+                divided.deletedBlocks = page.deletedBlocks + movedBlocks
             } else {
                 divided.deletedStrokes = []
                 divided.deletedImages = []
+                divided.deletedBlocks = []
             }
             divided.updatedAt = now
             divided.updatedBy = updatedBy
             pages.append((childId(parentId: id, sheet: index), divided))
         }
         return pages
+    }
+
+    /// The blocks that belong on sheet `index`, moved there. Flowing blocks are all sheet 0's
+    /// (see `top(of:)`) and are not shifted, having no `y` to shift; positioned ones travel like
+    /// images do.
+    private static func shiftedBlocks(
+        _ blocks: [CouchBlock], onSheet index: Int, sheet: PageSize
+    ) -> [CouchBlock] {
+        blocks
+            .filter { sheetIndex(of: $0, sheetHeight: sheet.height) == index }
+            .map { block in
+                guard index > 0, let y = block.y else { return block }
+                var moved = block
+                moved.y = y - index * sheet.height
+                return moved
+            }
     }
 
     private static func declaring(_ sheet: PageSize, on page: CouchPage) -> CouchPage {

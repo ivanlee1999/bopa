@@ -94,4 +94,15 @@ final class MarkdownBlocksTests: XCTestCase {
         // Not last: the fence swallows the paragraph, and one block comes back instead of two.
         XCTAssertEqual(MarkdownBlocks.split(MarkdownBlocks.join([open, after])).count, 1)
     }
+
+    /// Fence markers are counted in Unicode scalars, the way the BOOX counts UTF-16 units, not in
+    /// grapheme clusters. A combining mark after the third backtick makes that backtick part of a
+    /// two-scalar `Character` that no longer equals "`" — counted as graphemes, this line would be
+    /// two backticks and no fence here while it is three and a fence there, and the two devices
+    /// would split the same text into different blocks.
+    func testAFenceMarkerFollowedByACombiningMarkStillOpensAFence() throws {
+        let source = "```\u{0301}\nfirst\n\nsecond\n```"
+        XCTAssertEqual(MarkdownBlocks.split(source), [source])
+        XCTAssertTrue(MarkdownBlocks.leavesFenceOpen("```\u{0301}\nnot closed"))
+    }
 }

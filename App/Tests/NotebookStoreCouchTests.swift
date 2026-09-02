@@ -239,6 +239,89 @@ final class NotebookStoreCouchTests: XCTestCase {
         XCTAssertEqual(written.images.map(\.uri), [uri])
     }
 
+    /// Blocks too — and their tombstones, which matter more. Nothing in this app writes a block
+    /// yet, so the editor's copy is at best as fresh as the file's; an autosave that wrote it back
+    /// would strip every paragraph the BOOX added while the page was open, and a stripped
+    /// *tombstone* lets the deleted paragraph come back on the next merge.
+    func testABlockThatArrivedWhileThePageWasOpenSurvivesTheNextSave() throws {
+        let manifest = try store.createNotebook(title: "notes")
+        let pageId = manifest.pageIds[0]
+        let onCanvas = try store.savePage(
+            try store.loadPage(notebookId: manifest.notebookId, pageId: pageId),
+            baselineStrokeIDs: [])
+
+        let stamp = NotableDate.format(Date())
+        var fromBoox = onCanvas
+        fromBoox.blocks = [
+            CouchBlock(id: "b-2", orderKey: "b", text: "second", createdAt: stamp, updatedAt: stamp),
+            CouchBlock(id: "b-1", orderKey: "a", text: "first", createdAt: stamp, updatedAt: stamp),
+        ]
+        fromBoox.deletedBlocks = [CouchTombstone(id: "b-gone", deletedAt: stamp)]
+        try applyFromTheBoox(fromBoox)
+
+        var stale = onCanvas
+        stale.scroll = 40
+        let written = try store.savePage(stale, baselineStrokeIDs: [])
+
+        XCTAssertEqual(
+            written.blocks.map(\.id), ["b-1", "b-2"],
+            "a stale save overwrote blocks that arrived from the other device")
+        XCTAssertEqual(
+            written.deletedBlocks.map(\.id), ["b-gone"],
+            "the tombstone was dropped, so the deleted block will come back on the next merge")
+        let reread = try store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+        XCTAssertEqual(reread.blocks.map(\.text), ["first", "second"])
+        XCTAssertEqual(reread.scroll, 40, "the caller's own fields still win")
+    }
+
+    /// A block the BOOX deleted must not be resurrected by an editor whose copy still lists it.
+    func testABlockDeletedOnTheOtherDeviceIsNotWrittenBackByAStaleSave() throws {
+        let manifest = try store.createNotebook(title: "notes")
+        let pageId = manifest.pageIds[0]
+        let stamp = NotableDate.format(Date())
+        var opened = try store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+        opened.blocks = [
+            CouchBlock(id: "keep", orderKey: "a", text: "keep", createdAt: stamp, updatedAt: stamp),
+            CouchBlock(id: "gone", orderKey: "b", text: "gone", createdAt: stamp, updatedAt: stamp),
+        ]
+        let onCanvas = try store.savePage(opened, baselineStrokeIDs: [])
+
+        var fromBoox = onCanvas
+        fromBoox.blocks.removeAll { $0.id == "gone" }
+        fromBoox.deletedBlocks = [CouchTombstone(id: "gone", deletedAt: NotableDate.format(Date()))]
+        try applyFromTheBoox(fromBoox)
+
+        let written = try store.savePage(onCanvas, baselineStrokeIDs: [])
+        XCTAssertEqual(written.blocks.map(\.id), ["keep"], "the deleted block came back")
+        XCTAssertEqual(written.deletedBlocks.map(\.id), ["gone"], "the tombstone was dropped")
+    }
+
+    /// A copy is a new document: every block on it gets a fresh id, an ink block's `strokeIds`
+    /// follow the strokes' fresh ids, and no tombstone rides along to delete by the old ones.
+    func testDuplicatingAPageGivesItsBlocksFreshIdsThatStillNameItsStrokes() throws {
+        let manifest = try store.createNotebook(title: "notes")
+        let pageId = manifest.pageIds[0]
+        let stamp = NotableDate.format(Date())
+        var page = try store.loadPage(notebookId: manifest.notebookId, pageId: pageId)
+        page.strokes = [stroke("s1"), stroke("s2")]
+        page.blocks = [
+            CouchBlock(
+                id: "ink", kind: "ink", orderKey: "a", strokeIds: ["s1", "s2"],
+                createdAt: stamp, updatedAt: stamp)
+        ]
+        page.deletedBlocks = [CouchTombstone(id: "old", deletedAt: stamp)]
+        try store.savePage(page, baselineStrokeIDs: [])
+
+        let copy = try store.duplicatePage(in: manifest.notebookId, pageId: pageId)
+        XCTAssertEqual(copy.blocks.count, 1)
+        XCTAssertNotEqual(copy.blocks[0].id, "ink")
+        XCTAssertEqual(
+            Set(copy.blocks[0].strokeIds), Set(copy.strokes.map(\.id)),
+            "the copy's ink block names the original's strokes")
+        XCTAssertTrue(copy.deletedBlocks.isEmpty)
+        XCTAssertTrue(copy.deletedImages.isEmpty)
+    }
+
     // MARK: Change reporting
 
     func testCreatingANotebookNamesBothItAndItsPage() throws {

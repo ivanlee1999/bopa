@@ -366,9 +366,16 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
     private func assetURL(_ assetID: String) -> URL? {
         guard let sha = CouchAssetID.sha256Hex(ofAssetID: assetID) else { return nil }
         for notebookId in notebookIDs() {
-            let byHash = NotableImageFiles.directory(in: notebookDir(notebookId))
-                .appendingPathComponent(sha)
-            if FileManager.default.fileExists(atPath: byHash.path) { return byHash }
+            let dir = notebookDir(notebookId)
+            // A recording's segments are filed in `audio/` under the same hash — the folder
+            // `noteWantedAssets` names for them. A lookup that stopped at `images/` would tell the
+            // push that no file holds those bytes, and the recording would be dropped from the
+            // outbox without a word.
+            for folder in [NotableImageFiles.directory(in: dir),
+                           dir.appendingPathComponent("audio", isDirectory: true)] {
+                let byHash = folder.appendingPathComponent(sha)
+                if FileManager.default.fileExists(atPath: byHash.path) { return byHash }
+            }
         }
         for folder in TemplateFolder.allCases {
             for name in CouchBackgroundFiles.fileNames(forSHA256Hex: sha) {
@@ -444,9 +451,7 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         // names them.
         for block in file.blocks {
             for (assetID, folder) in block.wantedAssets {
-                let url = notebookDir
-                    .appendingPathComponent(folder, isDirectory: true)
-                    .appendingPathComponent(CouchAssetID.sha256Hex(ofAssetID: assetID) ?? assetID)
+                let url = blockAssetURL(assetID, folder: folder, notebookDir: notebookDir)
                 guard !FileManager.default.fileExists(atPath: url.path),
                       let relative = relativeToRoot(url),
                       !(wanted[assetID] ?? []).contains(relative)
@@ -457,6 +462,14 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         }
         guard added else { return }
         writeWantedAssets(wanted.mapValues { $0.sorted() })
+    }
+
+    /// Where a block's asset lives in a notebook: `<folder>/<sha256>`, the hash being the whole of
+    /// the filename, in whichever folder the block's kind files its bytes in.
+    private func blockAssetURL(_ assetID: String, folder: String, notebookDir: URL) -> URL {
+        notebookDir
+            .appendingPathComponent(folder, isDirectory: true)
+            .appendingPathComponent(CouchAssetID.sha256Hex(ofAssetID: assetID) ?? assetID)
     }
 
     /// Forgets wants this merge just orphaned. `noteWantedAssets` only ever adds, and until now
@@ -475,10 +488,22 @@ public final class FileCouchStore: CouchLocalStore, @unchecked Sendable {
         droppedBy file: PageFile, replacing existing: PageFile?, notebookId: String
     ) {
         let dir = notebookDir(notebookId)
+        // Every path a page's content can have asked for — images by their uri, blocks by the
+        // folder their kind files bytes in — because a want is only ever forgotten when nothing
+        // still places it, and a block's want that this never saw would sit in the ledger for
+        // ever, reported missing on every pull.
         func referencedPaths(_ page: PageFile?) -> Set<String> {
-            Set((page?.images ?? []).compactMap {
+            guard let page else { return [] }
+            let images = page.images.compactMap {
                 NotableImageFiles.url(uri: $0.uri, notebookDir: dir).flatMap(relativeToRoot)
-            })
+            }
+            let blocks = page.blocks.flatMap { block in
+                block.wantedAssets.compactMap { want in
+                    relativeToRoot(
+                        blockAssetURL(want.assetID, folder: want.folder, notebookDir: dir))
+                }
+            }
+            return Set(images + blocks)
         }
         let dropped = referencedPaths(existing).subtracting(referencedPaths(file))
         guard !dropped.isEmpty else { return }
