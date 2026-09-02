@@ -214,6 +214,7 @@ final class HandwritingSettings: ObservableObject {
 
 /// Settings root: handwriting preferences, with sync tucked behind a link.
 struct SettingsView: View {
+    @EnvironmentObject private var store: NotebookStore
     /// Passed down so the sync form can trigger syncs on whichever backend is selected.
     var backendHost: SyncBackendHost?
 
@@ -227,6 +228,20 @@ struct SettingsView: View {
                     Label("Sync", systemImage: "arrow.triangle.2.circlepath")
                 }
             }
+            // The Mac keeps the library in a sandbox container nobody would find by hand.
+            // Pointing the Finder at it is how a page file gets inspected, backed up, or
+            // dragged into something else — the things the iPad does through the Files app.
+            if Platform.isMac {
+                Section {
+                    Button {
+                        Platform.reveal(store.rootURL)
+                    } label: {
+                        Label("Show Notebooks in Finder", systemImage: "folder")
+                    }
+                } footer: {
+                    Text("The folder this Mac keeps its notebooks in.")
+                }
+            }
         }
         .navigationTitle("Settings")
     }
@@ -238,6 +253,30 @@ struct HandwritingSettingsSections: View {
     private var config: Binding<HandwritingConfig> { $settings.config }
 
     var body: some View {
+        // Neither section means anything where there is no pencil: the Mac draws with whatever
+        // it has, and the two Apple Pencil gestures can never arrive.
+        if !Platform.isMac {
+            inputSections
+        }
+
+        Section {
+            Picker("Page navigation", selection: config.pageNavigation) {
+                ForEach(PageNavigation.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .accessibilityIdentifier("settings.pageNavigation")
+        } header: {
+            Text("Pages")
+        } footer: {
+            Text(config.pageNavigation.wrappedValue.detail)
+        }
+
+        canvasAndPaperSections
+    }
+
+    @ViewBuilder
+    private var inputSections: some View {
         Section {
             Picker("Finger", selection: config.fingerDrawing) {
                 Text("Draws").tag(true)
@@ -270,20 +309,10 @@ struct HandwritingSettingsSections: View {
             Text("Squeeze needs an Apple Pencil Pro. “System setting” keeps whatever "
                 + "Settings › Apple Pencil is set to.")
         }
+    }
 
-        Section {
-            Picker("Page navigation", selection: config.pageNavigation) {
-                ForEach(PageNavigation.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .accessibilityIdentifier("settings.pageNavigation")
-        } header: {
-            Text("Pages")
-        } footer: {
-            Text(config.pageNavigation.wrappedValue.detail)
-        }
-
+    @ViewBuilder
+    private var canvasAndPaperSections: some View {
         Section {
             Toggle("Lock page scrolling", isOn: config.scrollLocked)
             Picker("Page width", selection: config.pageFit) {

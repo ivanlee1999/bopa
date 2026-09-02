@@ -6,6 +6,7 @@
 #   app    App unit tests (BopaTests) on an iPad simulator (seconds once built)
 #   quick  kit + app — the default; run this while iterating and before commits
 #   ui     BopaUITests only (~2.5 min — touch synthesis is slow by nature)
+#   mac    build the Mac Catalyst app (no tests: the snapshots are iPad-metric)
 #   full   everything; same coverage CI runs on every push/PR
 #
 # RECORD=1 re-records the snapshot reference images instead of comparing
@@ -58,11 +59,25 @@ run_xcode() { # extra xcodebuild args, e.g. -only-testing:BopaTests
     CODE_SIGNING_ALLOWED=NO
 }
 
+# Build-only, like the CI job: the regression a Catalyst target actually suffers is iOS-only
+# code that stops the Mac compiling, and a build catches all of it.
+run_mac() {
+  cd "$ROOT/App"
+  command -v xcodegen >/dev/null && xcodegen generate >/dev/null
+  echo "==> xcodebuild build (Mac Catalyst)"
+  xcodebuild build \
+    -project Bopa.xcodeproj \
+    -scheme Bopa \
+    -destination 'platform=macOS,variant=Mac Catalyst' \
+    CODE_SIGNING_ALLOWED=NO
+}
+
 case "$TIER" in
   kit)   run_kit ;;
   app)   run_xcode -only-testing:BopaTests ;;
   ui)    run_xcode -only-testing:BopaUITests ;;
+  mac)   run_mac ;;
   quick) run_kit; run_xcode -only-testing:BopaTests ;;
-  full)  run_kit; run_xcode ;;
-  *)     echo "usage: $0 [kit|app|quick|ui|full]" >&2; exit 1 ;;
+  full)  run_kit; run_xcode; run_mac ;;
+  *)     echo "usage: $0 [kit|app|quick|ui|mac|full]" >&2; exit 1 ;;
 esac

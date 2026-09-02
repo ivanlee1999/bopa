@@ -150,6 +150,7 @@ struct EditorView: View {
             }
             .buttonStyle(RailButtonStyle(selected: false, size: 34))
             .disabled(pageIndex == 0)
+            .keyboardShortcut("[", modifiers: .command)
             .accessibilityLabel("Previous page")
 
             // The count is the way into the overview, not a label beside it: it is already the
@@ -183,6 +184,11 @@ struct EditorView: View {
                 Image(systemName: "chevron.right").font(.system(size: 15, weight: .semibold))
             }
             .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            // The keyboard's page turns. On the Mac they are the only way to move between pages
+            // besides these buttons: a mouse wheel has no drag phase, so scrolling past the end
+            // of a page — the touch gesture that appends and enters pages — never fires there,
+            // and relaxing that guard would let momentum walk the whole notebook.
+            .keyboardShortcut("]", modifiers: .command)
             .accessibilityLabel(
                 pageIndex >= manifest.pageIds.count - 1 ? "New page" : "Next page")
 
@@ -192,6 +198,7 @@ struct EditorView: View {
                 Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
             }
             .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .keyboardShortcut("n", modifiers: [.command, .shift])
             .accessibilityLabel("Add page")
         }
     }
@@ -653,7 +660,9 @@ struct EditorCanvasView: UIViewRepresentable {
             didApplyConfig = true
             let canvas = container.canvas
 
-            canvas.drawingPolicy = config.fingerDrawing ? .anyInput : .pencilOnly
+            // Pencil-only would make the canvas inert on the Mac, where nothing is a pencil:
+            // the trackpad and the mouse are the only input, and both must draw.
+            canvas.drawingPolicy = config.fingerDrawing || Platform.isMac ? .anyInput : .pencilOnly
             canvas.isScrollEnabled = !config.scrollLocked
             // Bounce carries the intentional pull past a real sheet's edge. It is the signal for
             // entering the next page, or making one when this is the final page.
@@ -670,8 +679,8 @@ struct EditorCanvasView: UIViewRepresentable {
 
             // Only claim the pencil gestures when the user asked for something other than
             // the system behaviour; otherwise leave them to PencilKit.
-            let wantsPencilGestures =
-                config.doubleTapAction != .system || config.squeezeAction != .system
+            let wantsPencilGestures = !Platform.isMac
+                && (config.doubleTapAction != .system || config.squeezeAction != .system)
             if wantsPencilGestures {
                 pencilInteraction.delegate = self
                 if pencilInteraction.view !== container {

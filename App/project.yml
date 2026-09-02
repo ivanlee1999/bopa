@@ -69,6 +69,10 @@ targets:
         # Defaults to YES, which would make the Mac build `maccatalyst.dev.ivan.bopa` and give it
         # its own container — a second, invisible library on the same machine.
         DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        # Only the Mac SDK signs with the sandbox entitlements. The iOS build is provisioned by
+        # its profile, and an entitlement the profile does not grant (`app-sandbox` is a Mac
+        # one) fails the archive rather than being ignored.
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Bopa.entitlements
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"

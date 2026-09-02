@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The Mac build only (see CODE_SIGN_ENTITLEMENTS in project.yml). A Catalyst app is
+	     sandboxed like any Mac App Store app, and a sandboxed process gets no network unless
+	     it asks: without the client entitlement every CouchDB and WebDAV request fails, and
+	     the app simply looks like it does not sync. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- Importing a PDF or a picture through the open panel. Read-only: the app copies what it
+	     is handed into its own container and never writes back to the chosen file. -->
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+</dict>
+</plist>
