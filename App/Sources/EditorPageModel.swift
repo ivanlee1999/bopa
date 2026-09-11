@@ -47,6 +47,13 @@ final class EditorPageModel: NSObject, ObservableObject {
 
     private var store: NotebookStore?
     private var notebookId = ""
+    private var lastKnownNotebookTitle = "Notebook"
+    /// A remote removal cannot save into the tombstoned source. Retry writes a separate
+    /// handwriting notebook, reusing its destination if its first page write failed.
+    private var recoveryPending = false
+    private var recoveryNotebook: NotebookManifest?
+    private var recoveryStrokes: [StrokeDTO]?
+    private var recoveringMissingPage = false
     /// The notebook's page order as this editor last saw it with its page still listed — what
     /// the landing decision reads when the page vanishes, since by then the manifest no longer
     /// says where it was.
@@ -84,6 +91,7 @@ final class EditorPageModel: NSObject, ObservableObject {
         guard self.store == nil else { return }
         self.store = store
         self.notebookId = notebookId
+        lastKnownNotebookTitle = store.manifest(id: notebookId)?.title ?? "Notebook"
         // The CouchDB pull loop rewrites page files with no regard for what is open, so the
         // editor has to hear about it or it would keep drawing on a stale copy.
         NotificationCenter.default.addObserver(
@@ -97,7 +105,7 @@ final class EditorPageModel: NSObject, ObservableObject {
     }
 
     @objc private func storeDidApplyRemoteChanges() {
-        guard reconcileWithStore() else { return }
+        guard reconcileWithStore(remoteChange: true) else { return }
         remoteInkPending = true
         foldInRemoteInk()
     }
@@ -106,21 +114,21 @@ final class EditorPageModel: NSObject, ObservableObject {
         reconcileWithStore()
     }
 
-    /// The store changed underneath the editor. If the open page is no longer listed, nothing is
-    /// flushed — the page is tombstoned, and `savePage` would refuse the write anyway — and the
-    /// editor moves to the page the reader should land on. If the whole notebook is gone, there
-    /// is nothing left to show and the editor asks to close.
+    /// Remote removal preserves unsaved handwriting in a separate notebook before leaving.
+    /// Explicit local deletion keeps its existing meaning: the page and its edits are deleted.
+    /// Neither path writes into the tombstoned source.
     ///
     /// - Returns: whether the open page is still live, i.e. whether the caller may keep working
     ///   with it.
     @discardableResult
-    private func reconcileWithStore() -> Bool {
+    private func reconcileWithStore(remoteChange: Bool = false) -> Bool {
+        // Recovery uses ordinary store APIs, whose local notifications are synchronous.
+        // Re-entering here would treat the unfinished recovery as another disappearance.
+        guard !recoveringMissingPage else { return false }
         guard let store, let vanished = pageId else { return true }
-        guard let manifest = store.manifest(id: notebookId) else {
-            requestClose?()
-            return false
-        }
-        guard !manifest.pageIds.contains(vanished) else {
+        let manifest = store.manifest(id: notebookId)
+        if let manifest, manifest.pageIds.contains(vanished) {
+            lastKnownNotebookTitle = manifest.title
             // Still listed. Keep the order fresh, so a later vanish knows where the page *was*.
             lastKnownPageIds = manifest.pageIds
             // The page order can change without this page moving — a page appended past the end
@@ -130,6 +138,12 @@ final class EditorPageModel: NSObject, ObservableObject {
             return true
         }
 
+        if remoteChange, dirty || liveState.isDrawing { recoveryPending = true }
+        if recoveryPending {
+            guard !liveState.isDrawing else { return false }
+            guard recoverUnsavedHandwriting() else { return false }
+        }
+
         // Tombstoned under the editor. Drop the pending work rather than flushing it — the
         // strokes belong to a page that no longer exists, and letting `open`'s flush try would
         // only raise a save alert about a delete the user just asked for.
@@ -137,6 +151,11 @@ final class EditorPageModel: NSObject, ObservableObject {
         dirty = false
         remoteInkPending = false
         page = nil
+
+        guard let manifest else {
+            requestClose?()
+            return false
+        }
 
         let landing = EditorPageRecovery.landingPageId(
             vanished: vanished,
@@ -149,6 +168,62 @@ final class EditorPageModel: NSObject, ObservableObject {
             requestClose?()
         }
         return false
+    }
+
+    /// Saves what the live canvas still holds under fresh notebook/page/stroke IDs. The copy
+    /// is explicitly handwriting: deleted PDF/image files and other attachments may no longer
+    /// exist, so it preserves ink coordinates, sheet size, and native paper without dangling
+    /// references or claiming to recover those assets.
+    private func recoverUnsavedHandwriting() -> Bool {
+        guard let store, let source = page else { return false }
+        recoveringMissingPage = true
+        defer { recoveringMissingPage = false }
+        saveTask?.cancel()
+        do {
+            if recoveryNotebook == nil {
+                let background = PageBackground(
+                    background: source.background, backgroundType: source.backgroundType)
+                let template: NativeTemplate
+                if case .native(let native) = background, native.isDrawable {
+                    template = native
+                } else {
+                    template = .blank
+                }
+                recoveryNotebook = try store.createNotebook(
+                    title: "Recovered handwriting — \(lastKnownNotebookTitle)",
+                    template: template, pageSize: source.pageSize)
+            }
+            guard let destination = recoveryNotebook, let destinationPage = destination.pageIds.first
+            else { return false }
+            var recovered = try store.loadPage(
+                notebookId: destination.notebookId, pageId: destinationPage)
+            recovered.title = source.title
+            recovered.scroll = max(0, Int(liveState.pageY.rounded()))
+            // Keep the recovery IDs across retries so subsequent edits keep their identity
+            // within the recovery copy, just as ordinary autosaves do.
+            let strokes: [StrokeDTO]
+            if let recoveryStrokes {
+                strokes = PencilKitBridge.strokeDTOs(from: drawing, source: recoveryStrokes)
+            } else {
+                strokes = PencilKitBridge.strokeDTOs(from: drawing, source: source.strokes).map { stroke in
+                    var copy = stroke
+                    copy.id = UUID().uuidString.lowercased()
+                    return copy
+                }
+            }
+            recoveryStrokes = strokes
+            recovered.strokes = strokes
+            _ = try store.savePage(recovered)
+            dirty = false
+            recoveryPending = false
+            recoveryNotebook = nil
+            recoveryStrokes = nil
+            saveError = nil
+            return true
+        } catch {
+            saveError = "This page was removed on another device. Couldn’t save a recovered handwriting copy: \(error)"
+            return false
+        }
     }
 
     func openInitialPage() {
@@ -171,12 +246,14 @@ final class EditorPageModel: NSObject, ObservableObject {
         // anything drawn inside the 2s re-arming window was silently lost, along with the
         // unsaved scroll offset. Flushing at the door kills the whole forgot-to-flush class —
         // callers that already saved cost nothing, because saveNow is a no-op when clean.
-        saveNow()
         // Consumed here, not on the success path: a load that throws used to leave the sentinel
         // set, and the *next* page opened — an unrelated one, reached from the overview —
         // silently inherited the position and persisted it as its own scroll.
         let entry = entryScroll
         entryScroll = nil
+        // A failed flush must keep the current canvas alive. Loading another page here used
+        // to replace the unsaved drawing and clear `dirty` despite the save error.
+        guard saveNow() else { return false }
         guard let store else { return false }
         do {
             let loaded = try store.loadPage(notebookId: notebookId, pageId: newPageId)
@@ -206,6 +283,15 @@ final class EditorPageModel: NSObject, ObservableObject {
             loadError = String(describing: error)
             return false
         }
+    }
+
+    /// The library button may dismiss only after the current page is safely on disk.
+    /// Deletion recovery calls `requestClose` directly because there is no live page to save.
+    @discardableResult
+    func close() -> Bool {
+        guard saveNow() else { return false }
+        requestClose?()
+        return true
     }
 
     /// Enters the page below the seam, carrying the overshoot with it: what was scroll past this
@@ -384,13 +470,16 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// arrive. Retries are driven by pencil-lifts and further applies, so a page that cannot be
     /// read at all costs a file read, not a spin.
     func foldInRemoteInk() {
+        if recoveryPending {
+            if !liveState.isDrawing { saveNow() }
+            return
+        }
         guard remoteInkPending, !liveState.isDrawing, let pageId, let store else { return }
-        saveNow()
         // A failed flush leaves `dirty` set, and reloading now would replace the drawing with
         // the file and clear it — throwing away exactly the strokes the save alert just promised
         // were safe, and cancelling their retry with them. `remoteInkPending` stays set, so the
         // fold runs again at the next pencil-lift or apply, once a save has landed.
-        guard !dirty else { return }
+        guard saveNow() else { return }
         guard let onDisk = try? store.loadPage(notebookId: notebookId, pageId: pageId) else {
             return  // a torn or missing read is not a reason to drop what is on the canvas
         }
@@ -497,11 +586,22 @@ final class EditorPageModel: NSObject, ObservableObject {
         }
     }
 
-    func saveNow() {
+    /// Whether the page is safely saved. Navigation must honour a failure; background flushes
+    /// keep the model alive and can retry when the app becomes active again.
+    @discardableResult
+    func saveNow() -> Bool {
         saveTask?.cancel()
-        guard var page, let store else { return }
+        if recoveryPending {
+            guard !liveState.isDrawing else { return false }
+            guard recoverUnsavedHandwriting() else { return false }
+            // The retry finished: leave the removed page normally instead of keeping an
+            // editor open over a notebook that can never accept another save.
+            reconcileWithStore()
+            return true
+        }
+        guard var page, let store else { return !dirty }
         let scroll = max(0, Int(liveState.pageY.rounded()))
-        guard dirty || scroll != page.scroll else { return }
+        guard dirty || scroll != page.scroll else { return true }
         // What the canvas held going into this save. `savePage` needs it to tell ink the user
         // erased from ink that arrived from the BOOX while this page was open — the file cannot
         // answer that, because sync may have rewritten it since.
@@ -527,10 +627,13 @@ final class EditorPageModel: NSObject, ObservableObject {
             // it still carries the last truly-written DTOs.
             self.page = written
             dirty = false
+            saveError = nil
+            return true
         } catch {
             // Leave `dirty` set so the next flush retries. Clearing it on a failed write — which
             // is what `try?` did — silently discarded the strokes that failed to land.
             saveError = String(describing: error)
+            return false
         }
     }
 }

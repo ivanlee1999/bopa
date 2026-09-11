@@ -721,6 +721,32 @@ final class SyncEngineTests: XCTestCase {
 
     // MARK: Upload-only (the open notebook)
 
+    func testRemoteDeletionDefersTheOpenNotebookUntilItCloses() async throws {
+        try writeLocalNotebook(id: "nb1", pageIds: ["p1"], updatedAt: "2026-08-02T10:00:00Z")
+        try writeLocalNotebook(id: "nb2", pageIds: ["p2"], updatedAt: "2026-08-02T10:00:00Z")
+        _ = await engine().sync()
+        let pageURL = rootURL.appendingPathComponent("notebooks/nb1/pages/p1.json")
+        let savedPage = try Data(contentsOf: pageURL)
+        server.setFile("/notable/deletions/nb1", Data())
+        server.setFile("/notable/deletions/nb2", Data())
+        server.clearRequestLog()
+
+        let openReport = await engine().sync(uploadOnly: ["nb1"])
+
+        XCTAssertEqual(openReport.deletedLocally, ["nb2"], "closed notebooks still reconcile")
+        XCTAssertTrue(openReport.skipped.contains("nb1"))
+        XCTAssertEqual(try Data(contentsOf: pageURL), savedPage)
+        XCTAssertNotNil(server.fileData("/notable/deletions/nb1"))
+        XCTAssertFalse(server.requestLog().contains {
+            $0.method == "PUT" && $0.path.hasPrefix("/notable/notebooks/nb1/")
+        }, "deferral must not upload over the peer's deletion")
+
+        let closedReport = await engine().sync()
+
+        XCTAssertEqual(closedReport.deletedLocally, ["nb1"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pageURL.path))
+    }
+
     /// The failure this mode exists to prevent: a download landing under an open editor is
     /// reverted by the next autosave and then uploaded as the winner, so remote work vanishes
     /// from both sides. Deferring the download costs nothing — it happens on the next run.

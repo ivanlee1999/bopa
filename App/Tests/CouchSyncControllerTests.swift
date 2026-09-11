@@ -11,6 +11,7 @@ final class CouchSyncControllerTests: XCTestCase {
     private final class EngineSpy: @unchecked Sendable {
         private let lock = NSLock()
         private var _flushCount = 0
+        private var _cancelledFlushCount = 0
         private var _pullCalls: [Bool] = []
         private var _flushReport = CouchSyncEngine.FlushReport()
         private var _pullReport = CouchSyncEngine.PullReport()
@@ -18,6 +19,7 @@ final class CouchSyncControllerTests: XCTestCase {
         private var _pendingCount = 0
 
         var flushCount: Int { lock.withLock { _flushCount } }
+        var cancelledFlushCount: Int { lock.withLock { _cancelledFlushCount } }
         /// The `longpoll` flag of each pull, newest last.
         var pullCalls: [Bool] { lock.withLock { _pullCalls } }
 
@@ -34,7 +36,11 @@ final class CouchSyncControllerTests: XCTestCase {
         func setPullError(_ error: Error?) { lock.withLock { _pullError = error } }
 
         func flush() async -> CouchSyncEngine.FlushReport {
-            lock.withLock { _flushCount += 1; return _flushReport }
+            lock.withLock {
+                _flushCount += 1
+                if Task.isCancelled { _cancelledFlushCount += 1 }
+                return _flushReport
+            }
         }
 
         /// The ids each answer to the mass-deletion guard carried, newest last.
@@ -103,6 +109,7 @@ final class CouchSyncControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(60))
 
         XCTAssertEqual(engine.flushCount, 1, "a burst of edits should cost one push")
+        XCTAssertEqual(engine.cancelledFlushCount, 0, "the edit timer must not cancel its own upload")
     }
 
     func testPushNowSendsImmediatelyAndClearsAPendingTimer() async throws {
@@ -409,6 +416,83 @@ final class CouchSyncControllerTests: XCTestCase {
 
     // MARK: Push backoff
 
+    /// Observes the state just after a successful feed response, before its next flush can
+    /// overwrite the caption. That boundary distinguishes a recovered read from a new push.
+    @MainActor
+    private final class PullStatusProbe {
+        weak var controller: CouchSyncController?
+        private(set) var firstStatus: CouchSyncController.Status?
+
+        func record() {
+            if firstStatus == nil { firstStatus = controller?.status }
+        }
+    }
+
+    func testRecoveredPullRestoresTheUploadFailureInsteadOfKeepingTheReadFailure() async throws {
+        let engine = EngineSpy()
+        engine.setFlushReport(failingFlush(retriable: true))
+        engine.setPendingCount(1)
+        let controller = CouchSyncController(
+            sleeper: { duration in
+                try await Task.sleep(for: .milliseconds(duration > 0.6 ? 10_000 : 5))
+            },
+            flush: { await engine.flush() },
+            pull: { try await engine.pull(longpoll: $0) },
+            pending: { await engine.pendingCount() })
+        defer { controller.stop() }
+
+        await controller.pushNow()
+        let uploadFailure = controller.status
+        engine.setPullError(CouchError.transport("download offline"))
+        await controller.syncNow()
+        XCTAssertNotEqual(controller.status, uploadFailure, "the pull failed independently")
+
+        engine.setPullError(nil)
+        controller.start()
+        try await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertEqual(controller.status, uploadFailure, "restore the queued write's failure")
+        XCTAssertEqual(engine.flushCount, 1, "the read must not preempt upload backoff")
+
+        engine.setFlushReport(CouchSyncEngine.FlushReport())
+        engine.setPendingCount(0)
+        await controller.pushNow()
+        XCTAssertEqual(controller.status, .idle)
+        XCTAssertEqual(controller.pendingCount, 0)
+    }
+
+    func testRecoveredPullClearsReadFailureWhenOrdinaryEditsAreStillQueued() async throws {
+        let engine = EngineSpy()
+        var queued = CouchSyncEngine.FlushReport()
+        // A successful flush can leave a newer edit queued without any upload rejection.
+        queued.stillDirty = ["page:p1"]
+        engine.setFlushReport(queued)
+        engine.setPendingCount(1)
+        let probe = PullStatusProbe()
+        let controller = CouchSyncController(
+            sleeper: { _ in try await Task.sleep(for: .milliseconds(5)) },
+            flush: { await engine.flush() },
+            pull: { try await engine.pull(longpoll: $0) },
+            pending: {
+                await probe.record()
+                return await engine.pendingCount()
+            })
+        probe.controller = controller
+        defer { controller.stop() }
+
+        await controller.pushNow()
+        XCTAssertEqual(controller.pendingCount, 1)
+        engine.setPullError(CouchError.transport("download offline"))
+        await controller.syncNow()
+        guard case .failed = controller.status else { return XCTFail("expected a read failure") }
+
+        engine.setPullError(nil)
+        controller.start()
+        try await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertEqual(probe.firstStatus, .idle, "queued edits do not make a read error permanent")
+    }
+
     private func failingFlush(
         retriable: Bool, retryAfter: TimeInterval? = nil
     ) -> CouchSyncEngine.FlushReport {
@@ -434,6 +518,7 @@ final class CouchSyncControllerTests: XCTestCase {
         controller.stop()
 
         XCTAssertGreaterThan(engine.flushCount, 1, "the outbox should have been tried again")
+        XCTAssertEqual(engine.cancelledFlushCount, 0, "a retry must not cancel its own upload")
         let waits = sleeper.recorded
         XCTAssertGreaterThanOrEqual(waits.count, 2, "expected several retries: \(waits)")
         // Jittered, so compare across a doubling rather than between neighbours.
@@ -546,6 +631,9 @@ final class CouchSyncControllerTests: XCTestCase {
         XCTAssertEqual(
             engine.flushCount, 1,
             "the queued outbox belongs to the scheduled retry, not to every pull")
+        XCTAssertEqual(
+            controller.status, .failed("server(503)"),
+            "successful reads must not hide the outstanding upload failure during backoff")
     }
 
     /// RFC 9110 §10.2.3: when the server says when to come back, that answer beats the client's

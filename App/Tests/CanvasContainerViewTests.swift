@@ -520,6 +520,64 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertLessThanOrEqual(onScreenHeight, portrait.height + 1)
     }
 
+    /// Stage Manager can resize only the height. Fitting solely on width changes leaves the
+    /// bottom of the sheet outside a shorter window and wastes space when it grows again.
+    func testPaginationRefitsWhenOnlyViewportHeightChanges() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(pageSize: sheet)
+        container.sheetHeight = CGFloat(sheet.height)
+        container.fitsWholePage = true
+        rotate(container, to: portrait)
+
+        for height: CGFloat in [700, 1400] {
+            rotate(container, to: CGRect(x: 0, y: 0, width: portrait.width, height: height))
+
+            let expected = min(portrait.width / CGFloat(sheet.width), height / CGFloat(sheet.height))
+            XCTAssertEqual(container.canvas.zoomScale, expected, accuracy: 0.001)
+            XCTAssertLessThanOrEqual(container.pageSheet.frame.height, height + 1)
+            XCTAssertLessThanOrEqual(container.canvas.minimumZoomScale, expected)
+        }
+    }
+
+    func testPaginationHeightResizePreservesAPinchedZoom() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(pageSize: sheet)
+        container.sheetHeight = CGFloat(sheet.height)
+        container.fitsWholePage = true
+        rotate(container, to: portrait)
+        container.canvas.zoomScale = 1.5
+        container.canvasZoomDidChange()
+
+        rotate(container, to: CGRect(x: 0, y: 0, width: portrait.width, height: 700))
+
+        XCTAssertEqual(container.canvas.zoomScale, 1.5, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(container.canvas.minimumZoomScale, 700 / CGFloat(sheet.height))
+    }
+
+    func testActualSizeKeepsItsZoomAcrossAPaginationHeightResize() {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(pageSize: sheet)
+        container.sheetHeight = CGFloat(sheet.height)
+        container.fitsWholePage = true
+        container.keepsFitToWidth = false
+        rotate(container, to: portrait)
+
+        rotate(container, to: CGRect(x: 0, y: 0, width: portrait.width, height: 700))
+
+        XCTAssertEqual(container.canvas.zoomScale, 1, accuracy: 0.001)
+    }
+
+    func testContinuousScrollingKeepsWidthFitWhenOnlyViewportHeightChanges() {
+        let container = makeContainer(portrait, ink: deepInk)
+        container.canvas.contentOffset.y = 900 * container.canvas.zoomScale
+
+        rotate(container, to: CGRect(x: 0, y: 0, width: portrait.width, height: 700))
+
+        XCTAssertEqual(container.canvas.zoomScale, fit(portrait.width), accuracy: 0.001)
+        XCTAssertEqual(
+            container.canvas.contentOffset.y / container.canvas.zoomScale, 900, accuracy: 1)
+    }
+
     // MARK: - Ink lands on the paper
 
     /// The page point under a point on screen: what a zooming scroll view puts beneath a touch —

@@ -41,6 +41,7 @@
 		669C9BEFB7448981118F2DB1 /* ServerBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7079102757F82D89F8EECEAE /* ServerBrowserView.swift */; };
 		6F928AC9D7F948C991F81591 /* EditorPageModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DCE8EE06C7B861F1AAEA8DC /* EditorPageModelTests.swift */; };
 		6FDBE320E06856B13AC03D2A /* LibrarySort.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82D99ACFA8F3954E67039180 /* LibrarySort.swift */; };
+		7298CC949552312CB784AAF7 /* MacWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE8FC7C65660D305A2D38822 /* MacWindow.swift */; };
 		78FD24EDA9167440BC66CE0C /* BopaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13EC02E525247FA06BC975D5 /* BopaApp.swift */; };
 		7D6787E436578AEE47D227E6 /* NotebookStoreCouchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 895476546DFA7FB54E069B36 /* NotebookStoreCouchTests.swift */; };
 		836D2865717F4122A14798FC /* NotebookStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6054B4C855D9949F6774763 /* NotebookStoreTests.swift */; };
@@ -150,6 +151,7 @@
 		C3F3C79D9AECDFC39564C591 /* CouchSyncControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchSyncControllerTests.swift; sourceTree = "<group>"; };
 		C44DEE709374FB7ED572377A /* SeamGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamGeometry.swift; sourceTree = "<group>"; };
 		C7CA46ABC2CDD559A3FFAECE /* RotationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationUITests.swift; sourceTree = "<group>"; };
+		CE8FC7C65660D305A2D38822 /* MacWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWindow.swift; sourceTree = "<group>"; };
 		D4126EFEF1F3BD43C4F0CEFD /* ThumbnailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailTests.swift; sourceTree = "<group>"; };
 		D536F4C792F192A319C22B7F /* ToolRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolRail.swift; sourceTree = "<group>"; };
 		D7A86459981084A1F96E5AAC /* CouchSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchSyncController.swift; sourceTree = "<group>"; };
@@ -262,6 +264,7 @@
 				760C1A94995C19FE535F60AB /* LibrarySidebar.swift */,
 				82D99ACFA8F3954E67039180 /* LibrarySort.swift */,
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
+				CE8FC7C65660D305A2D38822 /* MacWindow.swift */,
 				37599E4D83A385BCE5B8170D /* Modernist.swift */,
 				6E3760B82FBF58BD001BE759 /* NextPagePreview.swift */,
 				BE0FF747D670DE264447CF5D /* NotebookCover.swift */,
@@ -504,6 +507,7 @@
 				4283276297678BE54BBF534F /* LibrarySidebar.swift in Sources */,
 				6FDBE320E06856B13AC03D2A /* LibrarySort.swift in Sources */,
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
+				7298CC949552312CB784AAF7 /* MacWindow.swift in Sources */,
 				502F56C0FD5818927AD81DC5 /* Modernist.swift in Sources */,
 				43EB0F980795627D2C4146CD /* NextPagePreview.swift in Sources */,
 				020B2B60C10166F6B44D6904 /* NotebookCover.swift in Sources */,
@@ -732,9 +736,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Bopa.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
+				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
@@ -745,10 +751,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.ivan.bopa;
 				SDKROOT = iphoneos;
-				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MACCATALYST = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -758,9 +764,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Bopa.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
+				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
@@ -771,10 +779,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.ivan.bopa;
 				SDKROOT = iphoneos;
-				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MACCATALYST = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

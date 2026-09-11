@@ -97,6 +97,7 @@ final class EditorPageModelTests: XCTestCase {
         model.saveNow()
 
         XCTAssertFalse(model.dirty)
+        XCTAssertNil(model.saveError, "a successful retry must clear the stale failure")
         let onDisk = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
         XCTAssertEqual(onDisk.strokes.map(\.id), ["keep"], "the erased stroke came back")
         XCTAssertEqual(
@@ -308,6 +309,94 @@ final class EditorPageModelTests: XCTestCase {
         XCTAssertEqual(left.scroll, 500, "the scroll offset was dropped with it")
     }
 
+    func testAFailedSavePreventsPageNavigationFromDiscardingTheDrawing() throws {
+        let firstId = pageIds[0]
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: firstId))
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "unsaved", second: 0)])
+        model.scheduleSave()
+        let drawingBefore = model.drawing.dataRepresentation()
+        let revisionBefore = model.contentRevision
+        let heal = try breakTheStore()
+
+        XCTAssertFalse(model.open(pageId: second.id))
+
+        XCTAssertEqual(model.pageId, firstId)
+        XCTAssertEqual(model.drawing.dataRepresentation(), drawingBefore)
+        XCTAssertEqual(model.contentRevision, revisionBefore, "the live canvas must not reload")
+        XCTAssertTrue(model.dirty)
+        XCTAssertNotNil(model.saveError)
+        XCTAssertNil(model.loadError, "this was a save failure, not a failure opening the next page")
+
+        try heal.write(to: manifestURL)
+        XCTAssertTrue(model.open(pageId: second.id))
+        XCTAssertEqual(model.pageId, second.id)
+        XCTAssertNil(model.saveError)
+        XCTAssertEqual(try store.loadPage(notebookId: notebookId, pageId: firstId).strokes.count, 1)
+    }
+
+    /// A rejected seam crossing must not leak its carried position into an unrelated later
+    /// navigation after the store heals.
+    func testAFailedSeamSaveDoesNotCarryScrollIntoALaterPageOpen() throws {
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "unsaved", second: 0)])
+        model.scheduleSave()
+        let heal = try breakTheStore()
+
+        XCTAssertFalse(model.enterNextPageAcrossSeam(carrying: 350))
+
+        try heal.write(to: manifestURL)
+        XCTAssertTrue(model.open(pageId: second.id))
+        XCTAssertEqual(model.openScroll, 0)
+    }
+
+    func testClosingKeepsUnsavedInkAliveUntilTheRetrySucceeds() throws {
+        let firstId = pageIds[0]
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: firstId))
+        var didClose = false
+        model.requestClose = { didClose = true }
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "unsaved", second: 0)])
+        model.scheduleSave()
+        let heal = try breakTheStore()
+
+        XCTAssertFalse(model.close())
+        XCTAssertFalse(didClose)
+        XCTAssertTrue(model.dirty)
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+
+        try heal.write(to: manifestURL)
+        XCTAssertTrue(model.close())
+        XCTAssertTrue(didClose)
+        XCTAssertFalse(model.dirty)
+        XCTAssertNil(model.saveError)
+        XCTAssertEqual(try store.loadPage(notebookId: notebookId, pageId: firstId).strokes.count, 1)
+    }
+
+    /// Scroll changes are persisted without setting `dirty`. A failure result must cover
+    /// those writes too, rather than guessing success from the stroke dirty flag.
+    func testAScrollOnlySaveFailureAlsoPreventsClosing() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        var didClose = false
+        model.requestClose = { didClose = true }
+        model.liveState.pageY = 500
+        let heal = try breakTheStore()
+
+        XCTAssertFalse(model.dirty)
+        XCTAssertFalse(model.close())
+        XCTAssertFalse(didClose)
+        XCTAssertNotNil(model.saveError)
+
+        try heal.write(to: manifestURL)
+        XCTAssertTrue(model.close())
+        XCTAssertTrue(didClose)
+        XCTAssertEqual(model.page?.scroll, 500)
+    }
+
     /// The fold's own path — saveNow, then open to reload — must stay a single flush: a second
     /// save inside `open` has to see a clean page and do nothing.
     func testOpeningTheSamePageAfterASaveIsANoOpFlush() throws {
@@ -382,6 +471,136 @@ final class EditorPageModelTests: XCTestCase {
 
         XCTAssertEqual(model.pageId, pageIds[0])
         XCTAssertNil(model.saveError)
+    }
+
+    func testRemotePageDeletionRecoversUnsavedHandwritingWithoutResurrectingThePage() throws {
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: second.id))
+        let unsaved = try makeStroke(id: "unsaved", second: 2)
+        model.drawing = PencilKitBridge.drawing(from: [unsaved])
+        model.scheduleSave()
+
+        var manifest = try XCTUnwrap(store.manifest(id: notebookId))
+        manifest.pageIds.removeAll { $0 == second.id }
+        manifest.deletedPageIds.append(
+            CouchTombstone(id: second.id, deletedAt: NotableDate.format(Date())))
+        try writeManifestDirectly(manifest)
+        let removedPageURL = store.notebookDirURL(notebookId)
+            .appendingPathComponent("pages/\(second.id).json")
+        try FileManager.default.removeItem(at: removedPageURL)
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        let recovery = try XCTUnwrap(store.notebooks.first { $0.notebookId != notebookId })
+        let recovered = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertEqual(recovery.title, "Recovered handwriting — Notes")
+        XCTAssertEqual(recovered.strokes.count, 1)
+        XCTAssertNotEqual(recovered.strokes[0].id, unsaved.id)
+        let recoveredPoints = try recovered.strokes[0].decodedPoints()
+        XCTAssertEqual(recoveredPoints.first?.x ?? -1, 10, accuracy: 0.02)
+        XCTAssertEqual(recoveredPoints.first?.y ?? -1, 110, accuracy: 0.02)
+        XCTAssertEqual(recovered.pageSize, second.pageSize)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: removedPageURL.path))
+        XCTAssertEqual(store.manifest(id: notebookId)?.deletedPageIds.map(\.id), [second.id])
+        XCTAssertEqual(model.pageId, manifest.pageIds[0])
+        XCTAssertFalse(model.dirty)
+        XCTAssertNil(model.saveError)
+    }
+
+    func testRemoteNotebookDeletionRecoversInkBeforeClosing() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "unsaved", second: 1)])
+        model.scheduleSave()
+        var closed = false
+        model.requestClose = { closed = true }
+
+        try FileManager.default.removeItem(at: store.notebookDirURL(notebookId))
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertTrue(closed)
+        XCTAssertFalse(model.dirty)
+        XCTAssertNil(store.manifest(id: notebookId))
+        let recovery = try XCTUnwrap(store.notebooks.first)
+        XCTAssertNotEqual(recovery.notebookId, notebookId)
+        XCTAssertEqual(store.notebooks.count, 1, "reentrant store notifications must not create extra copies")
+        let page = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertEqual(page.strokes.count, 1)
+    }
+
+    func testFailedRemoteDeletionRecoveryRetainsInkAndRetriesTheSameCopy() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "unsaved", second: 1)])
+        model.scheduleSave()
+        var closed = false
+        model.requestClose = { closed = true }
+        var recoveryManifestURL: URL?
+        var recoveryManifestData: Data?
+        // Fail the recovery's page save after its notebook was successfully created. This
+        // also exercises the synchronous local notification during that partial recovery.
+        store.didChangeDocuments = { documents in
+            guard recoveryManifestURL == nil,
+                  documents.contains(where: { $0.hasPrefix("notebook:") }),
+                  let recovery = self.store.notebooks.first(where: { $0.notebookId != self.notebookId })
+            else { return }
+            let url = self.store.notebookDirURL(recovery.notebookId).appendingPathComponent("manifest.json")
+            recoveryManifestURL = url
+            recoveryManifestData = try? Data(contentsOf: url)
+            try? FileManager.default.removeItem(at: url)
+        }
+
+        try FileManager.default.removeItem(at: store.notebookDirURL(notebookId))
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertFalse(closed)
+        XCTAssertTrue(model.dirty)
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+        XCTAssertNotNil(model.saveError)
+        store.didChangeDocuments = nil
+        try XCTUnwrap(recoveryManifestData).write(to: XCTUnwrap(recoveryManifestURL))
+
+        XCTAssertTrue(model.saveNow())
+
+        XCTAssertTrue(closed, "successful retry must release the removed notebook")
+        XCTAssertFalse(model.dirty)
+        XCTAssertNil(model.saveError)
+        XCTAssertEqual(store.notebooks.count, 1, "retry must reuse the first recovery notebook")
+        let recovery = try XCTUnwrap(store.notebooks.first)
+        let page = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertEqual(page.strokes.count, 1)
+    }
+
+    func testRemoteRemovalWaitsForThePencilToLiftBeforeRecovering() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        model.liveState.isDrawing = true
+        var closed = false
+        model.requestClose = { closed = true }
+
+        try FileManager.default.removeItem(at: store.notebookDirURL(notebookId))
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertFalse(closed)
+        XCTAssertTrue(store.notebooks.isEmpty)
+        // PencilKit delivers the finished stroke before the lift's idle callback.
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "last-stroke", second: 1)])
+        model.scheduleSave()
+        model.liveState.isDrawing = false
+        model.foldInRemoteInk()
+
+        XCTAssertTrue(closed)
+        let recovery = try XCTUnwrap(store.notebooks.first)
+        let page = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertEqual(page.strokes.count, 1)
     }
 
     /// The notebook itself going — deleted for good while its editor is open — leaves nothing to
