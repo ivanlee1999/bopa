@@ -319,7 +319,21 @@ final class NotebookStore: ObservableObject {
         // silently undid a rename arriving from the other one, every time the ink was later.
         // Sorting by recency reads the pages directory's own clock instead (see `refresh`).
         refreshAfterLocalChange(documents: [CouchDocID.page(page.id)])
+        // Sync writes from another actor. The page can pass the check above, then lose its
+        // notebook membership while this write is in progress. An orphan file is not a saved
+        // note: tell the editor to recover its still-live drawing before it clears `dirty`.
+        guard let currentManifest = readManifestFromDisk(notebookId),
+              currentManifest.pageIds.contains(page.id),
+              !currentManifest.deletedPageIds.contains(where: { $0.id == page.id })
+        else {
+            refresh()
+            throw PageRemovedDuringSaveError()
+        }
         return page
+    }
+
+    struct PageRemovedDuringSaveError: LocalizedError {
+        var errorDescription: String? { "The page was removed while it was being saved." }
     }
 
     private func readPageFromDisk(notebookId: String, pageId: String) -> PageFile? {

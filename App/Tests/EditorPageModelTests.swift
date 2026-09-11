@@ -532,6 +532,87 @@ final class EditorPageModelTests: XCTestCase {
         XCTAssertEqual(page.strokes.count, 1)
     }
 
+    /// A remote removal can become visible inside savePage's own local notification, before
+    /// that save returns. It must not be mistaken for an intentional local delete.
+    func testNotebookRemovalDuringSaveRecoversBeforeTheSaveClearsDirty() throws {
+        let firstId = pageIds[0]
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: firstId))
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "unsaved", second: 1)])
+        model.scheduleSave()
+        var closed = false
+        model.requestClose = { closed = true }
+        var removed = false
+        var removalError: Error?
+        store.didChangeDocuments = { documents in
+            guard !removed, documents == [CouchDocID.page(firstId)] else { return }
+            removed = true
+            do {
+                try FileManager.default.removeItem(at: self.store.notebookDirURL(self.notebookId))
+                self.store.refresh()
+            } catch {
+                removalError = error
+            }
+        }
+        defer { store.didChangeDocuments = nil }
+
+        XCTAssertFalse(model.saveNow(), "the original notebook did not survive this save")
+
+        XCTAssertTrue(removed)
+        XCTAssertNil(removalError)
+        XCTAssertTrue(closed)
+        XCTAssertNil(model.page, "the returning save must not restore the removed page in memory")
+        XCTAssertFalse(model.dirty)
+        XCTAssertNil(model.saveError)
+        XCTAssertNil(store.manifest(id: notebookId))
+        XCTAssertEqual(store.notebooks.count, 1)
+        let recovery = try XCTUnwrap(store.notebooks.first)
+        let recovered = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertEqual(recovered.strokes.count, 1)
+    }
+
+    func testPageRemovalDuringSaveKeepsTheRecoveryAndNeighborStateConsistent() throws {
+        let firstId = pageIds[0]
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: firstId))
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "unsaved", second: 1)])
+        model.scheduleSave()
+        var removed = false
+        var removalError: Error?
+        store.didChangeDocuments = { documents in
+            guard !removed, documents == [CouchDocID.page(firstId)] else { return }
+            removed = true
+            do {
+                var manifest = try XCTUnwrap(self.store.manifest(id: self.notebookId))
+                manifest.pageIds.removeAll { $0 == firstId }
+                manifest.deletedPageIds.append(
+                    CouchTombstone(id: firstId, deletedAt: NotableDate.format(Date())))
+                try self.writeManifestDirectly(manifest)
+                try FileManager.default.removeItem(
+                    at: self.store.notebookDirURL(self.notebookId).appendingPathComponent("pages/\(firstId).json"))
+                self.store.refresh()
+            } catch {
+                removalError = error
+            }
+        }
+        defer { store.didChangeDocuments = nil }
+
+        XCTAssertFalse(model.saveNow())
+
+        XCTAssertTrue(removed)
+        XCTAssertNil(removalError)
+        XCTAssertEqual(model.pageId, second.id)
+        XCTAssertEqual(model.page?.id, second.id, "the returning save must not overwrite the neighbor")
+        XCTAssertTrue(model.drawing.strokes.isEmpty)
+        XCTAssertFalse(model.dirty)
+        XCTAssertNil(model.saveError)
+        let recovery = try XCTUnwrap(store.notebooks.first { $0.notebookId != notebookId })
+        let recovered = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertEqual(recovered.strokes.count, 1)
+        XCTAssertEqual(store.manifest(id: notebookId)?.deletedPageIds.map(\.id), [firstId])
+    }
+
     func testFailedRemoteDeletionRecoveryRetainsInkAndRetriesTheSameCopy() throws {
         let model = makeModel()
         XCTAssertTrue(model.open(pageId: pageIds[0]))

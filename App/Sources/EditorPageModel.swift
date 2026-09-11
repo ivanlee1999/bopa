@@ -54,6 +54,9 @@ final class EditorPageModel: NSObject, ObservableObject {
     private var recoveryNotebook: NotebookManifest?
     private var recoveryStrokes: [StrokeDTO]?
     private var recoveringMissingPage = false
+    private var savingPage = false
+    private enum StoreChangeDuringSave { case local, remote }
+    private var storeChangeDuringSave: StoreChangeDuringSave?
     /// The notebook's page order as this editor last saw it with its page still listed — what
     /// the landing decision reads when the page vanishes, since by then the manifest no longer
     /// says where it was.
@@ -105,12 +108,20 @@ final class EditorPageModel: NSObject, ObservableObject {
     }
 
     @objc private func storeDidApplyRemoteChanges() {
+        if savingPage {
+            storeChangeDuringSave = .remote
+            return
+        }
         guard reconcileWithStore(remoteChange: true) else { return }
         remoteInkPending = true
         foldInRemoteInk()
     }
 
     @objc private func storeDidChangeLocally() {
+        if savingPage {
+            if storeChangeDuringSave == nil { storeChangeDuringSave = .local }
+            return
+        }
         reconcileWithStore()
     }
 
@@ -590,6 +601,7 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// keep the model alive and can retry when the app becomes active again.
     @discardableResult
     func saveNow() -> Bool {
+        guard !savingPage else { return false }
         saveTask?.cancel()
         if recoveryPending {
             guard !liveState.isDrawing else { return false }
@@ -610,6 +622,24 @@ final class EditorPageModel: NSObject, ObservableObject {
         // repeated saves: an untouched stroke keeps its id and its exact bytes.
         page.strokes = PencilKitBridge.strokeDTOs(from: drawing, source: page.strokes)
         page.scroll = scroll
+        // The store refreshes and notifies synchronously before returning. Defer those
+        // callbacks so a disappearance cannot replace the canvas halfway through this save.
+        savingPage = true
+        defer {
+            savingPage = false
+            let change = storeChangeDuringSave
+            storeChangeDuringSave = nil
+            switch change {
+            case .remote:
+                storeDidApplyRemoteChanges()
+            case .local:
+                // This notification came from our own save, not an explicit local delete.
+                // A disappearance seen here must preserve any edits the save still owes.
+                reconcileWithStore(remoteChange: true)
+            case nil:
+                break
+            }
+        }
         do {
             let written = try store.savePage(page, baselineStrokeIDs: baseline)
             // Only now that the write landed. The baseline has to keep naming what the canvas
@@ -633,6 +663,9 @@ final class EditorPageModel: NSObject, ObservableObject {
             // Leave `dirty` set so the next flush retries. Clearing it on a failed write — which
             // is what `try?` did — silently discarded the strokes that failed to land.
             saveError = String(describing: error)
+            if error is NotebookStore.PageRemovedDuringSaveError {
+                storeChangeDuringSave = .remote
+            }
             return false
         }
     }
