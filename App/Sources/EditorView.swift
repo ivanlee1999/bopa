@@ -65,16 +65,16 @@ struct EditorView: View {
             // Leaving the app does not pop the editor, so the debounced save has to be flushed
             // here too — otherwise switching apps or locking the iPad within two seconds of the
             // last stroke loses it.
-            .onChange(of: scenePhase) { _, phase in
-                if phase != .active { model.saveNow() }
-            }
+            // Returning to the app retries a flush that failed while leaving it.
+            .onChange(of: scenePhase) { _, _ in model.saveNow() }
             .alert(
                 "Couldn’t save this page", isPresented: .constant(model.saveError != nil),
                 presenting: model.saveError
             ) { _ in
-                Button("OK") { model.saveError = nil }
+                Button("Retry") { model.saveNow() }
+                Button("Keep editing", role: .cancel) { model.saveError = nil }
             } message: { error in
-                Text("Your strokes are still here and bopa will try again. \(error)")
+                Text("Your strokes are still on this page. Save successfully before switching pages or closing this notebook. \(error)")
             }
             .libraryActionAlert($actionError)
             .sheet(isPresented: $showingPageOverview) {
@@ -116,12 +116,12 @@ struct EditorView: View {
     private var topBar: some View {
         HStack(spacing: 8) {
             Button {
-                onClose?()
+                model.close()
             } label: {
                 Image(systemName: "chevron.backward")
                     .font(.system(size: 17, weight: .semibold))
             }
-            .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
             .accessibilityLabel("Library")
             .accessibilityIdentifier("editor.close")
 
@@ -148,7 +148,7 @@ struct EditorView: View {
             } label: {
                 Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
             }
-            .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
             .disabled(pageIndex == 0)
             .keyboardShortcut("[", modifiers: .command)
             .accessibilityLabel("Previous page")
@@ -157,13 +157,14 @@ struct EditorView: View {
             // thing you look at to ask "where am I in this notebook", and a notebook of forty
             // pages cannot be crossed with the two chevrons either side of it.
             Button {
+                guard model.saveNow() else { return }
                 showingPageOverview = true
             } label: {
                 Text("\(pageIndex + 1) / \(manifest.pageIds.count)")
                     .font(Modernist.font(11, .medium).monospacedDigit())
                     .foregroundStyle(Modernist.neutral700)
                     .padding(.horizontal, 6)
-                    .frame(height: 34)
+                    .frame(minWidth: Modernist.hitCompact, minHeight: Modernist.hitCompact)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -183,7 +184,7 @@ struct EditorView: View {
             } label: {
                 Image(systemName: "chevron.right").font(.system(size: 15, weight: .semibold))
             }
-            .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
             // The keyboard's page turns. On the Mac they are the only way to move between pages
             // besides these buttons: a mouse wheel has no drag phase, so scrolling past the end
             // of a page — the touch gesture that appends and enters pages — never fires there,
@@ -197,7 +198,7 @@ struct EditorView: View {
             } label: {
                 Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
             }
-            .buttonStyle(RailButtonStyle(selected: false, size: 34))
+            .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .accessibilityLabel("Add page")
         }
@@ -217,6 +218,12 @@ struct EditorView: View {
             }
             .disabled(!canChangeTemplate)
 
+            Picker("Page navigation", selection: $handwriting.config.pageNavigation) {
+                ForEach(PageNavigation.allCases) { navigation in
+                    Text(navigation.title).tag(navigation)
+                }
+            }
+
             Toggle(isOn: $handwriting.config.fingerDrawing) {
                 Label("Finger draws", systemImage: "hand.point.up.left")
             }
@@ -234,13 +241,16 @@ struct EditorView: View {
                 handwriting.config.pageFit = .fitWidth
                 viewport.fitToWidth()
             } label: {
-                Label("Fit page width", systemImage: "arrow.left.and.right")
+                Label(
+                    handwriting.config.pageNavigation.isPaged ? "Fit whole page" : "Fit page width",
+                    systemImage: handwriting.config.pageNavigation.isPaged
+                        ? "arrow.up.left.and.arrow.down.right" : "arrow.left.and.right")
             }
             .accessibilityIdentifier("editor.fitWidth")
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .semibold))
-                .frame(width: 34, height: 34)
+                .frame(width: Modernist.hitCompact, height: Modernist.hitCompact)
                 .foregroundStyle(Modernist.ink)
                 .contentShape(Rectangle())
         }
@@ -307,7 +317,6 @@ struct EditorView: View {
 
     private func openPage(at index: Int) {
         guard let manifest, manifest.pageIds.indices.contains(index) else { return }
-        model.saveNow()
         model.open(pageId: manifest.pageIds[index])
     }
 
@@ -345,6 +354,7 @@ struct EditorView: View {
     /// produces no page, and silence would read as the scroll simply not working.
     private func appendPageWithoutLeaving() {
         guard model.nextPageId == nil else { return }
+        guard model.saveNow() else { return }
         do {
             _ = try store.addPage(
                 to: notebookId, fallbackTemplate: handwriting.config.defaultTemplate)
@@ -359,7 +369,7 @@ struct EditorView: View {
     /// missed. It reports through the same alert a failed save does, because it is the same kind
     /// of news.
     private func addPage() {
-        model.saveNow()
+        guard model.saveNow() else { return }
         do {
             let newPage = try store.addPage(
                 to: notebookId, fallbackTemplate: handwriting.config.defaultTemplate)

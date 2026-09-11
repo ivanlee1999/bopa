@@ -185,6 +185,14 @@ public actor SyncEngine {
         let tombstones = await fetchTombstoneIds(&report)
         for id in tombstones {
             if localNotebookExists(id) {
+                // The open editor owns in-memory ink that disk does not yet contain. A
+                // remote deletion must obey the same protection as a remote download.
+                // Keep the tombstone on the server so closing the editor lets a later run
+                // apply the existing deletion policy without modifying this notebook now.
+                guard !uploadOnly.contains(id) else {
+                    report.skipped.append(id)
+                    continue
+                }
                 try? FileManager.default.removeItem(at: localNotebookDir(id))
                 state[id] = nil
                 report.deletedLocally.append(id)

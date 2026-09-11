@@ -78,6 +78,10 @@ final class CouchSyncController: ObservableObject {
 
     private var pullTask: Task<Void, Never>?
     private var pushTask: Task<Void, Never>?
+    /// A read failure may temporarily replace the caption, but cannot replace the reason
+    /// queued writes were rejected. Only a later flush resolves that failure.
+    private var uploadFailure: String?
+    private var pushesInFlight = 0
 
     /// The push loop's own backoff, deliberately separate from the feed loop's.
     ///
@@ -230,6 +234,9 @@ final class CouchSyncController: ObservableObject {
                 return  // superseded by a later edit, or cancelled
             }
             guard let self, !Task.isCancelled else { return }
+            // This timer is now doing the upload. Detach it before pushNow cancels any
+            // pending timer, so the flush does not inherit a cancelled caller.
+            self.pushTask = nil
             await self.pushNow()
         }
     }
@@ -255,6 +262,7 @@ final class CouchSyncController: ObservableObject {
                 return  // superseded by an edit, or cancelled by stop()
             }
             guard let self, !Task.isCancelled else { return }
+            self.pushTask = nil
             await self.pushNow()
         }
     }
@@ -265,8 +273,10 @@ final class CouchSyncController: ObservableObject {
         pushTask = nil
         let wasRetry = isRetryingPush
         isRetryingPush = false
+        pushesInFlight += 1
         status = .syncing
         let report = await flush()
+        pushesInFlight -= 1
         pendingCount = report.stillDirty.count
 
         if report.failures.isEmpty {
@@ -292,13 +302,14 @@ final class CouchSyncController: ObservableObject {
         heldDeletions = report.heldDeletions
 
         if report.blockedByDeletionGuard {
-            status = .failed(Self.deletionGuardMessage(count: report.heldDeletions.count))
+            uploadFailure = Self.deletionGuardMessage(count: report.heldDeletions.count)
         } else if let firstFailure = report.failures.values.sorted().first {
-            status = .failed(firstFailure)
+            uploadFailure = firstFailure
         } else {
+            uploadFailure = nil
             lastSyncedAt = now()
-            status = .idle
         }
+        status = pushesInFlight > 0 ? .syncing : uploadFailure.map(Status.failed) ?? .idle
     }
 
     /// Names both ways out and where they live. A warning about a batch the user cannot act on is
@@ -352,9 +363,10 @@ final class CouchSyncController: ObservableObject {
             conflictCopies.append(contentsOf: report.conflictCopies)
         }
         noteAssetProblems(report)
-        // A pull that returned at all clears any previous failure: the server is demonstrably
-        // reachable again, whether or not it had anything to say.
-        status = .idle
+        // Clear the read error, restoring only a failure that came from a queued upload.
+        // The visible failure may have been overwritten by an unrelated read failure.
+        status = pushesInFlight > 0 ? .syncing
+            : pendingCount > 0 ? uploadFailure.map(Status.failed) ?? .idle : .idle
     }
 
     /// Images that have not arrived, as a note beside the status rather than as a failure.

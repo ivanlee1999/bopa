@@ -33,10 +33,10 @@ final class CanvasContainerView: UIView {
     /// The line the next page starts at — drawn so the boundary is legible while scrolling
     /// through it, the way a page change is a thin rule in Notability rather than a gap.
     private let seamLine = UIView()
-    /// The view's width at the last layout pass, so a rotation (or a Split View resize) can
-    /// be told apart from the ordinary layout passes that happen at the same width. Zero
+    /// The viewport at the last layout pass. Whole-page fit depends on height as well as
+    /// width, so a window shortened without getting narrower still needs to re-fit. Zero
     /// until the first real layout, i.e. before the zoom is known.
-    private var laidOutWidth: CGFloat = 0
+    private var laidOutSize: CGSize = .zero
     /// Whether the page is currently zoomed to exactly fill the view's width. Only in that
     /// state does a width change re-fit the page — someone who zoomed in to write keeps
     /// their zoom across a rotation.
@@ -61,7 +61,7 @@ final class CanvasContainerView: UIView {
             // canvases; drawing one at the bottom of a real page makes it look like that page has
             // another hidden page inside it.
             paperView.showsSheetBoundaries = false
-            guard sheetHeight != oldValue, laidOutWidth > 0 else { return }
+            guard sheetHeight != oldValue, laidOutSize.width > 0 else { return }
             let fit = fitWidthZoom
             allowZoom(fit)
             if keepsFitToWidth, isFitToWidth {
@@ -153,16 +153,17 @@ final class CanvasContainerView: UIView {
         super.layoutSubviews()
         canvas.frame = bounds
         paperView.frame = bounds
-        if bounds.width > 0, bounds.width != laidOutWidth {
-            let isFirstLayout = laidOutWidth == 0
-            laidOutWidth = bounds.width
+        if bounds.width > 0, bounds.height > 0, bounds.size != laidOutSize {
+            let isFirstLayout = laidOutSize == .zero
+            let needsFit = bounds.width != laidOutSize.width || fitsWholePage
+            laidOutSize = bounds.size
             if isFirstLayout {
                 applyInitialZoom()
-            } else {
-                adjustZoomForNewWidth()
+            } else if needsFit {
+                adjustZoomForNewViewport()
             }
         }
-        if laidOutWidth > 0, let pendingScrollY {
+        if laidOutSize.width > 0, let pendingScrollY {
             self.pendingScrollY = nil
             applyScroll(pageY: pendingScrollY)
         }
@@ -292,12 +293,12 @@ final class CanvasContainerView: UIView {
         }
     }
 
-    /// Re-fits the page after the view's width changes — a rotation, or a Split View /
-    /// Stage Manager resize. Without this the zoom stays at the old width's fit: turning
+    /// Re-fits after a viewport change — either dimension for a whole sheet, width for
+    /// continuous scrolling. Without this the zoom stays at the old fit: turning
     /// the iPad to landscape leaves the page marooned in a band of empty space, and turning
     /// it back to portrait overflows the page off-screen with the minimum zoom still set
     /// from the wider layout, so it cannot be pinched back into view.
-    private func adjustZoomForNewWidth() {
+    private func adjustZoomForNewViewport() {
         let fit = fitWidthZoom
         // Never leave the user unable to reach the zoom that fits the new width.
         allowZoom(fit)
@@ -406,7 +407,7 @@ final class CanvasContainerView: UIView {
         guard width > 0, width != pageWidth else { return }
         let wasFitted = isFitToWidth
         pageWidth = width
-        guard laidOutWidth > 0 else { return }
+        guard laidOutSize.width > 0 else { return }
         allowZoom(fitWidthZoom)
         if keepsFitToWidth, wasFitted {
             canvas.zoomScale = fitWidthZoom
@@ -520,7 +521,7 @@ final class CanvasContainerView: UIView {
     /// pass (zoomScale is not final until then).
     func setInitialScroll(pageY: CGFloat) {
         let y = max(0, pageY)
-        if laidOutWidth > 0 {
+        if laidOutSize.width > 0 {
             applyScroll(pageY: y)
         } else {
             pendingScrollY = y

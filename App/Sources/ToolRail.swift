@@ -309,18 +309,17 @@ struct ToolRail: View {
                 }
             } else {
                 HStack(spacing: 0) {
-                    // Same bargain along the bottom: the tools, the widths and undo/redo are
-                    // wider than an iPhone, so they scroll while the ink stays put — the one
-                    // control you always want to be able to reach for.
+                    // The tools and widths scroll; undo/redo and ink stay within reach even
+                    // on an iPhone, where the full row is wider than the screen.
                     ScrollView(.horizontal) {
                         HStack(spacing: 0) {
                             tools
                             widthPicker
-                            history
                         }
                     }
                     .scrollBounceBehavior(.basedOnSize)
                     .scrollIndicators(.hidden)
+                    history
                     inkMenu
                 }
                 .padding(.horizontal, 4)
@@ -352,6 +351,7 @@ struct ToolRail: View {
                 }
                 .buttonStyle(RailButtonStyle(selected: selection.kind == kind, size: hit))
                 .accessibilityLabel(kind.label)
+                .accessibilityAddTraits(selection.kind == kind ? .isSelected : [])
                 .accessibilityIdentifier("editor.tool.\(kind.rawValue)")
             }
         }
@@ -411,6 +411,8 @@ struct ToolRail: View {
                 .buttonStyle(RailButtonStyle(selected: selection.width == width, size: hit))
                 .disabled(!selection.kind.hasWidth)
                 .accessibilityLabel(width.label)
+                .accessibilityAddTraits(
+                    selection.kind.hasWidth && selection.width == width ? .isSelected : [])
                 .accessibilityIdentifier("editor.width.\(width.rawValue)")
             }
             if selection.kind == .eraser {
@@ -424,6 +426,7 @@ struct ToolRail: View {
                     .buttonStyle(
                         RailButtonStyle(selected: selection.eraserMode == mode, size: hit))
                     .accessibilityLabel(mode.label)
+                    .accessibilityAddTraits(selection.eraserMode == mode ? .isSelected : [])
                     .accessibilityIdentifier("editor.eraserMode.\(mode.rawValue)")
                 }
             }
@@ -454,6 +457,7 @@ struct ToolRail: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(ink.name)
+                .accessibilityAddTraits(selection.inkIndex == ink.id ? .isSelected : [])
                 .accessibilityIdentifier("editor.ink.\(ink.id)")
             }
         }
@@ -484,6 +488,7 @@ struct ToolRail: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("Ink")
+        .accessibilityValue(selection.ink.name)
         .accessibilityIdentifier("editor.ink")
     }
 }
