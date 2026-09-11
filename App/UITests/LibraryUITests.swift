@@ -5,7 +5,9 @@ import XCTest
 final class LibraryUITests: XCTestCase {
     @MainActor
     private func capture(_ name: String, app: XCUIApplication) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        // Capture the display: application screenshots can crop using stale portrait bounds
+        // during iPad rotation, even after the scene has adopted landscape geometry.
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -67,6 +69,10 @@ final class LibraryUITests: XCTestCase {
         XCTAssertTrue(addNotebook.waitForExistence(timeout: 5))
 
         XCUIDevice.shared.orientation = .landscapeLeft
+        let landscape = NSPredicate { _, _ in
+            app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: landscape, evaluatedWith: app)], timeout: 5), .completed)
         XCTAssertTrue(addNotebook.isHittable)
         capture("library-list-landscape", app: app)
     }

@@ -55,18 +55,31 @@ final class RotationUITests: XCTestCase {
     }
 
     @MainActor
-    private func rotate(to orientation: UIDeviceOrientation, _ app: XCUIApplication) {
+    private func rotate(
+        to orientation: UIDeviceOrientation, _ app: XCUIApplication,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
         XCUIDevice.shared.orientation = orientation
-        // The rotation animation and the relayout it triggers are not synchronous with the
-        // orientation setter.
-        _ = app.descendants(matching: .any)["editor.canvas"].firstMatch
-            .waitForExistence(timeout: 5)
+        // The canvas exists before rotation too. Wait for actual scene geometry so a stuck
+        // simulator cannot pass this test by drawing three strokes in the same orientation.
+        let rotated = NSPredicate { _, _ in
+            let frame = app.windows.firstMatch.frame
+            return orientation.isLandscape ? frame.width > frame.height : frame.height > frame.width
+        }
+        let result = XCTWaiter.wait(
+            for: [expectation(for: rotated, evaluatedWith: app)], timeout: 5)
+        XCTAssertEqual(result, .completed, "The scene did not rotate to \(orientation)", file: file, line: line)
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = orientation.isLandscape ? "editor-landscape" : "editor-portrait"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor
     func testCanvasKeepsInkingThroughRotationInBothDirections() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-reset-tool"]
+        XCUIDevice.shared.orientation = .portrait
         app.launch()
 
         let canvas = openFreshNotebook(app)
