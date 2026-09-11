@@ -461,18 +461,19 @@ final class NotebookStoreTests: XCTestCase {
     /// Rows are expanded unless the user shut them, so a folder that arrives from a sync shows
     /// its subfolders without being opened first.
     func testFlattenedTreeIsExpandedExceptWhereCollapsed() throws {
-        let parent = try store.createFolder(title: "Work")
+        // Siblings come back in title order, so "Archive" is the first root row either way.
+        let parent = try store.createFolder(title: "Archive")
         _ = try store.createFolder(title: "Projects", parentFolderId: parent.id)
-        _ = try store.createFolder(title: "Archive")
+        _ = try store.createFolder(title: "Work")
 
         let tree = LibraryNode.tree(from: store)
 
         let open = LibraryNode.flattened(tree, collapsed: [])
-        XCTAssertEqual(open.map(\.node.title), ["Work", "Projects", "Archive"])
+        XCTAssertEqual(open.map(\.node.title), ["Archive", "Projects", "Work"])
         XCTAssertEqual(open.map(\.depth), [0, 1, 0])
 
         let shut = LibraryNode.flattened(tree, collapsed: [parent.id])
-        XCTAssertEqual(shut.map(\.node.title), ["Work", "Archive"])
+        XCTAssertEqual(shut.map(\.node.title), ["Archive", "Work"])
     }
 
     func testFoldersReloadFromDiskOnRefresh() throws {
