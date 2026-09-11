@@ -23,6 +23,19 @@ final class NotebookStoreTests: XCTestCase {
         return try JSONDecoder().decode(FoldersFile.self, from: data)
     }
 
+    func testDuplicateManifestIdentityDoesNotCrashActivityRefresh() throws {
+        let notebook = try store.createNotebook(title: "Original")
+        let copy = rootURL.appendingPathComponent("notebooks/imported-copy")
+        try FileManager.default.copyItem(at: store.notebookDirURL(notebook.notebookId), to: copy)
+        let future = Date().addingTimeInterval(3600)
+        try FileManager.default.setAttributes([.modificationDate: future],
+            ofItemAtPath: store.notebookDirURL(notebook.notebookId).appendingPathComponent("pages").path)
+        store.refresh()
+        XCTAssertEqual(store.notebookActivityDates.count, 1)
+        XCTAssertEqual(try XCTUnwrap(store.notebookActivityDates[notebook.notebookId]).timeIntervalSince1970,
+                       future.timeIntervalSince1970, accuracy: 0.001)
+    }
+
     // MARK: Folders
 
     func testCreateFolderPersistsToFoldersJSON() throws {

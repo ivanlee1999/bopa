@@ -164,9 +164,10 @@ final class ThumbnailTests: XCTestCase {
         let thumb = try XCTUnwrap(
             ThumbnailRenderer.thumbnail(notebookId: notebookId, pageId: pageIds[0], store: store))
 
-        let scale = ThumbnailRenderer.size.width / CGFloat(page.pageSize.width)
+        let fitted = ThumbnailRenderer.fittedPageRect(pageSize: page.pageSize)
+        let scale = fitted.width / CGFloat(page.pageSize.width)
         let center = try pixel(
-            of: thumb, x: Int((100 + 400) * scale), y: Int((200 + 400) * scale))
+            of: thumb, x: Int(fitted.minX + (100 + 400) * scale), y: Int(fitted.minY + (200 + 400) * scale))
         XCTAssertFalse(isWhite(center), "the image region rendered as blank paper")
         XCTAssertGreaterThan(center.r, center.g, "the red picture should render red")
 
@@ -183,9 +184,57 @@ final class ThumbnailTests: XCTestCase {
 
         let thumb = try XCTUnwrap(
             ThumbnailRenderer.thumbnail(notebookId: notebookId, pageId: pageIds[0], store: store))
-        let scale = ThumbnailRenderer.size.width / CGFloat(page.pageSize.width)
+        let fitted = ThumbnailRenderer.fittedPageRect(pageSize: page.pageSize)
+        let scale = fitted.width / CGFloat(page.pageSize.width)
         let center = try pixel(
-            of: thumb, x: Int((100 + 400) * scale), y: Int((200 + 400) * scale))
+            of: thumb, x: Int(fitted.minX + (100 + 400) * scale), y: Int(fitted.minY + (200 + 400) * scale))
         XCTAssertTrue(isWhite(center), "a missing file must render as paper, not as a hole")
     }
+    func testThumbnailsFitTheWholeSheetAtEveryPresetSize() {
+        for preset in PageSizePreset.all {
+            let fitted = ThumbnailRenderer.fittedPageRect(pageSize: preset.size)
+            XCTAssertGreaterThan(fitted.width, 0)
+            XCTAssertGreaterThan(fitted.height, 0)
+            XCTAssertGreaterThanOrEqual(fitted.minX, -0.001)
+            XCTAssertGreaterThanOrEqual(fitted.minY, -0.001)
+            XCTAssertLessThanOrEqual(fitted.maxX, ThumbnailRenderer.size.width + 0.001)
+            XCTAssertLessThanOrEqual(fitted.maxY, ThumbnailRenderer.size.height + 0.001)
+            XCTAssertEqual(fitted.width / fitted.height,
+                           CGFloat(preset.size.width) / CGFloat(preset.size.height), accuracy: 0.001)
+        }
+    }
+
+    func testNativePaperIsRenderedAndCoverStaysOnTheFirstPage() throws {
+        let notebook = try store.createNotebook(title: "Ruled", template: .lined)
+        let first = try XCTUnwrap(notebook.pageIds.first)
+        let ruled = try XCTUnwrap(ThumbnailRenderer.thumbnail(for: notebook, store: store))
+        let second = try store.addPage(to: notebook.notebookId)
+        store.rememberOpenedPage(second.id, in: notebook.notebookId)
+        let freshManifest = try XCTUnwrap(store.manifest(id: notebook.notebookId))
+        XCTAssertTrue(ruled === ThumbnailRenderer.thumbnail(for: freshManifest, store: store),
+                      "The library cover must stay the first page when the editor resumes elsewhere")
+        var page = try store.loadPage(notebookId: notebook.notebookId, pageId: first)
+        let blank = TemplateApplication.pageFields(for: .native(.blank))
+        page.background = blank.background
+        page.backgroundType = blank.backgroundType
+        try store.savePage(page)
+        let plain = try XCTUnwrap(ThumbnailRenderer.thumbnail(for: freshManifest, store: store))
+        XCTAssertNotEqual(ruled.pngData(), plain.pngData(), "Ruled paper must not appear as a blank cover")
+    }
+
+    func testBottomOfTallPaperRemainsVisible() throws {
+        try installImageFile(named: "bottom.png")
+        var page = try store.loadPage(notebookId: notebookId, pageId: pageIds[0])
+        let bottom = page.pageSize.height - 100
+        page.images = [makeImageDTO(uri: "images/bottom.png", x: 100, y: bottom, width: 200, height: 80)]
+        try store.savePage(page)
+        let thumb = try XCTUnwrap(ThumbnailRenderer.thumbnail(
+            notebookId: notebookId, pageId: pageIds[0], store: store))
+        let fitted = ThumbnailRenderer.fittedPageRect(pageSize: page.pageSize)
+        let scale = fitted.width / CGFloat(page.pageSize.width)
+        let sample = try pixel(of: thumb, x: Int(fitted.minX + 200 * scale),
+                               y: Int(fitted.minY + CGFloat(bottom + 40) * scale))
+        XCTAssertGreaterThan(sample.r, sample.g, "Content near the bottom of A4 was cropped from the cover")
+    }
+
 }

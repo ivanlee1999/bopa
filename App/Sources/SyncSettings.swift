@@ -228,7 +228,11 @@ struct SyncSettingsView: View {
             case .off:
                 EmptyView()
             case .couchdb:
-                CouchSettingsSection(settings: $couchSettings, host: backendHost)
+                if let backendHost {
+                    HostedCouchSettingsSection(settings: $couchSettings, host: backendHost)
+                } else {
+                    CouchSettingsSection(settings: $couchSettings, host: nil)
+                }
             case .webdav:
                 webdavSections
             }
@@ -248,11 +252,11 @@ struct SyncSettingsView: View {
     private var backendFooter: String {
         switch backend {
         case .off:
-            return "bopa keeps your notes on this iPad only. Your server settings are kept, so "
+            return "bopa keeps your notes on this device only. Your server settings are kept, so "
                 + "turning sync back on picks up where you left off."
         case .couchdb:
-            return "Changes appear on your other device within a second or two, and merge "
-                + "automatically when you have both been writing offline."
+            return "Syncs changes automatically when connected, and merges edits made offline "
+                + "when your devices reconnect."
         case .webdav:
             return "Syncs whole notebooks through a shared folder. Slower to notice changes, "
                 + "and edits made on both devices at once need sorting out by hand."
@@ -347,7 +351,7 @@ struct SyncSettingsView: View {
                     // Only meaningful once the root is resolved: it names the tree bopa really
                     // looked in, which is the one thing the user needs to match on the BOOX.
                     if coordinator.lastRunFoundNothing {
-                        Text("bopa found nothing in “\(settings.syncTreePath)”. If your BOOX already "
+                        Text("bopa found nothing in “\(settings.syncTreePath)”. If Notable already "
                             + "has notebooks, point Notable at “\(settings.syncRemotePath)” too.")
                     }
                 }
@@ -362,8 +366,8 @@ struct SyncSettingsView: View {
             return "Fill in the address, username and password to browse the server."
         }
         return settings.didResolveSyncRoot
-            ? "That is the shared folder itself, so bopa syncs straight to it. Point Notable on the "
-                + "BOOX at “\(settings.syncRemotePath)”."
+            ? "That is the shared folder itself, so bopa syncs straight to it. Point Notable "
+                + "at “\(settings.syncRemotePath)”."
             : "Browse the server to pick the folder bopa and Notable share. Notebooks live in "
                 + "“\(settings.syncTreePath)”."
     }

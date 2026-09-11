@@ -273,33 +273,28 @@ struct ToolRail: View {
     @ObservedObject var undo: CanvasUndoController
     /// `false` lays the rail out along the bottom, the one-handed variant.
     var vertical = true
+    @State private var showingInk = false
 
     private var hit: CGFloat { vertical ? Modernist.hit : Modernist.hitCompact }
 
     var body: some View {
         Group {
             if vertical {
-                // Five widths and a full palette are taller than a landscape iPad on the short
-                // edge, so the column scrolls rather than clips. `basedOnSize` keeps it inert
-                // whenever it does fit — on e-ink a rail that bounces is a full-screen refresh
-                // for nothing.
-                ScrollView(.vertical) {
-                    VStack(spacing: 0) {
-                        tools
-                        ModernistRule()
-                            .frame(width: hit)
-                        widthPicker
-                        ModernistRule()
-                            .frame(width: hit)
-                        history
-                        ModernistRule()
-                            .frame(width: hit)
-                        swatches
+                VStack(spacing: 0) {
+                    ScrollView(.vertical) {
+                        VStack(spacing: 0) {
+                            tools
+                            ModernistRule().frame(width: hit)
+                            widthPicker
+                        }
                     }
-                    .padding(.vertical, 6)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollIndicators(.hidden)
+                    ModernistRule().frame(width: hit)
+                    history
+                    inkMenu
                 }
-                .scrollBounceBehavior(.basedOnSize)
-                .scrollIndicators(.hidden)
+                .padding(.vertical, 6)
                 .frame(width: 60)
                 .frame(maxHeight: .infinity)
                 .overlay(alignment: .trailing) {
@@ -433,21 +428,19 @@ struct ToolRail: View {
         }
     }
 
-    /// The whole palette, always visible. Two columns rather than one: a single file of a dozen
-    /// swatches would be longer than the rest of the rail put together, and the point of showing
-    /// them at all is that a colour is one tap away. A ring rather than a fill marks the current
-    /// one — the swatch itself has to stay pure colour.
+    /// Palette targets stay at least 44pt; the selection border surrounds the actual ink color.
     private var swatches: some View {
         LazyVGrid(columns: Self.swatchColumns, spacing: 2) {
             ForEach(Modernist.inks) { ink in
                 Button {
                     selection.select(inkIndex: ink.id)
+                    showingInk = false
                 } label: {
                     Rectangle()
                         .fill(ink.color)
                         .frame(width: 24, height: 24)
                         .overlay(Rectangle().stroke(Modernist.neutral600, lineWidth: 1))
-                        .padding(2)
+                        .frame(width: 44, height: 44)
                         .overlay {
                             if selection.inkIndex == ink.id {
                                 Rectangle().stroke(Modernist.ink, lineWidth: 2)
@@ -466,20 +459,13 @@ struct ToolRail: View {
     }
 
     private static let swatchColumns = [
-        GridItem(.fixed(28), spacing: 2), GridItem(.fixed(28), spacing: 2),
+        GridItem(.fixed(44), spacing: 8), GridItem(.fixed(44), spacing: 8),
+        GridItem(.fixed(44), spacing: 8), GridItem(.fixed(44), spacing: 8),
     ]
 
     /// Compact stand-in for the swatch column: the current ink, opening the rest.
     private var inkMenu: some View {
-        Menu {
-            ForEach(Modernist.inks) { ink in
-                Button {
-                    selection.select(inkIndex: ink.id)
-                } label: {
-                    Label(ink.name, systemImage: selection.inkIndex == ink.id ? "checkmark" : "square.fill")
-                }
-            }
-        } label: {
+        Button { showingInk = true } label: {
             Rectangle()
                 .fill(selection.ink.color)
                 .frame(width: 26, height: 26)
@@ -489,7 +475,17 @@ struct ToolRail: View {
         }
         .accessibilityLabel("Ink")
         .accessibilityValue(selection.ink.name)
+        .buttonStyle(.plain)
         .accessibilityIdentifier("editor.ink")
+        .popover(isPresented: $showingInk) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Ink").font(Modernist.font(15, .semibold))
+                swatches
+            }
+            .padding(16)
+            .background(Modernist.paper)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 }
 

@@ -81,24 +81,24 @@ struct PageOverviewView: View {
                         notebookId: notebookId, pageId: pageId, title: trimmed)
                 }
             }
+            .disabled(outlineTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The entry jumps to this page. Nest it under another from the Outline tab.")
         }
         .confirmationDialog(
-            "Delete this page?", isPresented: .constant(deletingPageId != nil),
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                if let pageId = deletingPageId {
-                    perform("Deleting the page", error: $actionError) {
-                        try store.deletePage(from: notebookId, pageId: pageId)
-                    }
+            "Delete this page?",
+            isPresented: Binding(get: { deletingPageId != nil }, set: { if !$0 { deletingPageId = nil } }),
+            titleVisibility: .visible, presenting: deletingPageId
+        ) { pageId in
+            Button("Delete page", role: .destructive) {
+                perform("Deleting the page", error: $actionError) {
+                    try store.deletePage(from: notebookId, pageId: pageId)
                 }
                 deletingPageId = nil
             }
             Button("Cancel", role: .cancel) { deletingPageId = nil }
-        } message: {
+        } message: { _ in
             Text("The page and everything on it are deleted here and on every device you sync "
                 + "with. It cannot be undone.")
         }
@@ -108,19 +108,33 @@ struct PageOverviewView: View {
     // MARK: Cells
 
     private func pageCell(pageId: String, index: Int) -> some View {
-        Button {
-            openPage(pageId)
-        } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                thumbnail(pageId: pageId)
-                Text(label(for: pageId, index: index))
-                    .font(Modernist.font(12, .semibold))
-                    .foregroundStyle(Modernist.ink)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: 6) {
+            Button { openPage(pageId) } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    thumbnail(pageId: pageId)
+                    Text(label(for: pageId, index: index))
+                        .font(Modernist.font(14, .semibold))
+                        .foregroundStyle(Modernist.ink)
+                        .lineLimit(2)
+                }
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("pages.page.\(pageId)")
+            .accessibilityAddTraits(pageId == currentPageId ? .isSelected : [])
+            HStack {
+                if pageId == currentPageId {
+                    Label("Current", systemImage: "checkmark")
+                        .font(Modernist.font(12, .semibold))
+                }
+                Spacer(minLength: 0)
+                Menu { menu(pageId: pageId, index: index) } label: {
+                    Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("More options for page \(index + 1)")
+                .accessibilityIdentifier("pageOverview.options.\(pageId)")
+            }
+            .foregroundStyle(Modernist.ink)
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("pages.page.\(pageId)")
         .contextMenu { menu(pageId: pageId, index: index) }
         // Drag to reorder. `onMove` needs a List; the grid is what makes a notebook of forty pages
         // legible, so the drop target is each cell instead.
@@ -174,7 +188,7 @@ struct PageOverviewView: View {
     /// pages by, and a page nobody named has nothing else to say.
     private func label(for pageId: String, index: Int) -> String {
         let title = try? store.loadPage(notebookId: notebookId, pageId: pageId).title
-        if let title, !title.isEmpty { return title }
+        if let title, !title.isEmpty { return "Page \(index + 1) · \(title)" }
         return "Page \(index + 1)"
     }
 
@@ -225,11 +239,23 @@ struct PageOverviewView: View {
         } label: {
             Label("Insert after", systemImage: "plus.rectangle")
         }
+        Button {
+            perform("Moving the page", error: $actionError) {
+                try store.movePage(in: notebookId, from: index, to: index - 1)
+            }
+        } label: { Label("Move earlier", systemImage: "arrow.left") }
+        .disabled(index == 0)
+        Button {
+            perform("Moving the page", error: $actionError) {
+                try store.movePage(in: notebookId, from: index, to: index + 1)
+            }
+        } label: { Label("Move later", systemImage: "arrow.right") }
+        .disabled(index >= pageIds.count - 1)
         Divider()
         Button(role: .destructive) {
             deletingPageId = pageId
         } label: {
-            Label("Delete", systemImage: "trash")
+            Label("Delete page", systemImage: "trash")
         }
         // The last page cannot go: a notebook with none is the empty leftover the library already
         // has to warn about, and arriving there deliberately would be a worse way to get it.

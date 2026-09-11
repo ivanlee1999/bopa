@@ -86,6 +86,9 @@ final class DrawingUITests: XCTestCase {
             "--uitest-reset-tool", "-handwriting.pageNavigation", "continuous",
             "-handwriting.fingerDrawing", "false",
         ]
+        // This single-drag distance is sized for a portrait viewport. Other tests or manual
+        // simulator inspection may leave the device in landscape, where the page is taller.
+        XCUIDevice.shared.orientation = .portrait
         app.launch()
 
         let canvas = openFreshNotebook(app)

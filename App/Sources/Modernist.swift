@@ -115,21 +115,22 @@ enum Modernist {
         }?.id
     }
 
-    /// A stable index into `count` derived from a string, so a notebook keeps the same
-    /// spine colour across launches. `hashValue` is seeded per process and would not.
+    /// Java's signed 32-bit string hash over UTF-16, then floor modulo. Notable uses
+    /// this same rule, so a synced notebook or folder keeps its colour on both devices.
+    /// Swift's `hashValue` is process-seeded and UTF-8 would disagree for non-ASCII ids.
     static func stableIndex(_ seed: String, count: Int) -> Int {
         guard count > 0 else { return 0 }
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in seed.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 0x1000_0000_01b3
+        var hash: Int32 = 0
+        for unit in seed.utf16 {
+            hash = (hash &* 31) &+ Int32(unit)
         }
-        return Int(hash % UInt64(count))
+        let remainder = Int(hash) % count
+        return remainder < 0 ? remainder + count : remainder
     }
 
     /// The saturated fills a cover spine or a folder chip may take. Ink is in the set on
     /// purpose: the design leans on black as much as on red.
-    static let fills: [Color] = [accent700, ink, accent600, neutral600]
+    static let fills: [Color] = [accent700, ink, accent600, Color(hex: 0x888888)]
 
     static func fill(for seed: String) -> Color {
         fills[stableIndex(seed, count: fills.count)]

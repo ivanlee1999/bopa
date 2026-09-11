@@ -16,10 +16,15 @@ struct LibraryView: View {
     @State private var showsSidebar: Bool?
     @State private var openNotebook: OpenNotebook?
     @State private var resolvingConflict: NotebookConflict?
+    @State private var browsingNotebook: OpenNotebook?
+    @State private var openAfterBrowsing: OpenNotebook?
+    @State private var navigationRevision = 0
+    @State private var sidebarIsPresentingModal = false
 
     /// Identifiable wrapper so the editor can be driven by `fullScreenCover(item:)`.
     struct OpenNotebook: Identifiable, Hashable {
         let id: String
+        var pageId: String? = nil
     }
 
     /// Open on a wide screen, closed when there is only room for one column.
@@ -30,8 +35,12 @@ struct LibraryView: View {
     var body: some View {
         HStack(spacing: 0) {
             if sidebarVisible {
-                LibrarySidebar(selection: $selection, openNotebook: open)
+                LibrarySidebar(selection: $selection, isPresentingModal: $sidebarIsPresentingModal, openNotebook: open,
+                               showPages: showPages,
+                               selectDestination: selectDestination,
+                               closeSidebar: { showsSidebar = false })
                     .frame(width: horizontalSizeClass == .compact ? nil : 300)
+                    .accessibilityIdentifier("library.sidebar")
                     .overlay(alignment: .trailing) {
                         Rectangle()
                             .fill(Modernist.ink)
@@ -42,8 +51,12 @@ struct LibraryView: View {
                 FolderContentsView(
                     folderId: selection?.folderId,
                     selection: $selection,
+                    navigationRevision: navigationRevision,
+                    menuCommandsEnabled: openNotebook == nil && browsingNotebook == nil && resolvingConflict == nil
+                        && !sidebarIsPresentingModal,
                     toggleSidebar: { showsSidebar = !sidebarVisible },
-                    openNotebook: open)
+                    openNotebook: open,
+                    showPages: showPages)
             }
         }
         .background(Modernist.paper)
@@ -70,7 +83,7 @@ struct LibraryView: View {
         // No navigation stack around it: the editor draws its own docked top bar, and a
         // system bar over it would be a second row of chrome saying the same things.
         .fullScreenCover(item: $openNotebook) { target in
-            EditorView(notebookId: target.id, onClose: { openNotebook = nil })
+            EditorView(notebookId: target.id, initialPageId: target.pageId, onClose: { openNotebook = nil })
                 .environmentObject(store)
         }
         // Presented here rather than in either column, because both open notebooks: the
@@ -78,15 +91,49 @@ struct LibraryView: View {
         .sheet(item: $resolvingConflict) { conflict in
             ConflictResolutionView(conflict: conflict)
         }
+        .sheet(item: $browsingNotebook, onDismiss: {
+            if let target = openAfterBrowsing {
+                openAfterBrowsing = nil
+                openTarget(target)
+            }
+        }) { target in
+            NavigationStack {
+                NotebookNavigatorView(
+                    notebookId: target.id,
+                    currentPageId: store.manifest(id: target.id).flatMap { store.lastOpenedPage(in: $0) },
+                    openPage: { pageId in
+                        openAfterBrowsing = OpenNotebook(id: target.id, pageId: pageId)
+                    })
+            }
+        }
+    }
+
+    private func showPages(_ notebookId: String) {
+        if let conflict = coordinator.conflict(for: notebookId) {
+            resolvingConflict = conflict
+        } else {
+            browsingNotebook = OpenNotebook(id: notebookId)
+        }
+    }
+
+    private func selectDestination(_ destination: LibrarySelection) {
+        selection = destination
+        navigationRevision += 1
+        if horizontalSizeClass == .compact { showsSidebar = false }
     }
 
     /// A conflicted notebook opens the chooser, not the editor — editing a copy whose fate
     /// is undecided would just add a third version. Notable does the same on the BOOX.
     private func open(_ notebookId: String) {
+        openTarget(OpenNotebook(id: notebookId))
+    }
+
+    private func openTarget(_ target: OpenNotebook) {
+        let notebookId = target.id
         if let conflict = coordinator.conflict(for: notebookId) {
             resolvingConflict = conflict
         } else {
-            openNotebook = OpenNotebook(id: notebookId)
+            openNotebook = target
         }
     }
 }
@@ -101,12 +148,17 @@ private struct FolderContentsView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let folderId: String?
     @Binding var selection: LibrarySelection?
+    let navigationRevision: Int
+    let menuCommandsEnabled: Bool
     let toggleSidebar: () -> Void
     let openNotebook: (String) -> Void
+    let showPages: (String) -> Void
 
     @State private var showingNewNotebook = false
     @State private var newNotebookTitle = ""
     @State private var newNotebookPageSize = PageSizePreset.default.size
+    @State private var newNotebookTemplate = NativeTemplate.blank
+    @AppStorage("library.layout") private var layout = "automatic"
     @State private var showingNewFolder = false
     @State private var newFolderTitle = ""
 
@@ -125,6 +177,7 @@ private struct FolderContentsView: View {
     @State private var actionError: LibraryActionError?
 
     @State private var query = ""
+    @FocusState private var searchFocused: Bool
     /// Persisted, because an order is a preference about the library rather than about this
     /// visit to it — coming back to a differently-arranged shelf is its own small confusion.
     @AppStorage("library.sortOrder") private var sortOrderRaw = LibrarySortOrder.updated.rawValue
@@ -160,16 +213,18 @@ private struct FolderContentsView: View {
 
     private var notebooks: [NotebookManifest] {
         let found = isSearching ? store.search(query).notebooks : store.notebooks(in: folderId)
-        return LibrarySort.notebooks(found, by: sortOrder, descending: sortDescending)
+        return LibrarySort.notebooks(found, by: sortOrder, descending: sortDescending,
+                                     activityDates: store.notebookActivityDates)
     }
 
     private var title: String {
-        folderId.flatMap { store.folder(id: $0)?.title } ?? "All Notes"
+        folderId.flatMap { store.folder(id: $0)?.title } ?? "Library"
     }
 
     /// The design's one-handed layout: notebooks become a list of cover chips rather than
     /// a grid, so a title never truncates to fit a column.
     private var isCompact: Bool { horizontalSizeClass == .compact }
+    private var usesList: Bool { layout == "list" || (layout != "grid" && isCompact) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -194,15 +249,13 @@ private struct FolderContentsView: View {
             NewNotebookSheet(
                 title: $newNotebookTitle,
                 pageSize: $newNotebookPageSize,
-                create: { title, pageSize in
-                    perform("Creating the notebook", error: $actionError) {
-                        _ = try store.createNotebook(
-                            title: title, parentFolderId: folderId,
-                            template: handwriting.config.defaultTemplate,
-                            pageSize: pageSize)
-                    }
+                template: $newNotebookTemplate,
+                create: { title, pageSize, template in
+                    _ = try store.createNotebook(
+                        title: title, parentFolderId: folderId, template: template, pageSize: pageSize)
                     // The choice sticks, so a second notebook does not need making again.
                     handwriting.config.defaultPageSize = pageSize
+                    handwriting.config.defaultTemplate = template
                 })
         }
         .alert("New folder", isPresented: $showingNewFolder) {
@@ -257,7 +310,7 @@ private struct FolderContentsView: View {
             // Says what the other device will do, because it will do it immediately: the Trash is
             // synced. Nothing is destroyed until the Trash is emptied, which is what makes
             // restoring mean anything, and a restore travels the same way.
-            Text("The notebook leaves the library on your BOOX too, and stays in the Trash until "
+            Text("The notebook moves to the Trash on every synced device and stays there until "
                 + "you empty it. Nothing is deleted until then.")
         }
         .confirmationDialog(
@@ -278,7 +331,10 @@ private struct FolderContentsView: View {
             NavigationStack { TrashView() }
         }
         .libraryActionAlert($actionError)
+        .focusedSceneValue(\.libraryMenuActions, activeMenuActions)
         .onAppear { store.refresh() }
+        .onChange(of: folderId) { _, _ in query = "" }
+        .onChange(of: navigationRevision) { _, _ in query = "" }
     }
 
     /// Says what is inside, because the number is the decision: a folder holding forty notebooks
@@ -302,7 +358,7 @@ private struct FolderContentsView: View {
             ].compactMap { $0 }
             contents = "It holds \(parts.formatted(.list(type: .and)))."
         }
-        return "\(contents) Everything inside goes with it — on your BOOX as well — and stays in "
+        return "\(contents) Everything inside goes with it on every synced device and stays in "
             + "the Trash until you empty it."
     }
 
@@ -313,171 +369,175 @@ private struct FolderContentsView: View {
     /// outlined.
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .bottom, spacing: 12) {
-                titleBlock
-                Spacer(minLength: 8)
-                Button {
-                    toggleSidebar()
-                } label: {
+            HStack(spacing: 12) {
+                Button(action: toggleSidebar) {
                     Image(systemName: "sidebar.leading").font(.system(size: 19, weight: .medium))
                 }
                 .buttonStyle(.squareOutline)
-                .accessibilityLabel("Toggle folders")
+                .accessibilityLabel("Show folders")
                 .accessibilityIdentifier("library.toggleSidebar")
-
-                // Only once something is in it: a permanently visible Trash is a permanent
-                // reminder of a screen almost nobody needs, while one that appears the moment
-                // something is deleted is how you find out deletion was recoverable at all.
-                if !store.trash.isEmpty {
-                    Button {
-                        showingTrash = true
-                    } label: {
-                        Image(systemName: "trash").font(.system(size: 18, weight: .medium))
-                    }
-                    .buttonStyle(.squareOutline)
-                    .accessibilityLabel("Trash, \(store.trash.count) items")
-                    .accessibilityIdentifier("library.trash")
+                VStack(alignment: .leading, spacing: 2) {
+                    if folderId != nil { breadcrumb }
+                    Text(title)
+                        .font(Modernist.display(30))
+                        .tracking(Modernist.displayTracking(30))
+                        .foregroundStyle(Modernist.ink)
+                        .lineLimit(1)
                 }
-
-                Button {
-                    showingSyncSettings = true
-                } label: {
-                    Image(systemName: "gearshape").font(.system(size: 19, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                Button(action: beginNewNotebook) {
+                    Label("New notebook", systemImage: "plus")
+                        .font(Modernist.font(14, .semibold))
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: Modernist.hit)
+                        .foregroundStyle(Modernist.paper)
+                        .background(Modernist.ink)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.squareOutline)
-                .accessibilityLabel("Settings")
-                .accessibilityIdentifier("library.settings")
-
-                Button {
-                    newFolderTitle = ""
-                    showingNewFolder = true
-                } label: {
-                    Image(systemName: "folder.badge.plus").font(.system(size: 19, weight: .medium))
-                }
-                .buttonStyle(.squareOutline)
-                .accessibilityLabel("New folder")
-                .accessibilityIdentifier("library.addFolder")
-
-                Button {
-                    newNotebookTitle = ""
-                    newNotebookPageSize = handwriting.config.defaultPageSize
-                    showingNewNotebook = true
-                } label: {
-                    Image(systemName: "plus").font(.system(size: 22, weight: .bold))
-                }
-                .buttonStyle(.squareSolid)
-                .accessibilityLabel("New notebook")
+                .buttonStyle(.plain)
                 .accessibilityIdentifier("library.add")
+                Spacer(minLength: 0)
+                Menu {
+                    Button {
+                        newFolderTitle = ""
+                        showingNewFolder = true
+                    } label: { Label("New folder", systemImage: "folder.badge.plus") }
+                    .accessibilityIdentifier("library.addFolder")
+                    if let folderId {
+                        Button { beginRenameFolder(folderId) } label: {
+                            Label("Rename folder", systemImage: "pencil")
+                        }
+                    }
+                    Divider()
+                    Button { Task { await backendHost.syncNow() } } label: {
+                        Label(backendHost.isSyncing ? "Syncing…" : "Sync now", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(!backendHost.canSyncNow || backendHost.isSyncing)
+                    .accessibilityIdentifier("library.syncNow")
+                    Button { showingTrash = true } label: {
+                        Label("Trash", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("library.trash")
+                    Button { showingSyncSettings = true } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .accessibilityIdentifier("library.settings")
+                } label: {
+                    Image(systemName: "ellipsis").frame(width: Modernist.hit, height: Modernist.hit)
+                        .overlay { Rectangle().stroke(Modernist.ink, lineWidth: Modernist.ruleHair) }
+                }
+                .accessibilityLabel("Library options")
+                .accessibilityIdentifier("library.options")
             }
             searchRow
+            HStack(spacing: 10) {
+                sortMenu
+                Spacer(minLength: 0)
+                Menu {
+                    Picker("View", selection: $layout) {
+                        Text("Automatic").tag("automatic")
+                        Label("Grid", systemImage: "square.grid.2x2").tag("grid")
+                        Label("List", systemImage: "list.bullet").tag("list")
+                    }
+                } label: {
+                    Label(usesList ? "List" : "Grid", systemImage: usesList ? "list.bullet" : "square.grid.2x2")
+                        .font(Modernist.font(13, .semibold))
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 44)
+                }
+                .accessibilityLabel("Library view")
+                .accessibilityValue(layout == "automatic" ? "Automatic" : (usesList ? "List" : "Grid"))
+                .accessibilityIdentifier("library.view")
+            }
             ModernistRule(heavy: true)
         }
+        .tint(Modernist.ink)
         .padding(.horizontal, 22)
         .padding(.top, 8)
     }
 
-    /// Search and sort, on one line under the title.
-    ///
-    /// Both are about *finding* something, and neither is worth a screen of its own: the library
-    /// used to offer no way to look for a notebook by name and no order but the one the store
-    /// happened to sort by, which in a library of eighty covers means reading all eighty.
-    private var searchRow: some View {
-        HStack(spacing: 10) {
+    private var breadcrumb: some View {
+        ScrollView(.horizontal) {
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Modernist.neutral600)
-                TextField("Search notebooks and folders", text: $query)
-                    .font(Modernist.font(13))
-                    .foregroundStyle(Modernist.ink)
-                    .textFieldStyle(.plain)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.search)
-                    .accessibilityIdentifier("library.search")
-                if !query.isEmpty {
-                    Button {
-                        query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Modernist.neutral600)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
+                Button("Library") { selection = .root; query = "" }
+                ForEach(store.breadcrumb(of: folderId).dropLast(), id: \.id) { folder in
+                    Image(systemName: "chevron.right").font(.system(size: 9))
+                    Button(folder.title) { selection = .folder(folder.id); query = "" }
                 }
             }
-            .padding(.horizontal, 10)
-            .frame(height: 34)
-            .overlay { Rectangle().stroke(Modernist.neutral600, lineWidth: Modernist.ruleHair) }
-
-            Menu {
-                Picker("Sort by", selection: $sortOrderRaw) {
-                    ForEach(LibrarySortOrder.allCases) { order in
-                        Label(order.label, systemImage: order.symbolName).tag(order.rawValue)
-                    }
-                }
-                Divider()
-                // Named for what the reader gets, not for the direction of the comparison:
-                // "descending" says nothing about whether that means newest or Z first.
-                Picker("Direction", selection: $sortDescending) {
-                    Text(sortOrder == .title ? "A to Z" : "Newest first").tag(true)
-                    Text(sortOrder == .title ? "Z to A" : "Oldest first").tag(false)
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(sortOrder.label).font(Modernist.font(12, .semibold))
-                }
-                .foregroundStyle(Modernist.ink)
-                .padding(.horizontal, 10)
-                .frame(height: 34)
-                .overlay { Rectangle().stroke(Modernist.ink, lineWidth: Modernist.ruleHair) }
-            }
-            .accessibilityLabel("Sort")
-            .accessibilityIdentifier("library.sort")
+            .font(Modernist.font(12, .semibold))
+            .frame(minHeight: 44)
         }
-        .padding(.top, 2)
+        .scrollIndicators(.hidden)
     }
 
-    /// Kicker and display title. Inside a folder the whole block is the rename control — the
-    /// name you want to change is the one you are already looking at, and the pencil beside it
-    /// says so without spending another 48pt square on a header that already carries four.
-    @ViewBuilder
-    private var titleBlock: some View {
-        if let folderId {
-            Button {
-                beginRenameFolder(folderId)
-            } label: {
-                VStack(alignment: .leading, spacing: 1) {
-                    Kicker("Folder")
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        titleText
-                        Image(systemName: "pencil")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Modernist.neutral700)
-                    }
+    private var searchRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(Modernist.neutral600)
+            TextField("Search notebooks and folders", text: $query,
+                      prompt: Text("Search notebooks and folders").foregroundStyle(Modernist.neutral700))
+                .font(Modernist.font(14))
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .submitLabel(.search)
+                .accessibilityIdentifier("library.search")
+                .focused($searchFocused)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44)
                 }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Rename folder \(title)")
-            .accessibilityIdentifier("library.renameFolder")
-        } else {
-            VStack(alignment: .leading, spacing: 1) {
-                Kicker("Library")
-                titleText
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
             }
         }
+        .padding(.leading, 12)
+        .padding(.trailing, query.isEmpty ? 12 : 0)
+        .frame(minHeight: 44)
+        .overlay { Rectangle().stroke(Modernist.neutral600, lineWidth: Modernist.ruleHair) }
     }
 
-    private var titleText: some View {
-        Text(title)
-            .font(Modernist.display(30))
-            .tracking(Modernist.displayTracking(30))
-            .foregroundStyle(Modernist.ink)
-            .lineLimit(1)
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort by", selection: $sortOrderRaw) {
+                ForEach(LibrarySortOrder.allCases) { order in
+                    Label(order.label, systemImage: order.symbolName).tag(order.rawValue)
+                }
+            }
+            Divider()
+            Picker("Direction", selection: $sortDescending) {
+                Text(sortOrder.directionLabel(descending: false)).tag(false)
+                Text(sortOrder.directionLabel(descending: true)).tag(true)
+            }
+        } label: {
+            Label(sortOrder.label, systemImage: "arrow.up.arrow.down")
+                .font(Modernist.font(13, .semibold))
+                .frame(minHeight: 44)
+        }
+        .accessibilityLabel("Sort")
+        .accessibilityValue("\(sortOrder.label), \(sortOrder.directionLabel(descending: sortDescending))")
+        .accessibilityIdentifier("library.sort")
+    }
+
+    private var activeMenuActions: LibraryMenuActions? {
+        guard menuCommandsEnabled, !showingNewNotebook, !showingNewFolder,
+              !showingRenameNotebook, !showingRenameFolder, !showingDeleteNotebook,
+              !showingDeleteFolder, !showingSyncSettings, !showingTrash, actionError == nil else { return nil }
+        return LibraryMenuActions(
+            newNotebook: beginNewNotebook,
+            newFolder: { newFolderTitle = ""; showingNewFolder = true },
+            search: { searchFocused = true },
+            settings: { showingSyncSettings = true },
+            toggleFolders: toggleSidebar)
+    }
+
+    private func beginNewNotebook() {
+        newNotebookTitle = ""
+        newNotebookPageSize = handwriting.config.defaultPageSize
+        newNotebookTemplate = handwriting.config.defaultTemplate
+        showingNewNotebook = true
     }
 
     private func beginRenameFolder(_ id: String) {
@@ -494,7 +554,7 @@ private struct FolderContentsView: View {
             } else if folderId == nil {
                 ContentUnavailableView(
                     "No notebooks yet", systemImage: "pencil.and.scribble",
-                    description: Text("Create a notebook, or sync from your BOOX."))
+                    description: Text("Create a notebook, or set up sync in Settings."))
             } else {
                 ContentUnavailableView(
                     "Empty folder", systemImage: "folder",
@@ -523,8 +583,8 @@ private struct FolderContentsView: View {
                 }
                 if !notebooks.isEmpty {
                     SectionHeading(isSearching ? "Notebooks found" : "Notebooks")
-                        .padding(.bottom, isCompact ? 4 : 14)
-                    if isCompact {
+                        .padding(.bottom, usesList ? 4 : 14)
+                    if usesList {
                         VStack(spacing: 0) {
                             ForEach(notebooks, id: \.notebookId) { notebook in
                                 notebookRow(notebook)
@@ -560,132 +620,157 @@ private struct FolderContentsView: View {
     /// Opening a subfolder moves the sidebar selection rather than pushing, so the two
     /// columns can never disagree about where the user is.
     private func folderRow(_ folder: FolderDTO) -> some View {
-        Button {
-            selection = .folder(folder.id)
-        } label: {
-            HStack(spacing: 12) {
-                Rectangle()
-                    .fill(Modernist.fill(for: folder.id))
-                    .frame(width: 22, height: 22)
-                Text(folder.title)
-                    .font(Modernist.font(15, .semibold))
-                    .foregroundStyle(Modernist.ink)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                ProvenanceBadge(provenance: store.provenance(ofFolder: folder.id), size: 12)
-                Text("\(store.itemCount(in: folder.id))")
-                    .font(Modernist.font(11).monospacedDigit())
-                    .foregroundStyle(Modernist.neutral700)
-                    .accessibilityLabel("\(store.itemCount(in: folder.id)) items")
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Modernist.neutral600)
-            }
-            .frame(height: Modernist.hit)
-            .contentShape(Rectangle())
-            .overlay(alignment: .bottom) { ModernistRule() }
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
+        HStack(spacing: 8) {
             Button {
-                beginRenameFolder(folder.id)
+                selection = .folder(folder.id)
+                query = ""
             } label: {
-                Label("Rename", systemImage: "pencil")
+                HStack(spacing: 12) {
+                    Rectangle()
+                        .fill(Modernist.fill(for: folder.id))
+                        .frame(width: 22, height: 22)
+                    Text(folder.title)
+                        .font(Modernist.font(15, .semibold))
+                        .foregroundStyle(Modernist.ink)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    ProvenanceBadge(provenance: store.provenance(ofFolder: folder.id), size: 12)
+                    Text("\(store.itemCount(in: folder.id))")
+                        .font(Modernist.font(11).monospacedDigit())
+                        .foregroundStyle(Modernist.neutral700)
+                        .accessibilityLabel("\(store.itemCount(in: folder.id)) items")
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Modernist.neutral600)
+                }
+                .frame(height: Modernist.hit)
+                .contentShape(Rectangle())
+
             }
-            Menu {
-                Button("Library") {
+            .buttonStyle(.plain)
+            Menu { folderMenu(folder) } label: { moreLabel }
+                .accessibilityLabel("More options for \(folder.title)")
+                .accessibilityIdentifier("library.folder.options.\(folder.id)")
+        }
+        .overlay(alignment: .bottom) { ModernistRule() }
+        .contextMenu { folderMenu(folder) }
+    }
+
+    @ViewBuilder
+    private func folderMenu(_ folder: FolderDTO) -> some View {
+        Button {
+            beginRenameFolder(folder.id)
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        Menu {
+            Button("Library") {
+                perform("Moving the folder", error: $actionError) {
+                    try store.moveFolder(id: folder.id, toFolder: nil)
+                }
+            }
+            // The folder itself and its own descendants are left out rather than offered and
+            // refused: the store guards the cycle anyway, but a menu that lists a destination
+            // it will not accept is a menu that lies.
+            let ownSubtree = Set(store.deletionScope(ofFolder: folder.id).folderIDs)
+            ForEach(store.liveFolders.filter { !ownSubtree.contains($0.id) }, id: \.id) {
+                destination in
+                Button(destination.title) {
                     perform("Moving the folder", error: $actionError) {
-                        try store.moveFolder(id: folder.id, toFolder: nil)
+                        try store.moveFolder(id: folder.id, toFolder: destination.id)
                     }
                 }
-                // The folder itself and its own descendants are left out rather than offered and
-                // refused: the store guards the cycle anyway, but a menu that lists a destination
-                // it will not accept is a menu that lies.
-                let ownSubtree = Set(store.deletionScope(ofFolder: folder.id).folderIDs)
-                ForEach(store.liveFolders.filter { !ownSubtree.contains($0.id) }, id: \.id) {
-                    destination in
-                    Button(destination.title) {
-                        perform("Moving the folder", error: $actionError) {
-                            try store.moveFolder(id: folder.id, toFolder: destination.id)
-                        }
-                    }
-                }
-            } label: {
-                Label("Move to folder", systemImage: "folder")
             }
-            // No longer restricted to empty folders. Refusing to delete a populated one was the
-            // only protection there was against losing a subtree; now the Trash is, and it is a
-            // better one — a populated folder can be thrown away and brought back.
-            Button(role: .destructive) {
-                deletingFolderId = folder.id
-                showingDeleteFolder = true
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
+        } label: {
+            Label("Move to folder", systemImage: "folder")
+        }
+        // No longer restricted to empty folders. Refusing to delete a populated one was the
+        // only protection there was against losing a subtree; now the Trash is, and it is a
+        // better one — a populated folder can be thrown away and brought back.
+        Button(role: .destructive) {
+            deletingFolderId = folder.id
+            showingDeleteFolder = true
+        } label: {
+            Label("Move to Trash", systemImage: "trash")
         }
     }
+
 
     /// One-handed variant: the covers shrink to chips and the grid becomes a list, so a
     /// title never has to truncate to fit a column.
     private func notebookRow(_ notebook: NotebookManifest) -> some View {
-        Button {
-            open(notebook)
-        } label: {
-            HStack(spacing: 12) {
-                cover(for: notebook)
-                    .frame(width: 34, height: 46)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(notebook.title)
-                        .font(Modernist.font(14, .bold))
-                        .foregroundStyle(Modernist.ink)
-                        .lineLimit(1)
-                    Text("\(notebook.pageIds.count) p · \(notebookSubtitle(notebook))")
-                        .font(Modernist.font(10))
-                        .foregroundStyle(Modernist.neutral700)
-                        .lineLimit(1)
+        HStack(spacing: 8) {
+            Button { openNotebook(notebook.notebookId) } label: {
+                HStack(spacing: 12) {
+                    cover(for: notebook, showsPageCount: false).frame(width: 42, height: 56)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(notebook.title).font(Modernist.font(14, .bold)).lineLimit(2)
+                        Text("\(notebook.pageIds.count) \(notebook.pageIds.count == 1 ? "page" : "pages") · \(notebookSubtitle(notebook))")
+                            .font(Modernist.font(12)).foregroundStyle(Modernist.neutral700).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Modernist.neutral600)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-            .overlay(alignment: .bottom) { ModernistRule() }
+            .buttonStyle(.plain)
+            pagesButton(notebook)
+            notebookOptions(notebook)
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(Modernist.ink)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) { ModernistRule() }
         .contextMenu { notebookMenu(notebook) }
-    }
-
-    /// Opening goes up to `LibraryView`, which owns the conflict chooser: the sidebar's tree
-    /// opens notebooks too, and both have to route a conflicted one the same way.
-    private func open(_ notebook: NotebookManifest) {
-        openNotebook(notebook.notebookId)
     }
 
     private func notebookCard(_ notebook: NotebookManifest) -> some View {
-        Button {
-            open(notebook)
-        } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                cover(for: notebook)
-                Text(notebook.title)
-                    .font(Modernist.font(13, .semibold))
-                    .foregroundStyle(Modernist.ink)
-                    .lineLimit(1)
-                Text(notebookSubtitle(notebook))
-                    .font(Modernist.font(10))
-                    .foregroundStyle(Modernist.neutral700)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: 7) {
+            Button { openNotebook(notebook.notebookId) } label: {
+                VStack(alignment: .leading, spacing: 7) {
+                    cover(for: notebook)
+                    Text(notebook.title).font(Modernist.font(14, .semibold)).lineLimit(2)
+                    Text(notebookSubtitle(notebook))
+                        .font(Modernist.font(12)).foregroundStyle(Modernist.neutral700).lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            HStack(spacing: 0) {
+                pagesButton(notebook)
+                Spacer(minLength: 0)
+                notebookOptions(notebook)
             }
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(Modernist.ink)
         .contextMenu { notebookMenu(notebook) }
+    }
+
+    private func pagesButton(_ notebook: NotebookManifest) -> some View {
+        Button { showPages(notebook.notebookId) } label: {
+            Label("Pages", systemImage: "square.grid.2x2")
+                .font(Modernist.font(12, .semibold)).frame(minHeight: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Pages in \(notebook.title)")
+        .accessibilityIdentifier("library.notebook.pages.\(notebook.notebookId)")
+    }
+
+    private func notebookOptions(_ notebook: NotebookManifest) -> some View {
+        Menu { notebookMenu(notebook) } label: { moreLabel }
+            .accessibilityLabel("More options for \(notebook.title)")
+            .accessibilityIdentifier("library.notebook.options.\(notebook.notebookId)")
+    }
+
+    private var moreLabel: some View {
+        Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle())
     }
 
     /// Shared by the card and the row: same actions whichever way the notebook is drawn.
     @ViewBuilder
     private func notebookMenu(_ notebook: NotebookManifest) -> some View {
+        Button { showPages(notebook.notebookId) } label: {
+            Label("Pages", systemImage: "square.grid.2x2")
+        }
         Button {
             renamingNotebookId = notebook.notebookId
             renameTitle = notebook.title
@@ -694,7 +779,7 @@ private struct FolderContentsView: View {
             Label("Rename", systemImage: "pencil")
         }
         Menu {
-            Button("No folder") {
+            Button("Library") {
                 perform("Moving the notebook", error: $actionError) {
                     try store.moveNotebook(id: notebook.notebookId, toFolder: nil)
                 }
@@ -716,17 +801,18 @@ private struct FolderContentsView: View {
             deletingNotebookId = notebook.notebookId
             showingDeleteNotebook = true
         } label: {
-            Label("Delete", systemImage: "trash")
+            Label("Move to Trash", systemImage: "trash")
         }
     }
 
     /// Nothing floats in this system, so the cover has an edge rather than a shadow.
-    private func cover(for notebook: NotebookManifest) -> some View {
+    private func cover(for notebook: NotebookManifest, showsPageCount: Bool = true) -> some View {
         NotebookCoverView(
             seed: notebook.notebookId,
             title: notebook.title,
             pageCount: notebook.pageIds.count,
-            thumbnail: ThumbnailRenderer.thumbnail(for: notebook, store: store)
+            thumbnail: ThumbnailRenderer.thumbnail(for: notebook, store: store),
+            showsPageCount: showsPageCount
         )
         .overlay(alignment: .topTrailing) {
             if coordinator.conflict(for: notebook.notebookId) != nil {
@@ -746,11 +832,11 @@ private struct FolderContentsView: View {
     /// the whole library is not much use if every row looks the same as it would in its own
     /// folder — "which of these three is the one from Term 2" is the question a path answers.
     private func notebookSubtitle(_ notebook: NotebookManifest) -> String {
-        let edited = NotableDate.parse(notebook.updatedAt)
+        let edited = (store.notebookActivityDates[notebook.notebookId] ?? NotableDate.parse(notebook.updatedAt))
             .map { $0.formatted(.relative(presentation: .named)) } ?? notebook.updatedAt
         guard isSearching else { return edited }
         let path = store.breadcrumb(of: notebook.parentFolderId).map(\.title)
-        return path.isEmpty ? "All Notes · \(edited)" : "\(path.joined(separator: " / ")) · \(edited)"
+        return path.isEmpty ? "Library · \(edited)" : "\(path.joined(separator: " / ")) · \(edited)"
     }
 }
 
@@ -763,7 +849,10 @@ private struct NewNotebookSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var title: String
     @Binding var pageSize: PageSize
-    let create: (String, PageSize) -> Void
+    @Binding var template: NativeTemplate
+    let create: (String, PageSize, NativeTemplate) throws -> Void
+    @State private var actionError: LibraryActionError?
+    @FocusState private var titleFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -771,17 +860,24 @@ private struct NewNotebookSheet: View {
                 Section {
                     TextField("Title", text: $title)
                         .accessibilityIdentifier("newNotebook.title")
+                        .focused($titleFocused)
                 }
                 Section {
+                    Picker("Paper", selection: $template) {
+                        ForEach(NativeTemplate.builtIn, id: \.name) { paper in
+                            Label(paper.displayName, systemImage: paper.symbolName).tag(paper)
+                        }
+                    }
+                    .accessibilityIdentifier("newNotebook.paper")
                     PageSizePicker(selection: $pageSize)
                         .accessibilityIdentifier("newNotebook.pageSize")
                 } footer: {
-                    Text("Every page in this notebook is laid out on this sheet, on the iPad and "
-                        + "on the BOOX alike. It is fixed once the notebook exists, so that ink "
-                        + "never has to move relative to the paper.")
+                    Text("The page size is fixed for this notebook on every device. You can change the paper pattern later in the editor.")
                 }
             }
             .navigationTitle("New notebook")
+            .onAppear { titleFocused = true }
+            .libraryActionAlert($actionError)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -789,8 +885,12 @@ private struct NewNotebookSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
                         let trimmed = title.trimmingCharacters(in: .whitespaces)
-                        create(trimmed.isEmpty ? "Untitled" : trimmed, pageSize)
-                        dismiss()
+                        do {
+                            try create(trimmed.isEmpty ? "Untitled" : trimmed, pageSize, template)
+                            dismiss()
+                        } catch {
+                            actionError = LibraryActionError(action: "Creating the notebook", underlying: error)
+                        }
                     }
                     .accessibilityIdentifier("newNotebook.create")
                 }

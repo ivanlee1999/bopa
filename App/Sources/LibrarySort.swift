@@ -32,18 +32,31 @@ enum LibrarySortOrder: String, CaseIterable, Identifiable {
     /// Whether the newest comes first. Only meaningful for the two date orders; a title sort is
     /// A→Z ascending and reversing it is what `descending` means there too.
     var defaultsToDescending: Bool { self != .title }
+
+    func directionLabel(descending: Bool) -> String {
+        if self == .title { return descending ? "Z to A" : "A to Z" }
+        return descending ? "Newest first" : "Oldest first"
+    }
 }
 
 /// Ordering and filtering the library, kept out of the views so both columns — the grid and the
 /// sidebar's tree — answer the same way, and so the rules are testable without a screen.
 enum LibrarySort {
     static func notebooks(
-        _ notebooks: [NotebookManifest], by order: LibrarySortOrder, descending: Bool
+        _ notebooks: [NotebookManifest], by order: LibrarySortOrder, descending: Bool,
+        activityDates: [String: Date] = [:]
     ) -> [NotebookManifest] {
         let sorted: [NotebookManifest]
         switch order {
         case .updated:
-            sorted = notebooks.sorted { ($0.updatedAt, $0.title) < ($1.updatedAt, $1.title) }
+            // Resolve dates once per notebook; sorting itself only compares the cached keys.
+            sorted = notebooks.map { notebook in
+                (manifest: notebook, activity: activityDates[notebook.notebookId]
+                    ?? NotableDate.parse(notebook.updatedAt) ?? .distantPast)
+            }.sorted {
+                ($0.activity, $0.manifest.title, $0.manifest.notebookId)
+                    < ($1.activity, $1.manifest.title, $1.manifest.notebookId)
+            }.map(\.manifest)
         case .created:
             sorted = notebooks.sorted { ($0.createdAt, $0.title) < ($1.createdAt, $1.title) }
         case .title:

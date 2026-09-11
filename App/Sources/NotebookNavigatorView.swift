@@ -57,6 +57,7 @@ struct NotebookNavigatorView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Done") { dismiss() }
+                    .accessibilityIdentifier("pageOverview.done")
             }
             // Starring and outlining are the two things this panel is *for*, and they used to live
             // only in a page's long-press menu — which is to say they could not be found at all.
@@ -109,6 +110,7 @@ struct NotebookNavigatorView: View {
                 }
                 tab = .outline
             }
+            .disabled(outlineTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The entry jumps to this page. Nest it under another from the Outline tab.")
@@ -134,10 +136,11 @@ struct NotebookNavigatorView: View {
                             .fill(candidate == tab ? Modernist.ink : Color.clear)
                             .frame(height: Modernist.ruleHeavy)
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(candidate == tab ? .isSelected : [])
                 .accessibilityIdentifier("navigator.tab.\(candidate.rawValue)")
             }
         }
@@ -244,6 +247,7 @@ struct OutlineTabView: View {
                         notebookId: notebookId, entryId: id, title: trimmed)
                 }
             }
+            .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Cancel", role: .cancel) {}
         }
         .alert("Add to outline", isPresented: $showingAdd) {
@@ -257,6 +261,7 @@ struct OutlineTabView: View {
                         notebookId: notebookId, pageId: currentPageId, title: trimmed)
                 }
             }
+            .disabled(addTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The entry jumps to the page you have open.")
@@ -275,8 +280,7 @@ struct OutlineTabView: View {
         return NavigatorEmptyState(
             icon: "list.bullet.indent",
             title: "No outline yet",
-            detail: "Name a section and it becomes an entry pointing at that page. Swipe an entry "
-                + "to indent it, or hold it to rename and reorder.",
+            detail: "Name a section to jump to that page. Use an entry’s More menu to rename, reorder or nest it.",
             actionTitle: actionTitle,
             action: action)
     }
@@ -292,32 +296,38 @@ struct OutlineTabView: View {
     }
 
     private func row(_ entry: CouchOutlineEntry, index: Int) -> some View {
-        Button {
-            openPage(entry.pageId)
-        } label: {
-            HStack(spacing: 10) {
-                Text(entry.title)
-                    // Depth reads as weight as well as indent: on a washed-out panel an indent
-                    // alone is easy to lose, and the heading/subheading distinction is the whole
-                    // point of nesting.
-                    .font(Modernist.font(entry.depth == 0 ? 15 : 14,
-                                         entry.depth == 0 ? .semibold : .regular))
-                    .foregroundStyle(Modernist.ink)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                if let number = pageNumbers[entry.pageId] {
-                    Text("\(number)")
-                        .font(Modernist.font(12).monospacedDigit())
-                        .foregroundStyle(
-                            entry.pageId == currentPageId ? Modernist.ink : Modernist.neutral700)
+        HStack(spacing: 8) {
+            Button { openPage(entry.pageId) } label: {
+                HStack(spacing: 10) {
+                    Text(entry.title)
+                        // Depth reads as weight as well as indent: on a washed-out panel an indent
+                        // alone is easy to lose, and the heading/subheading distinction is the whole
+                        // point of nesting.
+                        .font(Modernist.font(entry.depth == 0 ? 15 : 14,
+                                             entry.depth == 0 ? .semibold : .regular))
+                        .foregroundStyle(Modernist.ink)
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    if let number = pageNumbers[entry.pageId] {
+                        Text("Page \(number)")
+                            .font(Modernist.font(12).monospacedDigit())
+                            .foregroundStyle(
+                                entry.pageId == currentPageId ? Modernist.ink : Modernist.neutral700)
+                    }
                 }
+                .padding(.leading, CGFloat(entry.depth) * 18)
+                .contentShape(Rectangle())
             }
-            .padding(.leading, CGFloat(entry.depth) * 18)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("outline.entry.\(entry.id)")
+            .accessibilityAddTraits(entry.pageId == currentPageId ? .isSelected : [])
+            Menu { entryMenu(entry, index: index) } label: {
+                Image(systemName: "ellipsis").frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("More options for \(entry.title)")
+            .accessibilityIdentifier("outline.options.\(entry.id)")
         }
-        .buttonStyle(.plain)
         .listRowBackground(Modernist.paper)
-        .accessibilityIdentifier("outline.entry.\(entry.id)")
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
                 perform("Removing the outline entry", error: $actionError) {
@@ -344,37 +354,48 @@ struct OutlineTabView: View {
             }
             .disabled(entry.depth <= 0)
         }
-        .contextMenu {
-            Button {
-                renamingId = entry.id
-                renameTitle = entry.title
-                showingRename = true
-            } label: {
-                Label("Rename", systemImage: "pencil")
+        .contextMenu { entryMenu(entry, index: index) }
+    }
+
+    @ViewBuilder
+    private func entryMenu(_ entry: CouchOutlineEntry, index: Int) -> some View {
+        Button {
+            renamingId = entry.id
+            renameTitle = entry.title
+            showingRename = true
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        Divider()
+        Button {
+            move(from: index, to: index - 1)
+        } label: {
+            Label("Move up", systemImage: "arrow.up")
+        }
+        .disabled(index == 0)
+        Button {
+            // Past the row below, not onto it — `moveOutlineEntry` removes before inserting,
+            // so moving "down one" is an insert two positions along.
+            move(from: index, to: index + 2)
+        } label: {
+            Label("Move down", systemImage: "arrow.down")
+        }
+        .disabled(index >= entries.count - 1)
+        Button { changeDepth(entry, by: 1) } label: {
+            Label("Indent", systemImage: "arrow.right.to.line")
+        }
+        .disabled(entry.depth >= CouchOutlineEntry.maxDepth)
+        Button { changeDepth(entry, by: -1) } label: {
+            Label("Outdent", systemImage: "arrow.left.to.line")
+        }
+        .disabled(entry.depth <= 0)
+        Divider()
+        Button(role: .destructive) {
+            perform("Removing the outline entry", error: $actionError) {
+                try store.removeOutlineEntry(notebookId: notebookId, entryId: entry.id)
             }
-            Divider()
-            Button {
-                move(from: index, to: index - 1)
-            } label: {
-                Label("Move up", systemImage: "arrow.up")
-            }
-            .disabled(index == 0)
-            Button {
-                // Past the row below, not onto it — `moveOutlineEntry` removes before inserting,
-                // so moving "down one" is an insert two positions along.
-                move(from: index, to: index + 2)
-            } label: {
-                Label("Move down", systemImage: "arrow.down")
-            }
-            .disabled(index >= entries.count - 1)
-            Divider()
-            Button(role: .destructive) {
-                perform("Removing the outline entry", error: $actionError) {
-                    try store.removeOutlineEntry(notebookId: notebookId, entryId: entry.id)
-                }
-            } label: {
-                Label("Remove", systemImage: "trash")
-            }
+        } label: {
+            Label("Remove", systemImage: "trash")
         }
     }
 
@@ -446,8 +467,7 @@ struct BookmarksTabView: View {
         return NavigatorEmptyState(
             icon: "bookmark",
             title: "No bookmarks yet",
-            detail: "Star a page and it is listed here in page order. Bookmarks sync, so a page "
-                + "you star here is starred on the BOOX too.",
+            detail: "Bookmark a page to find it here. Bookmarks appear in page order and sync to your other devices.",
             actionTitle: actionTitle,
             action: action)
     }
@@ -460,47 +480,63 @@ struct BookmarksTabView: View {
     }
 
     private func cell(_ pageId: String) -> some View {
-        Button {
-            openPage(pageId)
-        } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                ZStack {
-                    Rectangle().fill(.white)
-                    if let image = ThumbnailRenderer.thumbnail(
-                        notebookId: notebookId, pageId: pageId, store: store) {
-                        Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+        VStack(alignment: .leading, spacing: 6) {
+            Button { openPage(pageId) } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    ZStack {
+                        Rectangle().fill(.white)
+                        if let image = ThumbnailRenderer.thumbnail(
+                            notebookId: notebookId, pageId: pageId, store: store) {
+                            Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+                        }
                     }
+                    .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                    .overlay {
+                        Rectangle().stroke(
+                            Modernist.ink,
+                            lineWidth: pageId == currentPageId
+                                ? Modernist.ruleHeavy : Modernist.ruleHair)
+                    }
+                    Text(label(for: pageId))
+                        .font(Modernist.font(14, .semibold))
+                        .foregroundStyle(Modernist.ink)
+                        .lineLimit(2)
                 }
-                .aspectRatio(3.0 / 4.0, contentMode: .fit)
-                .overlay {
-                    Rectangle().stroke(
-                        Modernist.ink,
-                        lineWidth: pageId == currentPageId
-                            ? Modernist.ruleHeavy : Modernist.ruleHair)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("bookmarks.page.\(pageId)")
+            .accessibilityAddTraits(pageId == currentPageId ? .isSelected : [])
+            HStack {
+                if pageId == currentPageId {
+                    Label("Current", systemImage: "checkmark")
+                        .font(Modernist.font(12, .semibold))
                 }
-                Text(label(for: pageId))
-                    .font(Modernist.font(12, .semibold))
-                    .foregroundStyle(Modernist.ink)
-                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Menu { bookmarkMenu(pageId) } label: {
+                    Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("More options for \(label(for: pageId))")
+                .accessibilityIdentifier("bookmarks.options.\(pageId)")
             }
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("bookmarks.page.\(pageId)")
-        .contextMenu {
-            Button(role: .destructive) {
-                perform("Removing the bookmark", error: $actionError) {
-                    try store.setBookmark(
-                        notebookId: notebookId, pageId: pageId, bookmarked: false)
-                }
-            } label: {
-                Label("Remove bookmark", systemImage: "bookmark.slash")
+        .foregroundStyle(Modernist.ink)
+        .contextMenu { bookmarkMenu(pageId) }
+    }
+
+    private func bookmarkMenu(_ pageId: String) -> some View {
+        Button(role: .destructive) {
+            perform("Removing the bookmark", error: $actionError) {
+                try store.setBookmark(
+                    notebookId: notebookId, pageId: pageId, bookmarked: false)
             }
+        } label: {
+            Label("Remove bookmark", systemImage: "bookmark.slash")
         }
     }
 
     private func label(for pageId: String) -> String {
         let title = try? store.loadPage(notebookId: notebookId, pageId: pageId).title
-        if let title, !title.isEmpty { return title }
+        if let title, !title.isEmpty { return "Page \(pageNumbers[pageId] ?? 0) · \(title)" }
         return "Page \(pageNumbers[pageId] ?? 0)"
     }
 }

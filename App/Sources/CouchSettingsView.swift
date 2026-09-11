@@ -1,6 +1,16 @@
 import NotableKit
 import SwiftUI
 
+/// Reconfiguration replaces the controller; observe the host as well as the controller below.
+struct HostedCouchSettingsSection: View {
+    @Binding var settings: CouchSettings
+    @ObservedObject var host: SyncBackendHost
+
+    var body: some View {
+        CouchSettingsSection(settings: $settings, host: host)
+    }
+}
+
 /// CouchDB connection form. Shown in place of the WebDAV fields when the CouchDB backend is
 /// selected.
 struct CouchSettingsSection: View {
@@ -10,6 +20,7 @@ struct CouchSettingsSection: View {
     let host: SyncBackendHost?
 
     @State private var isSeeding = false
+    @State private var isSyncRequested = false
 
     var body: some View {
         // First, above the server configuration. A wrong clock corrupts merge outcomes on *both*
@@ -55,18 +66,41 @@ struct CouchSettingsSection: View {
             HeldDeletionsSection(controller: couch)
         }
 
-        Section {
-            Button {
-                settings.save()
-                Task { await host?.syncNow() }
-            } label: {
-                Label("Sync now", systemImage: "arrow.triangle.2.circlepath")
+        if let couch = host?.couch {
+            ObservedCouchSyncStatus(controller: couch) { isSyncing, detail in
+                syncActions(isSyncing: isSyncing, detail: detail)
             }
-            .disabled(!settings.isConfigured)
+        } else {
+            syncActions(isSyncing: false, detail: nil)
+        }
+    }
+
+    private func syncActions(isSyncing: Bool, detail: String?) -> some View {
+        let busy = isSyncing || isSyncRequested || isSeeding
+        return Section {
+            Button {
+                isSyncRequested = true
+                settings.save()
+                Task {
+                    await host?.syncNow()
+                    isSyncRequested = false
+                }
+            } label: {
+                if isSyncing || isSyncRequested {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Syncing…")
+                    }
+                } else {
+                    Label("Sync now", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
+            .disabled(host == nil || !settings.isConfigured || busy)
+            .accessibilityIdentifier("couch.syncNow")
 
             Button {
-                settings.save()
                 isSeeding = true
+                settings.save()
                 Task {
                     await host?.pushEverything()
                     isSeeding = false
@@ -78,21 +112,33 @@ struct CouchSettingsSection: View {
                         Text("Uploading…")
                     }
                 } else {
-                    Label("Upload everything on this iPad", systemImage: "arrow.up.doc")
+                    Label("Upload all notebooks", systemImage: "arrow.up.doc")
                 }
             }
-            .disabled(!settings.isConfigured || isSeeding)
+            .disabled(host == nil || !settings.isConfigured || busy)
+            .accessibilityIdentifier("couch.uploadAll")
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                if let detail = host?.statusDetail {
+                if let detail {
                     Text(detail)
+                        .accessibilityIdentifier("couch.syncStatus")
                 }
                 // The first sync against a fresh server has nothing queued, because nothing has
                 // changed since it was configured — so seeding has to be something you can ask for.
-                Text("Upload everything sends every notebook on this iPad, for the first sync "
-                    + "against a new server. After that, changes sync on their own.")
+                Text("Upload all notebooks sends the notebooks, pages and folders on this device "
+                    + "to a new server. After that, changes sync automatically when connected.")
             }
         }
+    }
+}
+
+/// Sync failures and progress can change without changing a notebook or the settings form.
+private struct ObservedCouchSyncStatus<Content: View>: View {
+    @ObservedObject var controller: CouchSyncController
+    @ViewBuilder var content: (Bool, String?) -> Content
+
+    var body: some View {
+        content(controller.isSyncing, controller.statusDetail)
     }
 }
 
@@ -123,7 +169,7 @@ private struct ClockSkewSection: View {
         if isSevere, let skew = controller.clockSkew {
             Section {
                 Label {
-                    Text("This iPad's clock is wrong")
+                    Text("This device’s clock is wrong")
                         .font(.headline)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -135,7 +181,7 @@ private struct ClockSkewSection: View {
                     .font(.callout)
                     .accessibilityIdentifier("couch.clockSkew.detail")
             } footer: {
-                Text("Open Settings › General › Date & Time and turn on Set Automatically. Bopa "
+                Text("Open your device’s date and time settings and set the time automatically. Bopa "
                     + "corrects new edits for the difference, but edits already made carry the "
                     + "wrong time and your other devices cannot correct them.")
             }
@@ -147,27 +193,52 @@ private struct ClockSkewSection: View {
 /// flush finds a batch and vanish when the choice is made.
 private struct HeldDeletionsSection: View {
     @ObservedObject var controller: CouchSyncController
+    @State private var showingDeleteConfirmation = false
+    @State private var deletionsToConfirm: [String] = []
 
     var body: some View {
         if !controller.heldDeletions.isEmpty {
             Section {
-                Button(role: .destructive) {
-                    Task { await controller.approveHeldDeletions() }
-                } label: {
-                    Label("Delete them on the server too", systemImage: "trash")
-                }
-                .accessibilityIdentifier("couch.deletions.approve")
-
                 Button {
                     Task { await controller.discardHeldDeletions() }
                 } label: {
                     Label("Keep them on the server", systemImage: "arrow.uturn.backward")
                 }
                 .accessibilityIdentifier("couch.deletions.keep")
+
+                Button(role: .destructive) {
+                    deletionsToConfirm = controller.heldDeletions
+                    showingDeleteConfirmation = true
+                } label: {
+                    Label("Delete them on the server too", systemImage: "trash")
+                }
+                .accessibilityIdentifier("couch.deletions.approve")
             } header: {
                 Text("Deletions on hold")
             } footer: {
                 Text(explanation)
+            }
+            .confirmationDialog(
+                "Delete on the server?",
+                isPresented: $showingDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete on the server", role: .destructive) {
+                    let confirmed = deletionsToConfirm
+                    Task { @MainActor in
+                        // A changed batch needs a fresh confirmation, even if its count matches.
+                        guard controller.heldDeletions == confirmed else { return }
+                        await controller.approveHeldDeletions()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Delete \(deletionsToConfirm.count) notebook\(deletionsToConfirm.count == 1 ? "" : "s") "
+                    + "from the server and your other synced devices? These are the notebooks "
+                    + "already deleted here. This cannot be undone.")
+            }
+            .onChange(of: controller.heldDeletions) { _, _ in
+                showingDeleteConfirmation = false
             }
         }
     }
@@ -179,10 +250,10 @@ private struct HeldDeletionsSection: View {
     private var explanation: String {
         let count = controller.heldDeletions.count
         let notebooks = count == 1 ? "1 notebook" : "\(count) notebooks"
-        return "\(notebooks) deleted on this iPad — most of the library — have not been sent to "
-            + "the server yet, in case this iPad lost its notes rather than you deleting them.\n\n"
+        return "\(notebooks) deleted on this device — most of the library — have not been sent to "
+            + "the server yet, in case this device lost its notes rather than you deleting them.\n\n"
             + "Delete them on the server too removes them from your other devices as well.\n\n"
-            + "Keep them on the server forgets the deletions on this iPad instead. Those "
+            + "Keep them on the server forgets the deletions on this device instead. Those "
             + "notebooks are still on the server, so they come back here on the next sync."
     }
 }

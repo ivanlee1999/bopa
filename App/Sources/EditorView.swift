@@ -10,6 +10,7 @@ struct EditorView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let notebookId: String
+    var initialPageId: String?
     /// Dismisses the editor. The chrome is drawn here rather than in a navigation bar, so
     /// the presenter hands the close action down instead of contributing a toolbar item.
     var onClose: (() -> Void)?
@@ -59,8 +60,12 @@ struct EditorView: View {
                 // The model asks to close when its notebook vanishes underneath it — deleted
                 // locally or by a merge — because an editor over nothing has nothing to show.
                 model.requestClose = { onClose?() }
-                if model.pageId == nil { model.openInitialPage() }
+                if model.pageId == nil { model.openInitialPage(preferredPageId: initialPageId) }
             }
+            .focusedSceneValue(\.editorMenuActions,
+                showingPageOverview || model.saveError != nil || actionError != nil ? nil : EditorMenuActions(
+                    pages: showPages,
+                    close: { model.close() }))
             .onDisappear { model.saveNow() }
             // Leaving the app does not pop the editor, so the debounced save has to be flushed
             // here too — otherwise switching apps or locking the iPad within two seconds of the
@@ -156,10 +161,7 @@ struct EditorView: View {
             // The count is the way into the overview, not a label beside it: it is already the
             // thing you look at to ask "where am I in this notebook", and a notebook of forty
             // pages cannot be crossed with the two chevrons either side of it.
-            Button {
-                guard model.saveNow() else { return }
-                showingPageOverview = true
-            } label: {
+            Button(action: showPages) {
                 Text("\(pageIndex + 1) / \(manifest.pageIds.count)")
                     .font(Modernist.font(11, .medium).monospacedDigit())
                     .foregroundStyle(Modernist.neutral700)
@@ -202,6 +204,11 @@ struct EditorView: View {
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .accessibilityLabel("Add page")
         }
+    }
+
+    private func showPages() {
+        guard model.saveNow() else { return }
+        showingPageOverview = true
     }
 
     private var optionsMenu: some View {
@@ -291,7 +298,7 @@ struct EditorView: View {
                     onIdle: model.foldInRemoteInk)
 
                 if canChangeTemplate {
-                    Kicker("\(pageTemplate.displayName) · native", color: Modernist.neutral600)
+                    Kicker("\(pageTemplate.displayName) paper", color: Modernist.neutral600)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
                         .allowsHitTesting(false)

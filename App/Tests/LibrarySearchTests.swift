@@ -122,8 +122,8 @@ final class LibrarySearchTests: XCTestCase {
 
     func testDateSortsUseTheirOwnField() {
         let notebooks = [
-            manifest(id: "1", title: "old edit new", created: "2020", updated: "2024"),
-            manifest(id: "2", title: "new edit old", created: "2023", updated: "2021"),
+            manifest(id: "1", title: "old edit new", created: "2020-01-01T00:00:00.000Z", updated: "2024-01-01T00:00:00.000Z"),
+            manifest(id: "2", title: "new edit old", created: "2023-01-01T00:00:00.000Z", updated: "2021-01-01T00:00:00.000Z"),
         ]
 
         XCTAssertEqual(
@@ -137,13 +137,54 @@ final class LibrarySearchTests: XCTestCase {
     /// Two notebooks edited in the same second must not swap places between launches.
     func testEqualTimestampsStillOrderStably() {
         let notebooks = [
-            manifest(id: "b", title: "Beta", updated: "2024"),
-            manifest(id: "a", title: "Alpha", updated: "2024"),
+            manifest(id: "b", title: "Beta", updated: "2024-01-01T00:00:00.000Z"),
+            manifest(id: "a", title: "Alpha", updated: "2024-01-01T00:00:00.000Z"),
         ]
 
         XCTAssertEqual(
             LibrarySort.notebooks(notebooks, by: .updated, descending: false).map(\.title),
             ["Alpha", "Beta"])
+    }
+
+    func testSortDirectionLabelsAgreeWithTheOrder() {
+        XCTAssertEqual(LibrarySortOrder.title.directionLabel(descending: false), "A to Z")
+        XCTAssertEqual(LibrarySortOrder.title.directionLabel(descending: true), "Z to A")
+        for order in [LibrarySortOrder.updated, .created] {
+            XCTAssertEqual(order.directionLabel(descending: true), "Newest first")
+            XCTAssertEqual(order.directionLabel(descending: false), "Oldest first")
+        }
+    }
+
+    func testPageActivityDrivesLastEditedWithoutChangingManifestClock() throws {
+        let edited = try store.createNotebook(title: "Edited notebook")
+        let newer = try store.createNotebook(title: "Newer notebook")
+        let activity = Date().addingTimeInterval(3600)
+        let pages = store.notebookDirURL(edited.notebookId).appendingPathComponent("pages")
+        try FileManager.default.setAttributes([.modificationDate: activity], ofItemAtPath: pages.path)
+        store.refresh()
+
+        XCTAssertEqual(store.manifest(id: edited.notebookId)?.updatedAt, edited.updatedAt)
+        XCTAssertEqual(try XCTUnwrap(store.notebookActivityDates[edited.notebookId]).timeIntervalSince1970,
+                       activity.timeIntervalSince1970, accuracy: 0.001)
+        let sorted = LibrarySort.notebooks(store.notebooks, by: .updated, descending: true,
+                                           activityDates: store.notebookActivityDates)
+        XCTAssertEqual(sorted.map(\.notebookId), [edited.notebookId, newer.notebookId])
+        XCTAssertEqual(LibrarySort.notebooks(store.notebooks, by: .updated, descending: false,
+                                              activityDates: store.notebookActivityDates).map(\.notebookId),
+                       [newer.notebookId, edited.notebookId])
+    }
+
+    func testLibraryCountExcludesTrashAndRestoresWithItsFolder() throws {
+        let folder = try store.createFolder(title: "Archive")
+        _ = try store.createNotebook(title: "Filed", parentFolderId: folder.id)
+        let root = try store.createNotebook(title: "Loose")
+        XCTAssertEqual(store.totalNotebookCount, 2)
+        try store.trashFolder(id: folder.id)
+        XCTAssertEqual(store.totalNotebookCount, 1)
+        try store.trashNotebook(id: root.notebookId)
+        XCTAssertEqual(store.totalNotebookCount, 0)
+        try store.restoreFolder(id: folder.id)
+        XCTAssertEqual(store.totalNotebookCount, 1)
     }
 
     private func manifest(

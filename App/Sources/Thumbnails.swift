@@ -14,7 +14,7 @@ enum ThumbnailRenderer {
     static let size = CGSize(width: 300, height: 400)
 
     static func thumbnail(for manifest: NotebookManifest, store: NotebookStore) -> UIImage? {
-        guard let pageId = manifest.openPageId ?? manifest.pageIds.first else { return nil }
+        guard let pageId = manifest.pageIds.first else { return nil }
         return thumbnail(notebookId: manifest.notebookId, pageId: pageId, store: store)
     }
 
@@ -35,8 +35,9 @@ enum ThumbnailRenderer {
         else { return nil }
 
         let pageWidth = CGFloat(page.pageSize.width)
-        let scale = size.width / pageWidth
-        let pageRect = CGRect(x: 0, y: 0, width: pageWidth, height: size.height / scale)
+        let pageRect = CGRect(x: 0, y: 0, width: pageWidth, height: CGFloat(page.pageSize.height))
+        let fitted = fittedPageRect(pageSize: page.pageSize)
+        let scale = fitted.width / pageWidth
         let notebookDir = store.notebookDirURL(notebookId)
         let background = BackgroundRenderer.image(
             for: page, notebookDir: notebookDir, storeRoot: store.rootURL)
@@ -50,9 +51,19 @@ enum ThumbnailRenderer {
             // Paper is always white, matching how the ink colors were authored.
             UIColor.white.setFill()
             context.fill(CGRect(origin: .zero, size: size))
+            context.cgContext.saveGState()
+            context.cgContext.translateBy(x: fitted.minX, y: fitted.minY)
+            context.cgContext.clip(to: CGRect(origin: .zero, size: fitted.size))
+            let pageBackground = PageBackground(background: page.background, backgroundType: page.backgroundType)
+            if case .native(let template) = pageBackground {
+                context.cgContext.saveGState()
+                context.cgContext.scaleBy(x: scale, y: scale)
+                NativeTemplateRenderer.draw(template, in: context.cgContext, viewport: pageRect, pageWidth: pageWidth)
+                context.cgContext.restoreGState()
+            }
             if let background {
-                let height = size.width * background.size.height / background.size.width
-                background.draw(in: CGRect(x: 0, y: 0, width: size.width, height: height))
+                let height = fitted.width * background.size.height / background.size.width
+                background.draw(in: CGRect(x: 0, y: 0, width: fitted.width, height: height))
             }
             // Above the background, below the ink — the z-order CanvasContainerView installs
             // them in. An image-heavy page used to render as a blank card: the composite was
@@ -67,10 +78,18 @@ enum ThumbnailRenderer {
             }
             if !drawing.strokes.isEmpty {
                 drawing.image(from: pageRect, scale: scale)
-                    .draw(in: CGRect(origin: .zero, size: size))
+                    .draw(in: CGRect(origin: .zero, size: fitted.size))
             }
+            context.cgContext.restoreGState()
         }
         cache.setObject(image, forKey: key)
         return image
+    }
+
+    static func fittedPageRect(pageSize: PageSize) -> CGRect {
+        let scale = min(size.width / CGFloat(pageSize.width), size.height / CGFloat(pageSize.height))
+        let fitted = CGSize(width: CGFloat(pageSize.width) * scale, height: CGFloat(pageSize.height) * scale)
+        return CGRect(x: (size.width - fitted.width) / 2, y: (size.height - fitted.height) / 2,
+                      width: fitted.width, height: fitted.height)
     }
 }

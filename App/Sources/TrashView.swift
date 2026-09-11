@@ -13,6 +13,16 @@ struct TrashView: View {
     @EnvironmentObject private var store: NotebookStore
     @Environment(\.dismiss) private var dismiss
 
+    private struct PurgeTarget {
+        var folderId: String?
+        var notebookId: String?
+    }
+
+    private var purgeTarget: PurgeTarget? {
+        guard purgingFolderId != nil || purgingNotebookId != nil else { return nil }
+        return PurgeTarget(folderId: purgingFolderId, notebookId: purgingNotebookId)
+    }
+
     @State private var purgingNotebookId: String?
     @State private var purgingFolderId: String?
     @State private var showingEmptyTrash = false
@@ -74,20 +84,22 @@ struct TrashView: View {
                 Button("Done") { dismiss() }
             }
             ToolbarItem(placement: .destructiveAction) {
-                Button("Empty", role: .destructive) { showingEmptyTrash = true }
+                Button("Empty Trash", role: .destructive) { showingEmptyTrash = true }
                     .disabled(store.trash.isEmpty)
                     .accessibilityIdentifier("trash.empty")
             }
         }
         .confirmationDialog(
             "Delete permanently?",
-            isPresented: .constant(purgingNotebookId != nil || purgingFolderId != nil),
-            titleVisibility: .visible
-        ) {
-            Button("Delete permanently", role: .destructive) { purgeSelection() }
+            isPresented: Binding(
+                get: { purgingNotebookId != nil || purgingFolderId != nil },
+                set: { if !$0 { clearSelection() } }),
+            titleVisibility: .visible, presenting: purgeTarget
+        ) { target in
+            Button("Delete permanently", role: .destructive) { purgeSelection(target) }
             Button("Cancel", role: .cancel) { clearSelection() }
-        } message: {
-            Text(purgeMessage)
+        } message: { target in
+            Text(purgeMessage(target))
         }
         .confirmationDialog(
             "Empty the Trash?", isPresented: $showingEmptyTrash, titleVisibility: .visible
@@ -108,35 +120,45 @@ struct TrashView: View {
         .onAppear { store.refresh() }
     }
 
-    /// Restoring is the row's own tap and its swipe: it is the reversible action, so it should be
-    /// the easy one to hit. Deleting for good is behind a swipe *and* a confirmation.
+    /// Restore is explicit; permanent deletion stays in More and the swipe actions, with confirmation.
     private func row(
         title: String, subtitle: String, deletedAt: Date?,
         restore: @escaping () -> Void, purge: @escaping () -> Void
     ) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.body)
-            Text(deletedAt.map { "\(subtitle) · deleted \($0.formatted(.relative(presentation: .named)))" }
-                ?? subtitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body)
+                Text(deletedAt.map { "\(subtitle) · deleted \($0.formatted(.relative(presentation: .named)))" }
+                    ?? subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button("Restore", action: restore)
+                .buttonStyle(.borderless)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Restore \(title)")
+            Menu {
+                Button("Delete permanently", role: .destructive, action: purge)
+            } label: {
+                Image(systemName: "ellipsis").frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("More options for \(title)")
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: restore)
         .swipeActions(edge: .trailing) {
-            Button("Delete", role: .destructive, action: purge)
+            Button("Delete permanently", role: .destructive, action: purge)
         }
         .swipeActions(edge: .leading) {
             Button("Restore", action: restore).tint(.blue)
         }
     }
 
-    private var purgeMessage: String {
-        if let id = purgingFolderId, let folder = store.folder(id: id) {
+    private func purgeMessage(_ target: PurgeTarget) -> String {
+        if let id = target.folderId, let folder = store.folder(id: id) {
             return "\"\(folder.title)\" and everything inside it will be deleted here and on "
                 + "every device you sync with. It cannot be undone."
         }
-        if let id = purgingNotebookId,
+        if let id = target.notebookId,
            let notebook = store.notebooks.first(where: { $0.notebookId == id }) {
             return "\"\(notebook.title)\" will be deleted here and on every device you sync with. "
                 + "It cannot be undone."
@@ -144,12 +166,12 @@ struct TrashView: View {
         return ""
     }
 
-    private func purgeSelection() {
-        if let id = purgingFolderId {
+    private func purgeSelection(_ target: PurgeTarget) {
+        if let id = target.folderId {
             perform("Deleting the folder", error: $actionError) {
                 try store.purgeFolder(id: id)
             }
-        } else if let id = purgingNotebookId {
+        } else if let id = target.notebookId {
             perform("Deleting the notebook", error: $actionError) {
                 try store.purgeNotebook(id: id)
             }
