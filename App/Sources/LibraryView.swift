@@ -35,8 +35,7 @@ struct LibraryView: View {
     var body: some View {
         HStack(spacing: 0) {
             if sidebarVisible {
-                LibrarySidebar(selection: $selection, isPresentingModal: $sidebarIsPresentingModal, openNotebook: open,
-                               showPages: showPages,
+                LibrarySidebar(selection: $selection, isPresentingModal: $sidebarIsPresentingModal,
                                selectDestination: selectDestination,
                                closeSidebar: { showsSidebar = false })
                     .frame(width: horizontalSizeClass == .compact ? nil : 300)
@@ -86,8 +85,8 @@ struct LibraryView: View {
             EditorView(notebookId: target.id, initialPageId: target.pageId, onClose: { openNotebook = nil })
                 .environmentObject(store)
         }
-        // Presented here rather than in either column, because both open notebooks: the
-        // sidebar's tree and the grid's covers go through `open` alike.
+        // Presented here rather than inside the grid, alongside the editor it stands in for:
+        // a conflicted notebook has to reach the chooser by the same route as a clean one.
         .sheet(item: $resolvingConflict) { conflict in
             ConflictResolutionView(conflict: conflict)
         }
@@ -364,9 +363,16 @@ private struct FolderContentsView: View {
 
     // MARK: Header
 
-    /// Kicker, display title and the screen's actions, closed by a heavy rule — the
-    /// design's masthead. One solid action per screen (new notebook); everything else is
-    /// outlined.
+    /// Kicker, display title and the screen's actions, closed by a heavy rule — the design's
+    /// masthead. Two rows, not four: where you are and what you can do on the first, the search
+    /// field on the second.
+    ///
+    /// What earns a place on the bar is what you reach for without thinking about the library
+    /// itself — go back up (the folder toggle and the breadcrumb), find something (search), start
+    /// writing (the one solid action, new notebook). Everything that is a statement *about* the
+    /// library rather than work in it — how it is arranged, where it syncs, what was thrown
+    /// away — lives behind the gear beside it, and is none the harder to reach for being one tap
+    /// further off.
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
@@ -384,78 +390,94 @@ private struct FolderContentsView: View {
                         .foregroundStyle(Modernist.ink)
                         .lineLimit(1)
                 }
-                Spacer(minLength: 0)
-            }
-            HStack(spacing: 10) {
-                Button(action: beginNewNotebook) {
-                    Label("New notebook", systemImage: "plus")
-                        .font(Modernist.font(14, .semibold))
-                        .padding(.horizontal, 16)
-                        .frame(minHeight: Modernist.hit)
-                        .foregroundStyle(Modernist.paper)
-                        .background(Modernist.ink)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("library.add")
-                Spacer(minLength: 0)
-                Menu {
-                    Button {
-                        newFolderTitle = ""
-                        showingNewFolder = true
-                    } label: { Label("New folder", systemImage: "folder.badge.plus") }
-                    .accessibilityIdentifier("library.addFolder")
-                    if let folderId {
-                        Button { beginRenameFolder(folderId) } label: {
-                            Label("Rename folder", systemImage: "pencil")
-                        }
-                    }
-                    Divider()
-                    Button { Task { await backendHost.syncNow() } } label: {
-                        Label(backendHost.isSyncing ? "Syncing…" : "Sync now", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(!backendHost.canSyncNow || backendHost.isSyncing)
-                    .accessibilityIdentifier("library.syncNow")
-                    Button { showingTrash = true } label: {
-                        Label("Trash", systemImage: "trash")
-                    }
-                    .accessibilityIdentifier("library.trash")
-                    Button { showingSyncSettings = true } label: {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                    .accessibilityIdentifier("library.settings")
-                } label: {
-                    Image(systemName: "ellipsis").frame(width: Modernist.hit, height: Modernist.hit)
-                        .overlay { Rectangle().stroke(Modernist.ink, lineWidth: Modernist.ruleHair) }
-                }
-                .accessibilityLabel("Library options")
-                .accessibilityIdentifier("library.options")
+                Spacer(minLength: 8)
+                newNotebookButton
+                optionsMenu
             }
             searchRow
-            HStack(spacing: 10) {
-                sortMenu
-                Spacer(minLength: 0)
-                Menu {
-                    Picker("View", selection: $layout) {
-                        Text("Automatic").tag("automatic")
-                        Label("Grid", systemImage: "square.grid.2x2").tag("grid")
-                        Label("List", systemImage: "list.bullet").tag("list")
-                    }
-                } label: {
-                    Label(usesList ? "List" : "Grid", systemImage: usesList ? "list.bullet" : "square.grid.2x2")
-                        .font(Modernist.font(13, .semibold))
-                        .padding(.horizontal, 10)
-                        .frame(minHeight: 44)
-                }
-                .accessibilityLabel("Library view")
-                .accessibilityValue(layout == "automatic" ? "Automatic" : (usesList ? "List" : "Grid"))
-                .accessibilityIdentifier("library.view")
-            }
             ModernistRule(heavy: true)
         }
         .tint(Modernist.ink)
         .padding(.horizontal, 22)
         .padding(.top, 8)
+    }
+
+    /// The screen's one solid action, square like every other action on the bar so the
+    /// top-right pair reads as a pair. Icon-only: a labelled button would push the title
+    /// into truncation on a phone, and this is the one control whose glyph needs no gloss.
+    private var newNotebookButton: some View {
+        Button(action: beginNewNotebook) {
+            Image(systemName: "plus").font(.system(size: 21, weight: .medium))
+        }
+        .buttonStyle(.squareSolid)
+        .accessibilityLabel("New notebook")
+        .accessibilityIdentifier("library.add")
+    }
+
+    /// Everything secondary, in one menu rather than two: how the shelf is arranged at the top,
+    /// then the folder actions, then sync, the Trash and the settings sheet. A second overflow
+    /// control beside this one would only make the user guess which of them held the thing they
+    /// wanted.
+    ///
+    /// Layout sits at the head, inline: it is the item most often come for, and an inline picker
+    /// shows all three states and which one is on without opening anything further. Sort is a
+    /// submenu because it is really two choices — the key and the direction — and flattening
+    /// those into the same list would read as six unrelated options.
+    private var optionsMenu: some View {
+        Menu {
+            Picker("View", selection: $layout) {
+                Text("Automatic").tag("automatic")
+                Label("Grid", systemImage: "square.grid.2x2").tag("grid")
+                Label("List", systemImage: "list.bullet").tag("list")
+            }
+            Menu {
+                Picker("Sort by", selection: $sortOrderRaw) {
+                    ForEach(LibrarySortOrder.allCases) { order in
+                        Label(order.label, systemImage: order.symbolName).tag(order.rawValue)
+                    }
+                }
+                Divider()
+                Picker("Direction", selection: $sortDescending) {
+                    Text(sortOrder.directionLabel(descending: false)).tag(false)
+                    Text(sortOrder.directionLabel(descending: true)).tag(true)
+                }
+            } label: {
+                Label("Sort: \(sortOrder.label)", systemImage: "arrow.up.arrow.down")
+            }
+            .accessibilityIdentifier("library.sort")
+            Divider()
+            Button {
+                newFolderTitle = ""
+                showingNewFolder = true
+            } label: { Label("New folder", systemImage: "folder.badge.plus") }
+            .accessibilityIdentifier("library.addFolder")
+            if let folderId {
+                Button { beginRenameFolder(folderId) } label: {
+                    Label("Rename folder", systemImage: "pencil")
+                }
+            }
+            Divider()
+            Button { Task { await backendHost.syncNow() } } label: {
+                Label(backendHost.isSyncing ? "Syncing…" : "Sync now", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(!backendHost.canSyncNow || backendHost.isSyncing)
+            .accessibilityIdentifier("library.syncNow")
+            Button { showingTrash = true } label: {
+                Label("Trash", systemImage: "trash")
+            }
+            .accessibilityIdentifier("library.trash")
+            Button { showingSyncSettings = true } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .accessibilityIdentifier("library.settings")
+        } label: {
+            Image(systemName: "gearshape").font(.system(size: 19, weight: .medium))
+                .frame(width: Modernist.hit, height: Modernist.hit)
+                .overlay { Rectangle().stroke(Modernist.ink, lineWidth: Modernist.ruleHair) }
+        }
+        .accessibilityLabel("Library options")
+        .accessibilityValue(usesList ? "List" : "Grid")
+        .accessibilityIdentifier("library.options")
     }
 
     private var breadcrumb: some View {
@@ -499,28 +521,6 @@ private struct FolderContentsView: View {
         .overlay { Rectangle().stroke(Modernist.neutral600, lineWidth: Modernist.ruleHair) }
     }
 
-    private var sortMenu: some View {
-        Menu {
-            Picker("Sort by", selection: $sortOrderRaw) {
-                ForEach(LibrarySortOrder.allCases) { order in
-                    Label(order.label, systemImage: order.symbolName).tag(order.rawValue)
-                }
-            }
-            Divider()
-            Picker("Direction", selection: $sortDescending) {
-                Text(sortOrder.directionLabel(descending: false)).tag(false)
-                Text(sortOrder.directionLabel(descending: true)).tag(true)
-            }
-        } label: {
-            Label(sortOrder.label, systemImage: "arrow.up.arrow.down")
-                .font(Modernist.font(13, .semibold))
-                .frame(minHeight: 44)
-        }
-        .accessibilityLabel("Sort")
-        .accessibilityValue("\(sortOrder.label), \(sortOrder.directionLabel(descending: sortDescending))")
-        .accessibilityIdentifier("library.sort")
-    }
-
     private var activeMenuActions: LibraryMenuActions? {
         guard menuCommandsEnabled, !showingNewNotebook, !showingNewFolder,
               !showingRenameNotebook, !showingRenameFolder, !showingDeleteNotebook,
@@ -558,7 +558,7 @@ private struct FolderContentsView: View {
             } else {
                 ContentUnavailableView(
                     "Empty folder", systemImage: "folder",
-                    description: Text("Create a notebook or folder here with the buttons above."))
+                    description: Text("Create a notebook with the + button, or a folder from the options menu."))
             }
         }
         .frame(maxHeight: .infinity)

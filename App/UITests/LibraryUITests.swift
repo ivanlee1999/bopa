@@ -13,6 +13,18 @@ final class LibraryUITests: XCTestCase {
         add(attachment)
     }
 
+    /// Layout now lives in the library's options menu rather than on a control of its own, so
+    /// choosing it is two taps — the gear, then the option.
+    @MainActor
+    private func selectLayout(_ shape: String, app: XCUIApplication) {
+        let options = app.buttons["library.options"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        options.tap()
+        let option = app.buttons[shape]
+        XCTAssertTrue(option.waitForExistence(timeout: 5))
+        option.tap()
+    }
+
     @MainActor
     func testLibraryViewPagesAndSettingsHaveVisibleActions() throws {
         let app = XCUIApplication()
@@ -26,8 +38,7 @@ final class LibraryUITests: XCTestCase {
         XCTAssertTrue(addNotebook.waitForExistence(timeout: 5))
         // Set this through the actual control: launch-argument defaults override later
         // UserDefaults writes and would prevent the Grid/List preference from changing.
-        app.buttons["library.view"].tap()
-        app.buttons["Grid"].tap()
+        selectLayout("Grid", app: app)
         addNotebook.tap()
         let name = app.textFields["newNotebook.title"]
         XCTAssertTrue(name.waitForExistence(timeout: 5))
@@ -40,9 +51,8 @@ final class LibraryUITests: XCTestCase {
         let shelf = app.descendants(matching: .any)["library.contents"]
         XCTAssertTrue(shelf.staticTexts[title].waitForExistence(timeout: 5))
         capture("library-grid-portrait", app: app)
-        app.buttons["library.view"].tap()
-        app.buttons["List"].tap()
-        XCTAssertEqual(app.buttons["library.view"].value as? String, "List")
+        selectLayout("List", app: app)
+        XCTAssertEqual(app.buttons["library.options"].value as? String, "List")
         XCTAssertTrue(shelf.staticTexts[title].isHittable)
         capture("library-list-portrait", app: app)
 

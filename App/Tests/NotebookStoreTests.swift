@@ -183,8 +183,9 @@ final class NotebookStoreTests: XCTestCase {
 
         let tree = LibraryNode.tree(from: store)
         XCTAssertEqual(tree.map(\.title), ["Week 1"])
+        // The notebook is not drawn in the tree — the folder's number is how it is accounted for.
         XCTAssertEqual(tree[0].count, 1)
-        XCTAssertEqual(try XCTUnwrap(tree[0].children).map(\.title), ["Filed"])
+        XCTAssertNil(tree[0].children)
     }
 
     func testRootAdoptionDoesNotDisturbFoldersThatStillReachIt() throws {
@@ -244,10 +245,7 @@ final class NotebookStoreTests: XCTestCase {
     /// Every folder id the sidebar actually draws, in tree order, so a test can prove nothing is
     /// hidden *and* nothing is duplicated.
     private func drawnFolderIDs(_ nodes: [LibraryNode]) -> [String] {
-        nodes.flatMap { node -> [String] in
-            let own = node.kind == .folder ? [node.itemId] : []
-            return own + drawnFolderIDs(node.children ?? [])
-        }
+        nodes.flatMap { node in [node.id] + drawnFolderIDs(node.children ?? []) }
     }
 
     // MARK: Paper templates
@@ -413,68 +411,69 @@ final class NotebookStoreTests: XCTestCase {
 
         let tree = LibraryNode.tree(from: store)
 
-        XCTAssertEqual(tree.map(\.itemId), [parent.id])
+        XCTAssertEqual(tree.map(\.id), [parent.id])
         XCTAssertEqual(tree[0].count, 1)
         XCTAssertEqual(tree[0].provenance, .onServer)
         let children = try XCTUnwrap(tree[0].children)
         XCTAssertEqual(children.map(\.title), ["Projects"])
         XCTAssertEqual(children[0].count, 1)
         XCTAssertEqual(children[0].provenance, .localOnly)
-        XCTAssertEqual(child.id, children[0].itemId)
+        XCTAssertEqual(child.id, children[0].id)
     }
 
-    /// The point of the tree: every note is on it, under the folder holding it, with the loose
-    /// ones at the root — subfolders first, then notebooks, at each level.
-    func testLibraryTreeCarriesNotebooksUnderTheirFolder() throws {
+    /// The tree is the folder hierarchy and nothing else. Notebooks belong to the grid, which
+    /// can say far more about one than a row in a 300pt column ever could; here they are only a
+    /// number on the folder holding them.
+    func testLibraryTreeHoldsFoldersOnlyAndCountsTheNotebooksInThem() throws {
         let parent = try store.createFolder(title: "Work")
         let child = try store.createFolder(title: "Projects", parentFolderId: parent.id)
-        let filed = try store.createNotebook(title: "Filed", parentFolderId: parent.id)
+        _ = try store.createNotebook(title: "Filed", parentFolderId: parent.id)
         _ = try store.createNotebook(title: "Deep", parentFolderId: child.id)
         _ = try store.createNotebook(title: "Loose")
 
         let tree = LibraryNode.tree(from: store)
 
-        XCTAssertEqual(tree.map(\.title), ["Work", "Loose"])
-        XCTAssertEqual(tree[1].kind, .notebook)
-        XCTAssertNil(tree[1].children, "leaves must have nil children, not []")
+        XCTAssertEqual(tree.map(\.title), ["Work"])
+        // "Projects" and "Filed": the number counts everything filed in the folder, even
+        // though only the subfolder is drawn beneath it.
+        XCTAssertEqual(tree[0].count, 2)
 
         let underWork = try XCTUnwrap(tree[0].children)
-        XCTAssertEqual(underWork.map(\.title), ["Projects", "Filed"])
-        XCTAssertEqual(underWork[1].kind, .notebook)
-        XCTAssertEqual(underWork[1].itemId, filed.notebookId)
-        // A notebook row counts pages, not children.
-        XCTAssertEqual(underWork[1].count, 1)
-        XCTAssertEqual(try XCTUnwrap(underWork[0].children).map(\.title), ["Deep"])
+        XCTAssertEqual(underWork.map(\.title), ["Projects"])
+        XCTAssertEqual(underWork[0].id, child.id)
+        XCTAssertEqual(underWork[0].count, 1)
+        XCTAssertNil(underWork[0].children, "leaves must have nil children, not []")
     }
 
-    /// A folder and a notebook may not collide in the outline's identity space, or SwiftUI
-    /// would draw one of them in place of the other.
-    func testLibraryNodeIdsAreNamespacedByKind() throws {
-        let folder = try store.createFolder(title: "Work")
-        let notebook = try store.createNotebook(title: "Loose")
+    /// The row identity is the folder id, and the tree holds each folder exactly once — SwiftUI
+    /// would otherwise draw one of them in place of the other.
+    func testLibraryNodeIdsAreUniqueFolderIDs() throws {
+        let parent = try store.createFolder(title: "Work")
+        let child = try store.createFolder(title: "Projects", parentFolderId: parent.id)
+        _ = try store.createNotebook(title: "Loose")
 
-        let tree = LibraryNode.tree(from: store)
-        let ids = tree.map(\.id)
+        let drawn = drawnFolderIDs(LibraryNode.tree(from: store))
 
-        XCTAssertEqual(Set(ids).count, ids.count)
-        XCTAssertEqual(ids, ["folder:\(folder.id)", "notebook:\(notebook.notebookId)"])
+        XCTAssertEqual(Set(drawn).count, drawn.count)
+        XCTAssertEqual(drawn, [parent.id, child.id])
     }
 
     /// Rows are expanded unless the user shut them, so a folder that arrives from a sync shows
-    /// its notes without being opened first.
+    /// its subfolders without being opened first.
     func testFlattenedTreeIsExpandedExceptWhereCollapsed() throws {
-        let parent = try store.createFolder(title: "Work")
-        _ = try store.createNotebook(title: "Filed", parentFolderId: parent.id)
-        _ = try store.createNotebook(title: "Loose")
+        // Siblings come back in title order, so "Archive" is the first root row either way.
+        let parent = try store.createFolder(title: "Archive")
+        _ = try store.createFolder(title: "Projects", parentFolderId: parent.id)
+        _ = try store.createFolder(title: "Work")
 
         let tree = LibraryNode.tree(from: store)
 
         let open = LibraryNode.flattened(tree, collapsed: [])
-        XCTAssertEqual(open.map(\.node.title), ["Work", "Filed", "Loose"])
+        XCTAssertEqual(open.map(\.node.title), ["Archive", "Projects", "Work"])
         XCTAssertEqual(open.map(\.depth), [0, 1, 0])
 
-        let shut = LibraryNode.flattened(tree, collapsed: ["folder:\(parent.id)"])
-        XCTAssertEqual(shut.map(\.node.title), ["Work", "Loose"])
+        let shut = LibraryNode.flattened(tree, collapsed: [parent.id])
+        XCTAssertEqual(shut.map(\.node.title), ["Archive", "Work"])
     }
 
     func testFoldersReloadFromDiskOnRefresh() throws {
