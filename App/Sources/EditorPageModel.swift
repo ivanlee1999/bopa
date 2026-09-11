@@ -237,14 +237,15 @@ final class EditorPageModel: NSObject, ObservableObject {
         }
     }
 
-    func openInitialPage() {
+    func openInitialPage(preferredPageId: String? = nil) {
         guard let store else { return }
         // Before the manifest is read, not after: a notebook written when a page was an endless
         // scroll can hold most of its work below the first sheet, and opening it at "page 1 of 1"
         // would show a fraction of what is there. Does nothing to a notebook already in sheets.
         store.splitOversizedPages(in: notebookId)
         guard let manifest = store.manifest(id: notebookId) else { return }
-        let initial = manifest.openPageId ?? manifest.pageIds.first
+        let initial = preferredPageId.flatMap { manifest.pageIds.contains($0) ? $0 : nil }
+            ?? store.lastOpenedPage(in: manifest)
         if let initial { open(pageId: initial) }
     }
 
@@ -289,6 +290,7 @@ final class EditorPageModel: NSObject, ObservableObject {
             refreshNeighbors()
             dirty = false
             loadError = nil
+            store.rememberOpenedPage(newPageId, in: notebookId)
             return true
         } catch {
             loadError = String(describing: error)

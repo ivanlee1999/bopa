@@ -214,6 +214,7 @@ final class HandwritingSettings: ObservableObject {
 
 /// Settings root: handwriting preferences, with sync tucked behind a link.
 struct SettingsView: View {
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: NotebookStore
     /// Passed down so the sync form can trigger syncs on whichever backend is selected.
     var backendHost: SyncBackendHost?
@@ -244,6 +245,12 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { dismiss() }
+                    .accessibilityIdentifier("settings.done")
+            }
+        }
     }
 }
 
@@ -315,9 +322,9 @@ struct HandwritingSettingsSections: View {
     private var canvasAndPaperSections: some View {
         Section {
             Toggle("Lock page scrolling", isOn: config.scrollLocked)
-            Picker("Page width", selection: config.pageFit) {
+            Picker("Page fit", selection: config.pageFit) {
                 ForEach(PageFit.allCases) { mode in
-                    Text(mode.label).tag(mode)
+                    Text(mode == .fitWidth && config.pageNavigation.wrappedValue == .paged ? "Fit whole page" : mode.label).tag(mode)
                 }
             }
             .accessibilityIdentifier("settings.pageFit")
@@ -326,11 +333,10 @@ struct HandwritingSettingsSections: View {
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text(config.pageFit.wrappedValue == .fitWidth
-                    ? "The page is scaled so its width fills the screen, and stays that way "
-                        + "as you scroll or rotate. Pinching leaves the fit; the editor's ••• "
-                        + "menu puts you back on it."
-                    : "The page is drawn at its true size — one page unit per point, so an A4 "
-                        + "page is 1400pt wide.")
+                    ? (config.pageNavigation.wrappedValue == .paged
+                        ? "The whole page fits on screen. Pinch to zoom; choose Fit whole page in the editor menu to reset."
+                        : "The page fills the available width. Pinch to zoom; choose Fit page width in the editor menu to reset.")
+                    : "The page opens at 100%. Pinch to zoom, or use the editor menu to fit the page.")
                 if config.scrollLocked.wrappedValue && !config.fingerDrawing.wrappedValue {
                     Text("With scrolling locked and finger drawing off, the page cannot be moved.")
                 }

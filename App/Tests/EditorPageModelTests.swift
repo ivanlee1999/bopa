@@ -34,6 +34,49 @@ final class EditorPageModelTests: XCTestCase {
         return model
     }
 
+    func testOpeningResumesTheLocalPageWithoutWritingTheSyncedManifest() throws {
+        let second = try store.addPage(to: notebookId)
+        let manifestBefore = try Data(contentsOf: manifestURL)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: second.id))
+        XCTAssertEqual(try Data(contentsOf: manifestURL), manifestBefore)
+
+        let reopened = makeModel()
+        reopened.openInitialPage()
+        XCTAssertEqual(reopened.pageId, second.id)
+    }
+
+    func testExplicitPageSelectionOverridesResumeOnlyAfterItLoads() throws {
+        let first = pageIds[0]
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: first))
+        let secondURL = rootURL.appendingPathComponent("notebooks/\(notebookId)/pages/\(second.id).json")
+        let saved = try Data(contentsOf: secondURL)
+        try Data("invalid page".utf8).write(to: secondURL)
+
+        let failed = makeModel()
+        failed.openInitialPage(preferredPageId: second.id)
+        XCTAssertNotNil(failed.loadError)
+        XCTAssertEqual(store.lastOpenedPage(in: try XCTUnwrap(store.manifest(id: notebookId))), first)
+
+        try saved.write(to: secondURL)
+        let selected = makeModel()
+        selected.openInitialPage(preferredPageId: second.id)
+        XCTAssertEqual(selected.pageId, second.id)
+        XCTAssertEqual(store.lastOpenedPage(in: try XCTUnwrap(store.manifest(id: notebookId))), second.id)
+    }
+
+    func testDeletedResumePageFallsBackToAnExistingPage() throws {
+        let second = try store.addPage(to: notebookId)
+        store.rememberOpenedPage(second.id, in: notebookId)
+        try store.deletePage(from: notebookId, pageId: second.id)
+        let model = makeModel()
+        model.openInitialPage()
+        XCTAssertEqual(model.pageId, pageIds[0])
+        XCTAssertNil(model.loadError)
+    }
+
     /// A stroke with real point data, so it survives the round trip through PencilKit. Distinct
     /// `createdAt`s matter: they are how the bridge re-identifies untouched strokes on export.
     private func makeStroke(id: String, second: Int) throws -> StrokeDTO {
@@ -321,6 +364,7 @@ final class EditorPageModelTests: XCTestCase {
         let heal = try breakTheStore()
 
         XCTAssertFalse(model.open(pageId: second.id))
+        XCTAssertEqual(store.lastOpenedPage(in: try XCTUnwrap(store.manifest(id: notebookId))), firstId)
 
         XCTAssertEqual(model.pageId, firstId)
         XCTAssertEqual(model.drawing.dataRepresentation(), drawingBefore)

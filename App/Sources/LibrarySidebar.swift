@@ -108,14 +108,20 @@ struct LibrarySidebar: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var backendHost: SyncBackendHost
     @Binding var selection: LibrarySelection?
+    @Binding var isPresentingModal: Bool
     /// Tapping a note in the tree opens it, the same as tapping its cover in the grid.
     let openNotebook: (String) -> Void
+    let showPages: (String) -> Void
+    let selectDestination: (LibrarySelection) -> Void
+    let closeSidebar: () -> Void
 
     /// What the user has explicitly shut. Everything else is open — see `flattened`.
     @State private var collapsed: Set<String> = []
     @State private var renaming: RenameTarget?
     @State private var showingRename = false
     @State private var renameTitle = ""
+    @State private var trashTarget: LibraryNode?
+    @State private var showingTrashConfirmation = false
     @State private var actionError: LibraryActionError?
 
     /// What a rename alert is pointed at. One alert serves both kinds, because at any moment
@@ -160,13 +166,32 @@ struct LibrarySidebar: View {
                 .disabled(trimmedRenameTitle.isEmpty)
             Button("Cancel", role: .cancel) {}
         }
+        .confirmationDialog("Move to Trash?", isPresented: $showingTrashConfirmation, titleVisibility: .visible) {
+            Button("Move to Trash", role: .destructive) { trashSelection() }
+            Button("Cancel", role: .cancel) { trashTarget = nil }
+        } message: {
+            Text(trashMessage)
+        }
         .libraryActionAlert($actionError)
+        .onChange(of: showingRename || showingTrashConfirmation || actionError != nil) { _, presented in
+            isPresentingModal = presented
+        }
+        .onDisappear { isPresentingModal = false }
     }
 
     /// The wordmark, on the design's status strip: a label and a rule, nothing else.
     private var masthead: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Kicker("bopa", color: Modernist.ink)
+            HStack {
+                Kicker("bopa", color: Modernist.ink)
+                Spacer()
+                Button(action: closeSidebar) {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close folders")
+                .accessibilityIdentifier("sidebar.close")
+            }
             ModernistRule(heavy: true)
         }
         .padding(.horizontal, 20)
@@ -180,10 +205,10 @@ struct LibrarySidebar: View {
     private var rootRow: some View {
         let selected = selection == .root
         return Button {
-            selection = .root
+            selectDestination(.root)
         } label: {
             rowBody(
-                title: "All Notes", systemImage: "tray.full", weight: .semibold,
+                title: "Library", systemImage: "tray.full", weight: .semibold,
                 count: store.totalNotebookCount,
                 countUnit: plural(store.totalNotebookCount, "notebook"),
                 provenance: .unknown, selected: selected)
@@ -192,7 +217,8 @@ struct LibrarySidebar: View {
         .foregroundStyle(selected ? Modernist.paper : Modernist.ink)
         .padding(.horizontal, 20)
         .background(selected ? Modernist.ink : .clear)
-        .accessibilityIdentifier("sidebar.allNotes")
+        .accessibilityIdentifier("sidebar.library")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -212,7 +238,7 @@ struct LibrarySidebar: View {
         return HStack(spacing: 4) {
             disclosure(for: node)
             Button {
-                selection = .folder(node.itemId)
+                selectDestination(.folder(node.itemId))
             } label: {
                 rowBody(
                     title: node.title, systemImage: "folder", weight: .semibold,
@@ -220,30 +246,15 @@ struct LibrarySidebar: View {
                     provenance: node.provenance, selected: selected)
             }
             .buttonStyle(.plain)
+            nodeOptions(node, selected: selected)
         }
         .foregroundStyle(selected ? Modernist.paper : Modernist.ink)
         .padding(.leading, indent(row.depth))
-        .padding(.trailing, 20)
+        .padding(.trailing, 8)
         .background(selected ? Modernist.ink : .clear)
         .accessibilityIdentifier("sidebar.folder.\(node.itemId)")
-        .contextMenu {
-            Button {
-                beginRename(.folder(node.itemId), current: node.title)
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            // Any folder, not only an empty one: refusing to delete a populated folder was the
-            // only guard against losing a subtree, and the Trash is a better one — the folder and
-            // everything under it can be thrown away and brought back.
-            Button(role: .destructive) {
-                if selection == .folder(node.itemId) { selection = .root }
-                perform("Moving the folder to the Trash", error: $actionError) {
-                    try store.trashFolder(id: node.itemId)
-                }
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .contextMenu { nodeMenu(node) }
     }
 
     /// A notebook, one step further in than the folder holding it. Never selected: tapping it
@@ -261,18 +272,77 @@ struct LibrarySidebar: View {
                     provenance: node.provenance, selected: false)
             }
             .buttonStyle(.plain)
+            nodeOptions(node)
         }
         .foregroundStyle(Modernist.ink)
         .padding(.leading, indent(row.depth))
-        .padding(.trailing, 20)
+        .padding(.trailing, 8)
         .accessibilityIdentifier("sidebar.notebook.\(node.itemId)")
-        .contextMenu {
-            Button {
-                beginRename(.notebook(node.itemId), current: node.title)
-            } label: {
-                Label("Rename", systemImage: "pencil")
+        .contextMenu { nodeMenu(node) }
+    }
+
+    private func nodeOptions(_ node: LibraryNode, selected: Bool = false) -> some View {
+        Menu { nodeMenu(node) } label: {
+            Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                .foregroundStyle(selected ? Modernist.paper : Modernist.ink)
+        }
+        .accessibilityLabel("More options for \(node.title)")
+        .accessibilityIdentifier("sidebar.options.\(node.itemId)")
+    }
+
+    @ViewBuilder
+    private func nodeMenu(_ node: LibraryNode) -> some View {
+        if node.kind == .notebook {
+            Button { showPages(node.itemId) } label: {
+                Label("Pages", systemImage: "square.grid.2x2")
             }
         }
+        Button {
+            beginRename(node.kind == .folder ? .folder(node.itemId) : .notebook(node.itemId), current: node.title)
+        } label: { Label("Rename", systemImage: "pencil") }
+        Menu {
+            Button("Library") { move(node, to: nil) }
+            let excluded = node.kind == .folder
+                ? Set(store.deletionScope(ofFolder: node.itemId).folderIDs) : Set<String>()
+            ForEach(store.liveFolders.filter { !excluded.contains($0.id) }, id: \.id) { folder in
+                Button(folder.title) { move(node, to: folder.id) }
+            }
+        } label: { Label("Move to folder", systemImage: "folder") }
+        Divider()
+        Button(role: .destructive) {
+            trashTarget = node
+            showingTrashConfirmation = true
+        } label: { Label("Move to Trash", systemImage: "trash") }
+    }
+
+    private func move(_ node: LibraryNode, to folderId: String?) {
+        perform("Moving \(node.title)", error: $actionError) {
+            if node.kind == .folder { try store.moveFolder(id: node.itemId, toFolder: folderId) }
+            else { try store.moveNotebook(id: node.itemId, toFolder: folderId) }
+        }
+    }
+
+    private var trashMessage: String {
+        guard let node = trashTarget else { return "" }
+        if node.kind == .folder {
+            let scope = store.deletionScope(ofFolder: node.itemId)
+            return "\(node.title), including \(scope.childFolderCount) folders and \(scope.notebookIDs.count) notebooks (\(scope.pageCount) pages), moves to the Trash on every synced device. You can restore it until the Trash is emptied."
+        }
+        return "\(node.title) moves to the Trash on every synced device. You can restore it until the Trash is emptied."
+    }
+
+    private func trashSelection() {
+        guard let node = trashTarget else { return }
+        perform("Moving \(node.title) to the Trash", error: $actionError) {
+            if node.kind == .folder {
+                let scope = Set(store.deletionScope(ofFolder: node.itemId).folderIDs)
+                try store.trashFolder(id: node.itemId)
+                if let selected = selection?.folderId, scope.contains(selected) { selectDestination(.root) }
+            } else {
+                try store.trashNotebook(id: node.itemId)
+            }
+        }
+        trashTarget = nil
     }
 
     /// The count on a row is read out with its unit, so it has to agree with it: "1 item",
@@ -301,7 +371,7 @@ struct LibrarySidebar: View {
                 .font(Modernist.font(11).monospacedDigit())
                 .accessibilityLabel("\(count) \(countUnit)")
         }
-        .frame(height: 40)
+        .frame(minHeight: 44)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
@@ -319,7 +389,7 @@ struct LibrarySidebar: View {
             } label: {
                 Image(systemName: shut ? "chevron.right" : "chevron.down")
                     .font(.system(size: 11, weight: .bold))
-                    .frame(width: disclosureWidth, height: 40)
+                    .frame(width: disclosureWidth, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -329,13 +399,13 @@ struct LibrarySidebar: View {
         }
     }
 
-    private let disclosureWidth: CGFloat = 18
+    private let disclosureWidth: CGFloat = 44
 
     /// The triangle sits in the 20pt gutter the rest of the panel keeps clear, so the tree's
     /// glyph column stays put whether or not a row can be opened. It is inset by enough that it
     /// still reads as inside the panel rather than clipped to its edge.
     private func indent(_ depth: Int) -> CGFloat {
-        10 + CGFloat(depth) * 16
+        min(10 + CGFloat(depth) * 12, 46)
     }
 
     // MARK: Renaming
@@ -406,7 +476,7 @@ struct LibrarySidebar: View {
                 }
                 .font(Modernist.font(13, .bold))
                 .padding(.horizontal, 10)
-                .frame(height: 36)
+                .frame(minHeight: 44)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(Rectangle().stroke(Modernist.ink, lineWidth: Modernist.ruleHair))
                 .contentShape(Rectangle())

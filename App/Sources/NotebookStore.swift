@@ -19,6 +19,7 @@ final class NotebookStore: ObservableObject {
         Notification.Name("dev.ivan.bopa.storeDidApplyRemoteChanges")
 
     @Published private(set) var notebooks: [NotebookManifest] = []
+    @Published private(set) var notebookActivityDates: [String: Date] = [:]
     @Published private(set) var folders: [FolderDTO] = []
     /// What the WebDAV server held at the end of the last sync; nil until this library has
     /// synced at least once. Read-only here — only the sync engine writes it.
@@ -37,6 +38,7 @@ final class NotebookStore: ObservableObject {
     /// whose clock is wrong stops winning merges it should lose — see `SyncClock`. Injectable so a
     /// test can stamp from a clock it controls.
     let clock: SyncClock
+    private let preferences: UserDefaults
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -45,11 +47,12 @@ final class NotebookStore: ObservableObject {
     }()
     private let decoder = JSONDecoder()
 
-    init(rootURL: URL? = nil, clock: SyncClock = .shared) {
+    init(rootURL: URL? = nil, clock: SyncClock = .shared, preferences: UserDefaults = .standard) {
         self.rootURL = rootURL
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("notable", isDirectory: true)
         self.clock = clock
+        self.preferences = preferences
         refresh()
     }
 
@@ -98,11 +101,13 @@ final class NotebookStore: ObservableObject {
     func refresh() {
         let notebooksDir = rootURL.appendingPathComponent("notebooks", isDirectory: true)
         let ids = (try? FileManager.default.contentsOfDirectory(atPath: notebooksDir.path)) ?? []
-        notebooks = ids.compactMap { id -> NotebookManifest? in
+        let loaded = ids.compactMap { id -> NotebookManifest? in
             guard let data = try? Data(contentsOf: manifestURL(id)) else { return nil }
             return try? decoder.decode(NotebookManifest.self, from: data)
         }
         .map { (activity: lastActivity($0), manifest: $0) }
+        notebookActivityDates = Dictionary(loaded.map { ($0.manifest.notebookId, $0.activity) }, uniquingKeysWith: max)
+        notebooks = loaded
         .sorted { ($0.activity, $0.manifest.title) > ($1.activity, $1.manifest.title) }
         .map(\.manifest)
 
@@ -177,6 +182,19 @@ final class NotebookStore: ObservableObject {
 
     func manifest(id: String) -> NotebookManifest? {
         notebooks.first { $0.notebookId == id }
+    }
+
+    /// Reading position belongs to this device, so opening a page does not change sync clocks.
+    func lastOpenedPage(in manifest: NotebookManifest) -> String? {
+        for candidate in [preferences.string(forKey: "library.lastPage.\(manifest.notebookId)"), manifest.openPageId] {
+            if let candidate, manifest.pageIds.contains(candidate) { return candidate }
+        }
+        return manifest.pageIds.first
+    }
+
+    func rememberOpenedPage(_ pageId: String, in notebookId: String) {
+        guard manifest(id: notebookId)?.pageIds.contains(pageId) == true else { return }
+        preferences.set(pageId, forKey: "library.lastPage.\(notebookId)")
     }
 
     func loadPage(notebookId: String, pageId: String) throws -> PageFile {
@@ -1367,7 +1385,7 @@ final class NotebookStore: ObservableObject {
     }
 
     /// Notebooks anywhere in the library, used by the sidebar's "All Notes" count.
-    var totalNotebookCount: Int { notebooks.count }
+    var totalNotebookCount: Int { search("").notebooks.count }
 
     // MARK: - Sync provenance
 
