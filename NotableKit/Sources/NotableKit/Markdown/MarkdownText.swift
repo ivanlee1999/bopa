@@ -138,7 +138,9 @@ public enum MarkdownText {
     private static func parseInline(_ line: String) -> [Span] {
         var spans: [Span] = []
         var pending = ""
-        var traits: SpanTraits = []
+        // Never reassigned: a top-level run carries no styling of its own, and everything nested
+        // receives its parent's traits through the recursion below.
+        let traits: SpanTraits = []
         let chars = Array(line)
         var i = 0
 

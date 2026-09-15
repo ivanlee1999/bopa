@@ -906,7 +906,7 @@ extension CanvasContainerView: UIGestureRecognizerDelegate {
     /// The drag only starts if it started on a box. Refusing here rather than cancelling in
     /// `began` is what lets the scroll view take the gesture instead: it has been told to wait
     /// for this one to fail, and a refusal is a failure it sees immediately.
-    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+    override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
         guard recognizer === textDragRecognizer else { return true }
         return textBlock(at: pagePoint(recognizer.location(in: self))) != nil
     }

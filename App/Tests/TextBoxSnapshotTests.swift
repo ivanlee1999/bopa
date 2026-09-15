@@ -84,7 +84,7 @@ final class TextBoxSnapshotTests: XCTestCase {
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         context.draw(corner, in: CGRect(x: 0, y: 0, width: 2, height: 2))
-        let pixels = context.data!.assumeMemoryBound(to: UInt8.self)
+        let pixels = context.data!.assumingMemoryBound(to: UInt8.self)
         XCTAssertEqual(pixels[3], 0, "a text box must not paint a background behind the ink")
     }
 }

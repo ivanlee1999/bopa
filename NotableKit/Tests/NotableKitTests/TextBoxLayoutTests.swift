@@ -244,7 +244,7 @@ final class TextBoxLayoutTests: XCTestCase {
 
         TextBoxLayout.draw(
             blocks: [block(id: "a", kind: "image")], in: context, scale: 1)
-        let data = context.data!.assumeMemoryBound(to: UInt8.self)
+        let data = context.data!.assumingMemoryBound(to: UInt8.self)
         XCTAssertEqual(data[0], 255, "a non-text block must not paint anything")
     }
 
@@ -257,7 +257,7 @@ final class TextBoxLayoutTests: XCTestCase {
         TextBoxLayout.draw(
             blocks: [block(id: "a", x: 0, y: 0, text: "# Hello")], in: context, scale: 1)
 
-        let data = context.data!.assumeMemoryBound(to: UInt8.self)
+        let data = context.data!.assumingMemoryBound(to: UInt8.self)
         let darkened = (0..<(600 * 200)).contains { data[$0] < 200 }
         XCTAssertTrue(darkened, "drawing a text box should darken some pixels")
     }
@@ -272,7 +272,7 @@ final class TextBoxLayoutTests: XCTestCase {
             blocks: [block(id: "a", x: 0, y: 0, text: "# Hello")], in: context, scale: 1,
             skipping: ["a"])
 
-        let data = context.data!.assumeMemoryBound(to: UInt8.self)
+        let data = context.data!.assumingMemoryBound(to: UInt8.self)
         XCTAssertFalse((0..<(600 * 200)).contains { data[$0] < 200 })
     }
 }
