@@ -870,26 +870,26 @@ extension CanvasContainerView: UIGestureRecognizerDelegate {
         case .changed:
             break
         case .ended:
-            guard let dragging else { return }
+            guard let drag = dragging else { return }
+            // Cleared first, so no path out of here can leave a finished drag looking live.
+            dragging = nil
             let point = pagePoint(recognizer.location(in: self))
             let travel = recognizer.translation(in: self)
             // A drag that went nowhere is a tap that wobbled; the tap recognizer will not have
             // fired, because this one claimed the touch.
             if abs(travel.x) < Self.dragSlop, abs(travel.y) < Self.dragSlop {
-                textDelegate?.canvasContainer(self, didTapTextBlock: dragging.id)
-            } else if dragging.isResize {
-                guard let block = textBlocks.first(where: { $0.id == dragging.id }),
-                      let x = block.x
-                else { break }
-                textDelegate?.canvasContainer(
-                    self, didResizeTextBlock: dragging.id, to: point.x - CGFloat(x))
+                textDelegate?.canvasContainer(self, didTapTextBlock: drag.id)
+            } else if drag.isResize {
+                if let block = textBlocks.first(where: { $0.id == drag.id }), let x = block.x {
+                    textDelegate?.canvasContainer(
+                        self, didResizeTextBlock: drag.id, to: point.x - CGFloat(x))
+                }
             } else {
                 textDelegate?.canvasContainer(
-                    self, didMoveTextBlock: dragging.id,
+                    self, didMoveTextBlock: drag.id,
                     to: CGPoint(
-                        x: point.x - dragging.grabOffset.x, y: point.y - dragging.grabOffset.y))
+                        x: point.x - drag.grabOffset.x, y: point.y - drag.grabOffset.y))
             }
-            self.dragging = nil
         case .cancelled, .failed:
             dragging = nil
         default:

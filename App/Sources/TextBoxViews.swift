@@ -58,11 +58,8 @@ final class TextBoxLayerView: UIView {
         context.saveGState()
         defer { context.restoreGState() }
         context.translateBy(x: -contentOffset.x, y: -contentOffset.y)
-        TextBoxLayout.draw(
-            blocks: blocks,
-            in: context,
-            scale: zoomScale,
-            skipping: editingBlockID.map { [$0] } ?? [])
+        let skipped: Set<String> = editingBlockID.map { Set([$0]) } ?? []
+        TextBoxLayout.draw(blocks: blocks, in: context, scale: zoomScale, skipping: skipped)
     }
 }
 

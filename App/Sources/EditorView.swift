@@ -302,10 +302,10 @@ struct EditorView: View {
                     contentRevision: model.contentRevision,
                     background: model.pageBackground,
                     images: model.pageImages,
+                    textBlocks: model.textBlocks,
                     pageScroll: model.openScroll,
                     template: pageTemplate,
                     pageSize: model.page?.pageSize ?? .legacyUndeclared,
-                    textBlocks: model.textBlocks,
                     nextPage: model.nextPagePreview,
                     hasNextPage: model.nextPageId != nil,
                     drawing: $model.drawing,
@@ -318,10 +318,11 @@ struct EditorView: View {
                     crossSeam: crossSeam,
                     appendPage: appendPageWithoutLeaving,
                     fileInkBelowTheSeam: model.fileInkBelowTheSeam,
-                    makeTextBlock: { model.newTextBlock(at: $0).map { block in
+                    makeTextBlock: { point in
+                        guard let block = model.newTextBlock(at: point) else { return nil }
                         model.beginEditing(block)
                         return block
-                    } },
+                    },
                     commitTextBlock: { model.commitEditing($0, text: $1) },
                     moveTextBlock: { model.moveTextBlock(id: $0, to: $1) },
                     resizeTextBlock: { model.resizeTextBlock(id: $0, width: $1) },
