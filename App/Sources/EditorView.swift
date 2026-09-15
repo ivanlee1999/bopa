@@ -66,7 +66,15 @@ struct EditorView: View {
                 showingPageOverview || model.saveError != nil || actionError != nil ? nil : EditorMenuActions(
                     pages: showPages,
                     close: { model.close() }))
-            .onDisappear { model.saveNow() }
+            // Leaving the text tool ends the session. Watched here rather than in the canvas's
+            // update pass so the model is written outside the render.
+            .onChange(of: toolSelection.kind) { _, kind in
+                if kind != .text { commitOpenTextBox() }
+            }
+            .onDisappear {
+                commitOpenTextBox()
+                model.saveNow()
+            }
             // Leaving the app does not pop the editor, so the debounced save has to be flushed
             // here too — otherwise switching apps or locking the iPad within two seconds of the
             // last stroke loses it.
@@ -156,6 +164,10 @@ struct EditorView: View {
             .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
             .disabled(pageIndex == 0)
             .keyboardShortcut("[", modifiers: .command)
+            // A bracket typed into a text box is a bracket, not a page turn. On the Mac the
+            // shortcut fires even while a text view holds the keyboard, so it is taken away for
+            // as long as one does.
+            .disabled(model.editingBlockID != nil)
             .accessibilityLabel("Previous page")
 
             // The count is the way into the overview, not a label beside it: it is already the
@@ -192,6 +204,7 @@ struct EditorView: View {
             // of a page — the touch gesture that appends and enters pages — never fires there,
             // and relaxing that guard would let momentum walk the whole notebook.
             .keyboardShortcut("]", modifiers: .command)
+            .disabled(model.editingBlockID != nil)
             .accessibilityLabel(
                 pageIndex >= manifest.pageIds.count - 1 ? "New page" : "Next page")
 
@@ -202,11 +215,21 @@ struct EditorView: View {
             }
             .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
             .keyboardShortcut("n", modifiers: [.command, .shift])
+            .disabled(model.editingBlockID != nil)
             .accessibilityLabel("Add page")
         }
     }
 
+    /// Writes back whatever box is open. Every route off this page calls it first: a box left
+    /// open is a text view floating over a page it no longer belongs to, and its typing would be
+    /// committed onto whatever page arrived next.
+    private func commitOpenTextBox() {
+        guard let finished = viewport.endTextEditing() else { return }
+        model.commitEditing(finished.block, text: finished.text)
+    }
+
     private func showPages() {
+        commitOpenTextBox()
         guard model.saveNow() else { return }
         showingPageOverview = true
     }
@@ -282,6 +305,7 @@ struct EditorView: View {
                     pageScroll: model.openScroll,
                     template: pageTemplate,
                     pageSize: model.page?.pageSize ?? .legacyUndeclared,
+                    textBlocks: model.textBlocks,
                     nextPage: model.nextPagePreview,
                     hasNextPage: model.nextPageId != nil,
                     drawing: $model.drawing,
@@ -294,6 +318,15 @@ struct EditorView: View {
                     crossSeam: crossSeam,
                     appendPage: appendPageWithoutLeaving,
                     fileInkBelowTheSeam: model.fileInkBelowTheSeam,
+                    makeTextBlock: { model.newTextBlock(at: $0).map { block in
+                        model.beginEditing(block)
+                        return block
+                    } },
+                    commitTextBlock: { model.commitEditing($0, text: $1) },
+                    moveTextBlock: { model.moveTextBlock(id: $0, to: $1) },
+                    resizeTextBlock: { model.resizeTextBlock(id: $0, width: $1) },
+                    currentTextBlock: { model.textBlock(id: $0) },
+                    restoreTextBlock: { model.restoreTextBlock(id: $0, to: $1) },
                     onChanged: model.scheduleSave,
                     onIdle: model.foldInRemoteInk)
 
@@ -324,6 +357,7 @@ struct EditorView: View {
 
     private func openPage(at index: Int) {
         guard let manifest, manifest.pageIds.indices.contains(index) else { return }
+        commitOpenTextBox()
         model.open(pageId: manifest.pageIds[index])
     }
 
@@ -342,6 +376,7 @@ struct EditorView: View {
     ///   the latch set with no page load coming to clear it, which silently killed every
     ///   subsequent crossing for the rest of the session.
     private func crossSeam(_ direction: Int, _ carried: CGFloat) -> Bool {
+        commitOpenTextBox()
         if direction > 0 {
             return model.enterNextPageAcrossSeam(carrying: carried)
         }
@@ -360,6 +395,7 @@ struct EditorView: View {
     /// Failure is reported through the same alert a failed save uses — a disk that is full
     /// produces no page, and silence would read as the scroll simply not working.
     private func appendPageWithoutLeaving() {
+        commitOpenTextBox()
         guard model.nextPageId == nil else { return }
         guard model.saveNow() else { return }
         do {
@@ -376,6 +412,7 @@ struct EditorView: View {
     /// missed. It reports through the same alert a failed save does, because it is the same kind
     /// of news.
     private func addPage() {
+        commitOpenTextBox()
         guard model.saveNow() else { return }
         do {
             let newPage = try store.addPage(
@@ -432,6 +469,14 @@ final class CanvasViewportController {
     }
 
     func fitToWidth() { container?.fitToWidth() }
+
+    /// Closes any open text box and hands back what was typed, for the caller to commit.
+    ///
+    /// Here rather than on the coordinator because the callers are SwiftUI actions — a rail tap,
+    /// a page turn, the view going away — and the coordinator is not reachable from them. It also
+    /// keeps the model write out of `updateUIView`, where publishing a change mid-render is
+    /// exactly the thing SwiftUI complains about.
+    func endTextEditing() -> (block: CouchBlock, text: String)? { container?.endTextEditing() }
 }
 
 /// Bridges the canvas's NSUndoManager to SwiftUI button state. PencilKit registers
@@ -492,6 +537,8 @@ struct EditorCanvasView: UIViewRepresentable {
     var contentRevision: Int = 0
     var background: UIImage?
     var images: [PageImage] = []
+    /// The page's text boxes, drawn below the ink.
+    var textBlocks: [CouchBlock] = []
     /// The unzoomed page-space y offset the page opens at — its persisted position, or the
     /// one the scroll carried across a seam.
     var pageScroll: CGFloat = 0
@@ -526,6 +573,18 @@ struct EditorCanvasView: UIViewRepresentable {
     var appendPage: () -> Void = {}
     /// Hands ink drawn below the seam to the page under it, returning what is left on this one.
     var fileInkBelowTheSeam: (PKDrawing, CGFloat) -> PKDrawing? = { _, _ in nil }
+    /// Asked to put a new box where the user tapped; answered with the box to type into, or
+    /// nil if there is no page to put one on.
+    var makeTextBlock: (CGPoint) -> CouchBlock? = { _ in nil }
+    /// Typing finished: the box, and what was in it. An empty one is a delete.
+    var commitTextBlock: (CouchBlock, String) -> Void = { _, _ in }
+    var moveTextBlock: (String, CGPoint) -> Void = { _, _ in }
+    var resizeTextBlock: (String, CGFloat) -> Void = { _, _ in }
+    /// The box with this id as the page holds it now — read at undo time, so the redo step is
+    /// built from what is actually there rather than from a guess made before the edit landed.
+    var currentTextBlock: (String) -> CouchBlock? = { _ in nil }
+    /// Puts a box back the way it was, or removes it if it was not there.
+    var restoreTextBlock: (String, CouchBlock?) -> Void = { _, _ in }
     var onChanged: () -> Void
     /// The pencil lifted. The editor uses it to retry work it would not do mid-stroke.
     var onIdle: () -> Void = {}
@@ -570,7 +629,10 @@ struct EditorCanvasView: UIViewRepresentable {
 
         // Seed the canvas from the rail: the rail is the only tool UI, so whatever it shows
         // is what the canvas must be holding from the first stroke on.
+        // Nil only for the text tool, which the rail never opens on — but the canvas has to
+        // hold something, and a pen is what every other route into this view assumes.
         var initialTool = toolSelection.pkTool
+            ?? PKInkingTool(.pen, color: toolSelection.ink.uiColor, width: 5)
         if CommandLine.arguments.contains("--uitest-select-eraser") {
             // Erasing is reached by relaunching with this argument rather than by tapping
             // the rail, so the test starts from a known tool without synthesising a tap.
@@ -579,6 +641,10 @@ struct EditorCanvasView: UIViewRepresentable {
             // A leftover eraser makes drawing tests silently no-op; tests opt into a
             // known pen rather than inheriting one.
             initialTool = PKInkingTool(.pen, color: .black, width: 5)
+        } else if CommandLine.arguments.contains("--uitest-select-text") {
+            // Typing is reached the same way erasing is: relaunched into, so the test starts
+            // from a known tool without hunting for a rail button.
+            toolSelection.select(.text)
         }
         canvas.tool = initialTool
         context.coordinator.toolSelection = toolSelection
@@ -586,6 +652,15 @@ struct EditorCanvasView: UIViewRepresentable {
         // not stomp the tool we just set (which matters for the eraser test hook).
         context.coordinator.seed(initialTool)
         context.coordinator.apply(config, to: container)
+        container.textDelegate = context.coordinator
+        container.textEditor.delegate = context.coordinator
+        container.textEditor.installAccessoryBar()
+        container.textEditor.onDone = { [weak coordinator = context.coordinator] in
+            coordinator?.endTextEditing()
+        }
+        container.textEditor.onDelete = { [weak coordinator = context.coordinator] in
+            coordinator?.deleteEditingTextBlock()
+        }
         canvas.becomeFirstResponder()
         return container
     }
@@ -611,6 +686,7 @@ struct EditorCanvasView: UIViewRepresentable {
         // idempotent and never touch canvas.drawing.
         container.setBackground(background)
         container.setImages(images)
+        container.setTextBlocks(textBlocks)
         // Load canvas content ONLY when the editor says the drawing was replaced — a page switch
         // or a reload (found by UI-test bisect): assigning canvas.drawing on ordinary renders
         // cancels in-flight strokes, and PKDrawing equality is identity-like, so a != guard cannot
@@ -641,7 +717,9 @@ struct EditorCanvasView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate {
+    final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate,
+        UITextViewDelegate, CanvasContainerTextDelegate
+    {
         /// The current value of the representable struct.
         ///
         /// A `var`, reassigned on every `updateUIView`. SwiftUI creates the coordinator once and
@@ -717,7 +795,126 @@ struct EditorCanvasView: UIViewRepresentable {
         func applyToolIfNeeded() {
             guard let toolSelection, toolSelection.revision != appliedToolRevision else { return }
             appliedToolRevision = toolSelection.revision
-            select(toolSelection.pkTool)
+            // The session itself is closed by `EditorView`, watching the same selection — this
+            // runs inside a SwiftUI update, where writing the typed text back to the model would
+            // be publishing a change mid-render.
+            container?.isTextMode = toolSelection.isTextTool
+            // Nil is the text tool, which is not a PencilKit tool at all. The canvas keeps
+            // whatever it was holding; its drawing gesture is off while text mode is on, so
+            // what that is cannot matter until the rail comes back to a tool that draws.
+            if let tool = toolSelection.pkTool { select(tool) }
+        }
+
+        // MARK: - Text boxes
+
+        /// Commits whatever box is open, if any. Safe to call when none is.
+        ///
+        /// Every route out of a text box runs through here — a tap elsewhere, a tool change, a
+        /// page turn, the Done key — because a box left open is a text view floating over a page
+        /// it no longer belongs to.
+        func endTextEditing() {
+            guard let container, let finished = container.endTextEditing() else { return }
+            let previous = parent.currentTextBlock(finished.block.id)
+            parent.commitTextBlock(finished.block, finished.text)
+            registerTextUndo(
+                id: finished.block.id, previous: previous,
+                name: previous == nil ? "Text" : "Edit Text")
+        }
+
+        /// Puts one whole edit on the page's undo stack.
+        ///
+        /// A session, not a keystroke: the text view keeps its own manager for letter-by-letter
+        /// undo while a box is open (see `TextBoxEditorView`), and what the rail's button should
+        /// reach for afterwards is the paragraph, the move, the deletion — the same granularity a
+        /// stroke has.
+        private func registerTextUndo(id: String, previous: CouchBlock?, name: String) {
+            guard let manager = container?.pageUndoManager else { return }
+            manager.registerUndo(withTarget: self) { target in
+                // UndoManager calls this on the thread that registered it, which is the main one.
+                MainActor.assumeIsolated {
+                    let undone = target.parent.currentTextBlock(id)
+                    target.parent.restoreTextBlock(id, previous)
+                    // Registering from inside an undo is what makes it redoable, and the same
+                    // call serves both directions for ever after.
+                    target.registerTextUndo(id: id, previous: undone, name: name)
+                }
+            }
+            manager.setActionName(name)
+        }
+
+        func canvasContainer(
+            _ container: CanvasContainerView, didTapEmptyPageAt point: CGPoint
+        ) {
+            guard let block = parent.makeTextBlock(point) else { return }
+            container.beginTextEditing(block, source: "")
+        }
+
+        func canvasContainer(_ container: CanvasContainerView, didTapTextBlock id: String) {
+            guard let block = container.textBlocks.first(where: { $0.id == id }) else { return }
+            // The source, not the rendered text: while a box is open it *is* markdown, and a
+            // heading whose hashes vanished the moment it was tapped could never be unmade.
+            container.beginTextEditing(block, source: block.text ?? "")
+        }
+
+        func canvasContainer(
+            _ container: CanvasContainerView, didMoveTextBlock id: String, to point: CGPoint
+        ) {
+            let previous = parent.currentTextBlock(id)
+            parent.moveTextBlock(id, point)
+            registerTextUndo(id: id, previous: previous, name: "Move Text")
+        }
+
+        func canvasContainer(
+            _ container: CanvasContainerView, didResizeTextBlock id: String, to width: CGFloat
+        ) {
+            let previous = parent.currentTextBlock(id)
+            parent.resizeTextBlock(id, width)
+            registerTextUndo(id: id, previous: previous, name: "Resize Text")
+        }
+
+        func canvasContainerDidTapOutsideEditor(_ container: CanvasContainerView) {
+            endTextEditing()
+        }
+
+        /// Throws the open box away. Routed through the empty commit rather than a separate
+        /// delete, so "a box with nothing in it does not exist" stays one rule.
+        func deleteEditingTextBlock() {
+            container?.textEditor.text = ""
+            endTextEditing()
+        }
+
+        // MARK: UITextViewDelegate
+
+        func textViewDidChange(_ textView: UITextView) {
+            // The box grows downward as it fills, so the caret cannot run out of the bottom of a
+            // box whose committed height is a line old.
+            container?.textEditorContentChanged()
+            scrollEditorIntoView()
+        }
+
+        func textView(
+            _ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String
+        ) -> Bool {
+            true
+        }
+
+        /// Keeps the caret above the keyboard by scrolling the page, not by moving the box: the
+        /// box is at a place on the paper the user chose, and sliding it up would rewrite that.
+        private func scrollEditorIntoView() {
+            guard let container, !container.textEditor.isHidden else { return }
+            let canvas = container.canvas
+            // `keyboardLayoutGuide` tracks the keyboard on iPad and collapses to nothing on the
+            // Mac, where there is none — so the same arithmetic serves both.
+            let visible = container.bounds.height
+                - container.keyboardLayoutGuide.layoutFrame.height
+            let caret = container.textEditor.frame.maxY
+            guard caret > visible, visible > 0 else { return }
+            let extra = (caret - visible) / max(canvas.zoomScale, 0.01)
+            canvas.setContentOffset(
+                CGPoint(
+                    x: canvas.contentOffset.x,
+                    y: canvas.contentOffset.y + extra * canvas.zoomScale),
+                animated: true)
         }
 
         /// Records the tool the canvas was created holding: marks the rail's current

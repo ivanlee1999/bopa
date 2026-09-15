@@ -480,6 +480,7 @@ final class EditorPageModel: NSObject, ObservableObject {
         let strip = NextPagePreviewRenderer.content(
             strokes: PencilKitBridge.drawing(from: file.strokes),
             images: BackgroundRenderer.pageImages(for: file, notebookDir: notebookDir),
+            blocks: file.blocks,
             pageSize: file.pageSize)
         return NextPagePreview(
             pageId: neighborId,
@@ -719,6 +720,25 @@ final class EditorPageModel: NSObject, ObservableObject {
         // `blockBaseline`, the same way an erased stroke is recorded — so a delete that never
         // reaches disk never claims to have happened.
         commit(page)
+    }
+
+    /// The box with this id as the page currently holds it, or nil if there is none.
+    func textBlock(id: String) -> CouchBlock? {
+        page?.blocks.first { $0.id == id }
+    }
+
+    /// Puts a box back the way it was, or takes it away again if it was not there before.
+    ///
+    /// The one operation undo needs, because every change to a text box — typing into a new one,
+    /// editing an old one, moving, resizing, deleting — is "this block used to look like this".
+    /// The restored copy is stamped fresh rather than carrying its old clock: undoing is a new
+    /// edit, and one wearing a stale timestamp would lose to the very change it is undoing.
+    func restoreTextBlock(id: String, to previous: CouchBlock?) {
+        if let previous {
+            upsert(previous)
+        } else {
+            deleteTextBlock(id: id)
+        }
     }
 
     /// Adds or replaces `block`, stamping it as this device's latest word on it. Every path that
