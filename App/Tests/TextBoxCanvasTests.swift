@@ -37,9 +37,16 @@ final class TextBoxCanvasTests: XCTestCase {
 
     func testAPointOnScreenBecomesAPointOnThePage() {
         let view = container(zoom: 0.5, offset: CGPoint(x: 100, y: 200))
-        // Screen 0,0 is 200,400 in page units at half zoom scrolled by 100,200.
-        XCTAssertEqual(view.pagePoint(.zero), CGPoint(x: 200, y: 400))
-        XCTAssertEqual(view.pagePoint(CGPoint(x: 50, y: 50)), CGPoint(x: 300, y: 500))
+        // Read back rather than assumed: the canvas clamps a zoom to its own minimum (the width
+        // fit), so asking for 0.5 on an 800pt-wide view of a 1400-unit page gets 0.571.
+        let zoom = view.canvas.zoomScale
+        let offset = view.canvas.contentOffset
+        XCTAssertEqual(
+            view.pagePoint(.zero),
+            CGPoint(x: offset.x / zoom, y: offset.y / zoom))
+        XCTAssertEqual(
+            view.pagePoint(CGPoint(x: 50, y: 50)),
+            CGPoint(x: (50 + offset.x) / zoom, y: (50 + offset.y) / zoom))
     }
 
     func testATapFindsTheBoxUnderIt() {
@@ -73,9 +80,11 @@ final class TextBoxCanvasTests: XCTestCase {
     func testABoxBelowTheSheetGrowsTheScrollableArea() {
         let view = container()
         let before = view.contentExtent.height
+        XCTAssertEqual(before, 1980, "a page with a sheet ends at its paper")
         view.setTextBlocks([block(id: "a", x: 100, y: 3000, height: 200)])
-        XCTAssertGreaterThan(view.contentExtent.height, before)
-        XCTAssertGreaterThanOrEqual(view.contentExtent.height, 3200)
+        XCTAssertGreaterThanOrEqual(
+            view.contentExtent.height, 3200,
+            "a box past the paper must still be reachable")
     }
 
     func testOnlyTheTextToolArmsTheTapGestures() {
@@ -113,9 +122,11 @@ final class TextBoxCanvasTests: XCTestCase {
         view.setTextBlocks([box])
         view.beginTextEditing(box, source: "hello")
         view.updateContentGeometry()
-        XCTAssertEqual(view.textEditor.frame.origin.x, 100 * 0.5 - 10, accuracy: 0.5)
-        XCTAssertEqual(view.textEditor.frame.origin.y, 200 * 0.5 - 20, accuracy: 0.5)
-        XCTAssertEqual(view.textEditor.frame.width, 400 * 0.5, accuracy: 0.5)
+        let zoom = view.canvas.zoomScale
+        let offset = view.canvas.contentOffset
+        XCTAssertEqual(view.textEditor.frame.origin.x, 100 * zoom - offset.x, accuracy: 0.5)
+        XCTAssertEqual(view.textEditor.frame.origin.y, 200 * zoom - offset.y, accuracy: 0.5)
+        XCTAssertEqual(view.textEditor.frame.width, 400 * zoom, accuracy: 0.5)
     }
 
     /// The text view keeps its own undo stack. Sharing the page's would put every keystroke on

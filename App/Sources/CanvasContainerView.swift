@@ -339,7 +339,8 @@ final class CanvasContainerView: UIView {
     /// already lies past it reaches.
     private var contentFloorHeight: CGFloat {
         var height = sheetHeight
-        for rect in [inkBounds, imageBounds, backgroundBounds] where Self.isReachable(rect) {
+        for rect in [inkBounds, imageBounds, backgroundBounds, textBounds]
+        where Self.isReachable(rect) {
             if rect.maxY > height { height = rect.maxY + Self.verticalInkSlack }
         }
         return height
@@ -748,7 +749,12 @@ extension CanvasContainerView: UIGestureRecognizerDelegate {
         // the BOOX. Without growing the scrollable area there is no scroll that reaches it, so
         // it would exist, render, and be unreachable.
         textBounds = blocks.reduce(CGRect.null) { $0.union(TextBoxLayout.frame(of: $1) ?? .null) }
+        // Both, and in this order. `growContent` reaches a box that overflows a page with no
+        // declared sheet; on a page that has one it caps at the sheet, and the extent past the
+        // paper is `applySeamExtent`'s to give — which reads `contentFloorHeight`, which is why
+        // `textBounds` had to join the rectangles it unions.
         growContent(toCover: textBounds)
+        applySeamExtent()
         updateContentGeometry()
     }
 

@@ -106,7 +106,10 @@ final class TextBoxEditingTests: XCTestCase {
         let model = openedModel()
         let short = try typeBox(model, "one")
         let box = try XCTUnwrap(model.textBlocks.first)
-        model.commitEditing(box, text: "one\ntwo\nthree\nfour")
+        // One long paragraph rather than four short lines: the point below is that narrowing the
+        // box rewraps it, and four words that already fit would wrap the same at any width.
+        let paragraph = String(repeating: "word ", count: 40)
+        model.commitEditing(box, text: paragraph)
         XCTAssertTrue(model.saveNow())
         let tall = try XCTUnwrap(reloadPage(model).blocks.first { $0.id == short.id })
         XCTAssertGreaterThan(tall.height!, short.height!)
