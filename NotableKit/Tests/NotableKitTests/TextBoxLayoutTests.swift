@@ -233,46 +233,58 @@ final class TextBoxLayoutTests: XCTestCase {
 
     // MARK: Drawing
 
+    private func grayContext(width: Int, height: Int) -> CGContext {
+        let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return context
+    }
+
+    /// Whether anything was painted.
+    ///
+    /// Walked row by row using the context's own stride, never as one flat run: CoreGraphics pads
+    /// each row out to its alignment, the padding is zero (which is *black* in a grayscale
+    /// buffer), and a flat scan reads it as ink. That made the "nothing was drawn" test fail and,
+    /// worse, made the "something was drawn" test pass without drawing anything.
+    private func hasInk(_ context: CGContext) -> Bool {
+        guard let data = context.data else { return false }
+        let bytes = data.assumingMemoryBound(to: UInt8.self)
+        for y in 0..<context.height {
+            let row = y * context.bytesPerRow
+            for x in 0..<context.width where bytes[row + x] < 200 { return true }
+        }
+        return false
+    }
+
     /// Ink is drawn over text, so a box that paints nothing has to paint *nothing* — a filled
     /// background would rub out the strokes above it.
     func testDrawingLeavesTheBackgroundAloneWhereThereIsNoText() {
-        let context = CGContext(
-            data: nil, width: 100, height: 40, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
-        context.setFillColor(CGColor(gray: 1, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: 100, height: 40))
-
-        TextBoxLayout.draw(
-            blocks: [block(id: "a", kind: "image")], in: context, scale: 1)
-        let data = context.data!.assumingMemoryBound(to: UInt8.self)
-        XCTAssertEqual(data[0], 255, "a non-text block must not paint anything")
+        let context = grayContext(width: 100, height: 40)
+        TextBoxLayout.draw(blocks: [block(id: "a", kind: "image")], in: context, scale: 1)
+        XCTAssertFalse(hasInk(context), "a non-text block must not paint anything")
     }
 
     func testDrawingPutsInkOnThePage() {
-        let context = CGContext(
-            data: nil, width: 600, height: 200, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
-        context.setFillColor(CGColor(gray: 1, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: 600, height: 200))
+        let context = grayContext(width: 600, height: 200)
         TextBoxLayout.draw(
             blocks: [block(id: "a", x: 0, y: 0, text: "# Hello")], in: context, scale: 1)
-
-        let data = context.data!.assumingMemoryBound(to: UInt8.self)
-        let darkened = (0..<(600 * 200)).contains { data[$0] < 200 }
-        XCTAssertTrue(darkened, "drawing a text box should darken some pixels")
+        XCTAssertTrue(hasInk(context), "drawing a text box should darken some pixels")
     }
 
     func testSkippedBlockIsNotDrawn() {
-        let context = CGContext(
-            data: nil, width: 600, height: 200, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
-        context.setFillColor(CGColor(gray: 1, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: 600, height: 200))
+        let context = grayContext(width: 600, height: 200)
         TextBoxLayout.draw(
             blocks: [block(id: "a", x: 0, y: 0, text: "# Hello")], in: context, scale: 1,
             skipping: ["a"])
+        XCTAssertFalse(hasInk(context))
+    }
 
-        let data = context.data!.assumingMemoryBound(to: UInt8.self)
-        XCTAssertFalse((0..<(600 * 200)).contains { data[$0] < 200 })
+    func testAFlowingBlockIsNotDrawn() {
+        let context = grayContext(width: 600, height: 200)
+        TextBoxLayout.draw(
+            blocks: [block(id: "a", x: nil, y: nil, text: "# Hello")], in: context, scale: 1)
+        XCTAssertFalse(hasInk(context), "a block with no place on the page has nowhere to draw")
     }
 }

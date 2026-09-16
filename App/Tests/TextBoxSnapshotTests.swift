@@ -1,3 +1,4 @@
+import CoreGraphics
 import NotableKit
 import SnapshotTesting
 import UIKit
@@ -61,30 +62,24 @@ final class TextBoxSnapshotTests: XCTestCase {
     /// Ink is drawn over text, so the box has to paint its letters and nothing else — no panel,
     /// no fill. A background here would rub out the strokes above it.
     func testABoxPaintsNoBackground() {
-        let width: CGFloat = 300
-        let source = "words"
-        let height = TextBoxLayout.measuredHeight(source: source, width: width)
-        let format = UIGraphicsImageRendererFormat.default()
-        format.scale = 1
-        format.opaque = false
-        let image = UIGraphicsImageRenderer(
-            size: CGSize(width: width, height: height), format: format
-        ).image { context in
-            TextBoxLayout.draw(
-                source: source,
-                in: CGRect(x: 0, y: 0, width: width, height: height),
-                context: context.cgContext,
-                scale: 1)
-        }
-        // The bottom-right corner is past the end of a five-letter word: still transparent.
-        let corner = image.cgImage!.cropped(
-            to: CGRect(x: width - 4, y: height - 4, width: 2, height: 2))!
+        let width = 300
+        let height = 120
         let context = CGContext(
-            data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        context.draw(corner, in: CGRect(x: 0, y: 0, width: 2, height: 2))
-        let pixels = context.data!.assumingMemoryBound(to: UInt8.self)
-        XCTAssertEqual(pixels[3], 0, "a text box must not paint a background behind the ink")
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        TextBoxLayout.draw(
+            source: "words",
+            in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)),
+            context: context,
+            scale: 1)
+
+        // The bottom-right corner is well past the end of a five-letter word, so it is still the
+        // paper it started as. Read through the context's own stride: the row padding is zero,
+        // which in a grayscale buffer is black, and a flat read would call it ink.
+        let bytes = context.data!.assumingMemoryBound(to: UInt8.self)
+        let corner = bytes[(height - 2) * context.bytesPerRow + (width - 2)]
+        XCTAssertEqual(corner, 255, "a text box must not paint a background behind the ink")
     }
 }
