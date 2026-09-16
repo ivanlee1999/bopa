@@ -9,7 +9,7 @@ import SwiftUI
 @MainActor
 final class ToolSelection: ObservableObject {
     enum Kind: String, CaseIterable, Identifiable {
-        case pen, fountain, pencil, marker, eraser, lasso
+        case pen, fountain, pencil, marker, eraser, lasso, text
 
         var id: String { rawValue }
 
@@ -21,6 +21,7 @@ final class ToolSelection: ObservableObject {
             case .marker: "Highlighter"
             case .eraser: "Eraser"
             case .lasso: "Select"
+            case .text: "Text"
             }
         }
 
@@ -34,6 +35,7 @@ final class ToolSelection: ObservableObject {
             case .marker: "highlighter"
             case .eraser: "eraser"
             case .lasso: "lasso"
+            case .text: "textformat"
             }
         }
 
@@ -41,7 +43,7 @@ final class ToolSelection: ObservableObject {
         var takesInk: Bool {
             switch self {
             case .pen, .fountain, .pencil, .marker: true
-            case .eraser, .lasso: false
+            case .eraser, .lasso, .text: false
             }
         }
 
@@ -50,7 +52,7 @@ final class ToolSelection: ObservableObject {
         var hasWidth: Bool {
             switch self {
             case .pen, .fountain, .pencil, .marker, .eraser: true
-            case .lasso: false
+            case .lasso, .text: false
             }
         }
 
@@ -67,7 +69,7 @@ final class ToolSelection: ObservableObject {
             case .pencil: 4
             case .marker: 24
             case .eraser: 25
-            case .lasso: 0
+            case .lasso, .text: 0
             }
         }
     }
@@ -248,7 +250,20 @@ final class ToolSelection: ObservableObject {
         eraserMode.pkEraser(width: Kind.eraser.baseWidth * (widths[.eraser] ?? .medium).scale)
     }
 
-    var pkTool: PKTool {
+    /// Whether the rail is on the tool that types rather than draws.
+    ///
+    /// Its own property because it is asked from two directions: the canvas needs it to know
+    /// that a tap means "put a text box here" rather than "start a stroke", and the editor needs
+    /// it to know that the keyboard belongs to a text box rather than to a page-turn shortcut.
+    var isTextTool: Bool { kind == .text }
+
+    /// The PencilKit tool the rail means, or **nil for a tool PencilKit has no notion of**.
+    ///
+    /// Text is that tool. Returning some harmless stand-in — a lasso, the last pen — would be
+    /// worse than nil: the canvas would go on drawing or selecting under a pen that is supposed
+    /// to be placing a caret, and the one place that has to behave differently would be the one
+    /// place that could not tell.
+    var pkTool: PKTool? {
         let nib = kind.baseWidth * width.scale
         switch kind {
         case .pen: return PKInkingTool(.pen, color: ink.uiColor, width: nib)
@@ -259,6 +274,7 @@ final class ToolSelection: ObservableObject {
         case .marker: return PKInkingTool(.marker, color: ink.uiColor, width: nib)
         case .eraser: return pkEraserTool
         case .lasso: return PKLassoTool()
+        case .text: return nil
         }
     }
 }

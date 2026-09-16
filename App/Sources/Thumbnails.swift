@@ -76,6 +76,11 @@ enum ThumbnailRenderer {
                     width: frame.width * scale,
                     height: frame.height * scale))
             }
+            // Between the pictures and the ink, the z-order the editor installs. A text box left
+            // out here does not merely look wrong: the card for a page of typed notes comes back
+            // blank, which reads as "this page is empty" rather than "the thumbnail is missing
+            // something" — the exact bug the images above were added to fix.
+            TextBoxLayout.draw(blocks: page.blocks, in: context.cgContext, scale: scale)
             if !drawing.strokes.isEmpty {
                 drawing.image(from: pageRect, scale: scale)
                     .draw(in: CGRect(origin: .zero, size: fitted.size))

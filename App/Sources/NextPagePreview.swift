@@ -47,22 +47,29 @@ enum NextPagePreviewRenderer {
     /// empty next page costs no bitmap at all (which is the common case: the page just created
     /// by scrolling off the end of the notebook).
     static func content(
-        strokes: PKDrawing, images: [PageImage], pageSize: PageSize
+        strokes: PKDrawing, images: [PageImage], blocks: [CouchBlock] = [], pageSize: PageSize
     ) -> (image: UIImage, height: CGFloat)? {
         let pageWidth = CGFloat(pageSize.width)
         let height = min(CGFloat(pageSize.height), maximumStripHeight)
         let strip = CGRect(x: 0, y: 0, width: pageWidth, height: height)
         let visibleImages = images.filter { $0.frame.intersects(strip) }
+        let visibleBlocks = TextBoxLayout.textBoxes(in: blocks).filter {
+            TextBoxLayout.frame(of: $0)?.intersects(strip) == true
+        }
         let hasInk = !strokes.strokes.isEmpty && strokes.bounds.intersects(strip)
-        guard hasInk || !visibleImages.isEmpty else { return nil }
+        guard hasInk || !visibleImages.isEmpty || !visibleBlocks.isEmpty else { return nil }
 
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = renderScale
         format.opaque = false
-        let image = UIGraphicsImageRenderer(size: strip.size, format: format).image { _ in
+        let image = UIGraphicsImageRenderer(size: strip.size, format: format).image { context in
             for pageImage in visibleImages {
                 pageImage.image.draw(in: pageImage.frame)
             }
+            // Below the ink, as everywhere else. Without this, scrolling towards a page of typed
+            // notes shows blank paper under the seam and the words appear only once the page
+            // commits — which looks exactly like the text was lost.
+            TextBoxLayout.draw(blocks: visibleBlocks, in: context.cgContext, scale: 1)
             if hasInk {
                 // `image(from:scale:)` returns just the requested rect, so it is drawn at the
                 // strip's origin rather than at the stroke's own coordinates.

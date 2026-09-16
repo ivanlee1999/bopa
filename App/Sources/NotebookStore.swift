@@ -242,7 +242,19 @@ final class NotebookStore: ObservableObject {
     /// - Returns: the page as it was actually written — the caller's content plus whatever landed
     ///   underneath it, which is what the caller must hold from here on.
     @discardableResult
-    func savePage(_ page: PageFile, baselineStrokeIDs: Set<String>? = nil) throws -> PageFile {
+    /// - Parameters:
+    ///   - baselineStrokeIDs: the stroke ids the caller held when it loaded the page. Absent
+    ///     means "derive from the file", which is right for a caller that did not edit ink.
+    ///   - baselineBlockIDs: the same for blocks, and **nil means derive nothing**. The default
+    ///     is deliberately not the file's ids: only the editor owns a page's block list, and for
+    ///     every other caller — page recovery, a neighbour rewritten below the seam, a test — a
+    ///     list that merely looks short is a stale copy, not a deletion. Tombstoning from one
+    ///     would delete the BOOX's typing on the next autosave.
+    func savePage(
+        _ page: PageFile,
+        baselineStrokeIDs: Set<String>? = nil,
+        baselineBlockIDs: Set<String>? = nil
+    ) throws -> PageFile {
         guard let notebookId = page.notebookId,
               var manifest = readManifestFromDisk(notebookId)
         else {
@@ -316,13 +328,22 @@ final class NotebookStore: ObservableObject {
         page.images += (onDisk?.images ?? []).filter {
             !savedImages.contains($0.id) && !erasedImages.contains($0.id)
         }
-        // Blocks: nothing in this app writes one yet, so the file's are at least as fresh as the
-        // caller's load-time copy, and writing the caller's back would strip every paragraph the
-        // BOOX added while the page was open — and every tombstone, which is worse: a stripped
-        // tombstone lets the deleted block come back on the next merge. The merge's own block
-        // clause is the rule, so that when this app does start editing blocks nothing here has to
-        // change: a block the caller edited carries a fresh `updatedAt`, and that is what wins.
-        // (Erasing a block locally will need a baseline the way strokes have one — see above.)
+        // Blocks merge rather than overwrite, so a caller that is not the editor cannot strip a
+        // paragraph the BOOX added while the page was open — nor a tombstone, which is worse: a
+        // stripped tombstone lets the deleted block come back on the next merge. The editor's own
+        // edits still win, because a block it touched carries a fresh `updatedAt` and that is
+        // what the merge's block clause sorts on.
+        // Whatever the caller *had* and no longer has was deleted here — the block half of the
+        // stroke rule above, and true for the same reason: absence on its own cannot be told
+        // apart from "that block has not reached this device yet", so a deletion has to be
+        // written down or the peer's copy returns on the next merge.
+        if let baselineBlockIDs {
+            page.deletedBlocks = CouchTombstones.derive(
+                previousIDs: baselineBlockIDs,
+                currentIDs: Set(page.blocks.map(\.id)),
+                existing: page.deletedBlocks,
+                deletedAt: now)
+        }
         let (blocks, deletedBlocks) = CouchMerge.mergeBlocks(
             (page.blocks, page.deletedBlocks),
             (onDisk?.blocks ?? [], onDisk?.deletedBlocks ?? []))
