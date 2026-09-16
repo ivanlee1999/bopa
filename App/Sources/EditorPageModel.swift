@@ -32,11 +32,24 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// scrolling off the top enters.
     @Published private(set) var nextPageId: String?
     @Published private(set) var previousPageId: String?
+    /// The page's text boxes, oldest first — what the canvas draws and hit-tests. A projection
+    /// of `page.blocks`, which stays the truth: a block of another kind, or a flowing one, is
+    /// carried through the file untouched by anything here.
+    @Published private(set) var textBlocks: [CouchBlock] = []
+    /// The box being typed into, if any.
+    ///
+    /// Held here rather than in the view because two other things have to know: the editor's
+    /// keyboard shortcuts must not fire into a page turn while somebody is typing `[`, and a
+    /// commit has to be able to ask whether the box it is committing still exists.
+    @Published private(set) var editingBlockID: String?
 
     /// The ids of the strokes the canvas is currently showing — what was loaded into it, or what
     /// was last exported out of it. Two jobs: it is the baseline `savePage` derives tombstones
     /// from, and it is how "the file holds ink the canvas does not" is decided.
     private(set) var canvasStrokeIDs: Set<String> = []
+    /// The block ids the last successful save wrote — the block half of `canvasStrokeIDs`, and
+    /// what turns a box deleted here into a tombstone the other device honours.
+    private(set) var blockBaseline: Set<String> = []
     /// Sync wrote something and the canvas has not caught up. Survives until it is safe to act on.
     private(set) var remoteInkPending = false
     private(set) var dirty = false
@@ -47,6 +60,10 @@ final class EditorPageModel: NSObject, ObservableObject {
 
     private var store: NotebookStore?
     private var notebookId = ""
+    /// Stamped into every block this editor writes; the merge's tiebreak when two edits share a
+    /// millisecond. Read once at attach — changing the device id mid-session is a settings
+    /// action that restarts sync anyway.
+    private var deviceID = CouchSettings.defaultDeviceID
     private var lastKnownNotebookTitle = "Notebook"
     /// A remote removal cannot save into the tombstoned source. Retry writes a separate
     /// handwriting notebook, reusing its destination if its first page write failed.
@@ -94,6 +111,7 @@ final class EditorPageModel: NSObject, ObservableObject {
         guard self.store == nil else { return }
         self.store = store
         self.notebookId = notebookId
+        deviceID = CouchSettings.load().deviceID
         lastKnownNotebookTitle = store.manifest(id: notebookId)?.title ?? "Notebook"
         // The CouchDB pull loop rewrites page files with no regard for what is open, so the
         // editor has to hear about it or it would keep drawing on a stale copy.
@@ -280,6 +298,11 @@ final class EditorPageModel: NSObject, ObservableObject {
             pageImages = BackgroundRenderer.pageImages(for: loaded, notebookDir: notebookDir)
             shownSurfaces = SurfaceState(of: loaded)
             canvasStrokeIDs = Set(loaded.strokes.map(\.id))
+            blockBaseline = Set(loaded.blocks.map(\.id))
+            textBlocks = TextBoxLayout.textBoxes(in: loaded.blocks)
+            // A page switch leaves no box open. The caller commits first (see `endEditing`);
+            // this only makes sure nothing points at a box on a page that is no longer here.
+            editingBlockID = nil
             contentRevision += 1
             // Seed with the persisted offset so a save before any scroll preserves it, unless
             // the page is being entered at a position the scroll itself chose — carried across
@@ -457,6 +480,7 @@ final class EditorPageModel: NSObject, ObservableObject {
         let strip = NextPagePreviewRenderer.content(
             strokes: PencilKitBridge.drawing(from: file.strokes),
             images: BackgroundRenderer.pageImages(for: file, notebookDir: notebookDir),
+            blocks: file.blocks,
             pageSize: file.pageSize)
         return NextPagePreview(
             pageId: neighborId,
@@ -535,11 +559,16 @@ final class EditorPageModel: NSObject, ObservableObject {
         page.backgroundType = onDisk.backgroundType
         page.pageWidth = onDisk.pageWidth
         page.pageHeight = onDisk.pageHeight
-        // Nothing here draws a block yet, but `page` is what the next save writes, and a copy
-        // that stopped tracking the file would hand `savePage` a stale list to fold back in.
+        // `page` is what the next save writes, and a copy that stopped tracking the file would
+        // hand `savePage` a stale list to fold back in.
         page.blocks = onDisk.blocks
         page.deletedBlocks = onDisk.deletedBlocks
         self.page = page
+        textBlocks = TextBoxLayout.textBoxes(in: page.blocks)
+        // The file is the baseline again. Without this, a box the BOOX added while this page was
+        // open would be absent from the baseline, and the next local save would derive a
+        // tombstone for a block nobody deleted.
+        blockBaseline = Set(page.blocks.map(\.id))
         let notebookDir = store.notebookDirURL(notebookId)
         pageBackground = BackgroundRenderer.image(
             for: page, notebookDir: notebookDir, storeRoot: store.rootURL)
@@ -588,6 +617,155 @@ final class EditorPageModel: NSObject, ObservableObject {
         shownSurfaces = SurfaceState(of: page)
         dirty = true
         saveNow()
+    }
+
+    // MARK: Text boxes
+
+    /// A new, empty box with its top-left at `point` (page units), ready to be typed into.
+    ///
+    /// Not added to the page: an empty box is not content, and a user who taps the paper by
+    /// accident and taps away again should leave nothing behind. It joins `page.blocks` on the
+    /// first commit that has text in it.
+    func newTextBlock(at point: CGPoint) -> CouchBlock? {
+        guard let page else { return nil }
+        let metrics = TextBoxMetrics.standard
+        let sheet = page.pageSize
+        // Clamped so the box starts on the paper. A box may still *end* past the bottom — the
+        // page grows downward as you write, and typing at the foot of a sheet is ordinary.
+        let x = min(max(point.x, 0), max(CGFloat(sheet.width) - metrics.minimumWidth, 0))
+        let y = max(point.y, 0)
+        let width = TextBoxLayout.defaultWidth(x: x, pageWidth: CGFloat(sheet.width))
+        let stamp = SyncClock.shared.stamp()
+        return CouchBlock(
+            id: UUID().uuidString.lowercased(),
+            kind: "md",
+            // Empty is legal for a positioned block and sorts first (protocol §3.3.1). A key is
+            // what orders a page's *flow*, and a box that carries its own coordinates is not in
+            // one — so there is nothing to mint, and nothing for two devices to disagree about.
+            orderKey: "",
+            text: "",
+            x: Int(x.rounded()), y: Int(y.rounded()),
+            width: Int(width.rounded()),
+            height: Int(TextBoxLayout.measuredHeight(source: "", width: width).rounded()),
+            createdAt: stamp, updatedAt: stamp, deviceId: deviceID)
+    }
+
+    /// Marks `block` as the one being typed into, so the canvas stops drawing it underneath the
+    /// text view and the page-turn shortcuts hold off.
+    func beginEditing(_ block: CouchBlock) {
+        editingBlockID = block.id
+    }
+
+    /// Writes what was typed and ends the session.
+    ///
+    /// An empty box is deleted rather than stored: a box with nothing in it is invisible, so
+    /// leaving one behind would litter the page with things only a stray tap can find.
+    func commitEditing(_ block: CouchBlock, text: String) {
+        editingBlockID = nil
+        guard page != nil else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            deleteTextBlock(id: block.id)
+            return
+        }
+        var updated = block
+        updated.text = text
+        updated.height = Int(TextBoxLayout.measuredHeight(
+            source: text, width: CGFloat(updated.width ?? 0)).rounded())
+        // A box the other device deleted while it was being typed into comes back under a new
+        // id. The tombstone would suppress the old one on the next merge, so keeping it would
+        // quietly throw the typing away — and §3.3.1 says as much: retyping a deleted paragraph
+        // mints a new id, which is exactly what makes remove-wins safe here.
+        if page?.deletedBlocks.contains(where: { $0.id == updated.id }) == true {
+            updated.id = UUID().uuidString.lowercased()
+            updated.createdAt = SyncClock.shared.stamp()
+        }
+        upsert(updated)
+    }
+
+    /// Abandons the session without writing. A box that was never committed simply never existed.
+    func cancelEditing() {
+        editingBlockID = nil
+    }
+
+    func moveTextBlock(id: String, to point: CGPoint) {
+        guard let page, var block = page.blocks.first(where: { $0.id == id }) else { return }
+        let sheet = page.pageSize
+        let metrics = TextBoxMetrics.standard
+        block.x = Int(min(max(point.x, 0), max(CGFloat(sheet.width) - metrics.minimumWidth, 0))
+            .rounded())
+        block.y = Int(max(point.y, 0).rounded())
+        upsert(block)
+    }
+
+    /// Sets a box's wrap width. Its height follows from the text, so it is remeasured here
+    /// rather than dragged.
+    func resizeTextBlock(id: String, width: CGFloat) {
+        guard let page, var block = page.blocks.first(where: { $0.id == id }) else { return }
+        let metrics = TextBoxMetrics.standard
+        let sheet = page.pageSize
+        let clamped = min(
+            max(width, metrics.minimumWidth),
+            max(CGFloat(sheet.width) - CGFloat(block.x ?? 0), metrics.minimumWidth))
+        block.width = Int(clamped.rounded())
+        block.height = Int(TextBoxLayout.measuredHeight(
+            source: block.text ?? "", width: clamped).rounded())
+        upsert(block)
+    }
+
+    func deleteTextBlock(id: String) {
+        guard var page, page.blocks.contains(where: { $0.id == id }) else { return }
+        if editingBlockID == id { editingBlockID = nil }
+        page.blocks.removeAll { $0.id == id }
+        // No tombstone written here. `savePage` derives it by comparing what is written against
+        // `blockBaseline`, the same way an erased stroke is recorded — so a delete that never
+        // reaches disk never claims to have happened.
+        commit(page)
+    }
+
+    /// The box with this id as the page currently holds it, or nil if there is none.
+    func textBlock(id: String) -> CouchBlock? {
+        page?.blocks.first { $0.id == id }
+    }
+
+    /// Puts a box back the way it was, or takes it away again if it was not there before.
+    ///
+    /// The one operation undo needs, because every change to a text box — typing into a new one,
+    /// editing an old one, moving, resizing, deleting — is "this block used to look like this".
+    /// The restored copy is stamped fresh rather than carrying its old clock: undoing is a new
+    /// edit, and one wearing a stale timestamp would lose to the very change it is undoing.
+    func restoreTextBlock(id: String, to previous: CouchBlock?) {
+        if let previous {
+            upsert(previous)
+        } else {
+            deleteTextBlock(id: id)
+        }
+    }
+
+    /// Adds or replaces `block`, stamping it as this device's latest word on it. Every path that
+    /// changes a box goes through here, because the merge decides by `updatedAt` and a write
+    /// that forgot to bump it would silently lose to the copy it was editing.
+    private func upsert(_ block: CouchBlock) {
+        guard var page else { return }
+        var stamped = block
+        stamped.updatedAt = SyncClock.shared.stamp()
+        stamped.deviceId = deviceID
+        if let index = page.blocks.firstIndex(where: { $0.id == stamped.id }) {
+            page.blocks[index] = stamped
+        } else {
+            page.blocks.append(stamped)
+        }
+        commit(page)
+    }
+
+    private func commit(_ updated: PageFile) {
+        page = updated
+        textBlocks = TextBoxLayout.textBoxes(in: updated.blocks)
+        // The screen already shows this change, so the record of what it shows has to follow it
+        // — or the next remote apply would read the user's own typing back off the file as an
+        // arrival and refresh the page for nothing. Same reason `setPaper` does it.
+        shownSurfaces = SurfaceState(of: updated)
+        dirty = true
+        scheduleSave()
     }
 
     func scheduleSave() {
@@ -643,7 +821,8 @@ final class EditorPageModel: NSObject, ObservableObject {
             }
         }
         do {
-            let written = try store.savePage(page, baselineStrokeIDs: baseline)
+            let written = try store.savePage(
+                page, baselineStrokeIDs: baseline, baselineBlockIDs: blockBaseline)
             // Only now that the write landed. The baseline has to keep naming what the canvas
             // held at the last save that *worked*: advancing it before the `try` meant a failed
             // save still consumed an erasure — the erased stroke was no longer in the baseline,
@@ -652,12 +831,17 @@ final class EditorPageModel: NSObject, ObservableObject {
             // mismatch between the two is how `foldInRemoteInk` detects ink that arrived from
             // the other device underneath this save.
             canvasStrokeIDs = Set(page.strokes.map(\.id))
+            // What the file now holds, not what was offered: a box that arrived from the BOOX
+            // during this save is in `written` and must be in the baseline, or the next save
+            // would read it as one this editor deleted and tombstone it.
+            blockBaseline = Set(written.blocks.map(\.id))
             // Take back what was written rather than what was offered: `savePage` reconciles
             // against the file, so only the returned copy matches what is now on disk. That is
             // what `page` is supposed to be, and `page.strokes` is the `source:` the next export
             // re-identifies against. On failure `self.page` stays untouched for the same reason:
             // it still carries the last truly-written DTOs.
             self.page = written
+            textBlocks = TextBoxLayout.textBoxes(in: written.blocks)
             dirty = false
             saveError = nil
             return true

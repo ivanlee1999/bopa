@@ -23,6 +23,27 @@ final class CanvasContainerView: UIView {
     private let paperView = PaperTemplateView()
     private let backgroundImageView = UIImageView()
     private var imageViews: [UIImageView] = []
+    /// Every text box on the page, drawn as one picture below the ink.
+    private let textLayer = TextBoxLayerView()
+    /// The box being typed into, above the ink because a caret under a stroke is unreachable.
+    let textEditor = TextBoxEditorView()
+    private(set) var textBlocks: [CouchBlock] = []
+    /// The union of the text box frames, in page units — the text half of `imageBounds`, and
+    /// needed for the same reason: a box typed at the foot of a page has to stay reachable.
+    private var textBounds: CGRect = .null
+    /// The box the text view is open on, or nil when nothing is being typed.
+    fileprivate var editingBlock: CouchBlock?
+    fileprivate var dragging: DragState?
+
+    /// A drag of a box in progress: which one, whether it is a resize, and where it was grabbed
+    /// so the box does not jump to put its corner under the finger.
+    struct DragState {
+        var id: String
+        var isResize: Bool
+        var grabOffset: CGPoint
+        var startWidth: CGFloat
+    }
+
     private var pendingScrollY: CGFloat?
     /// The next page, drawn below the seam: its paper, its background, and a picture of its
     /// ink. See [NextPagePreview] for why it is a picture and not a second canvas.
@@ -85,6 +106,43 @@ final class CanvasContainerView: UIView {
     private var imageBounds: CGRect = .null
     private var backgroundBounds: CGRect = .null
 
+    /// Told where a tap landed and what the user dragged. The coordinator implements it and
+    /// forwards to the editor model, which owns the blocks.
+    weak var textDelegate: CanvasContainerTextDelegate?
+
+    /// Whether the rail is on the text tool.
+    ///
+    /// Turns the pen from something that draws into something that places a caret. The canvas
+    /// keeps its tool; only its *drawing gesture* is switched off, so scrolling and pinching go
+    /// on working untouched — which they would not if a transparent view were laid over the top
+    /// to catch taps instead.
+    var isTextMode = false {
+        didSet {
+            guard isTextMode != oldValue else { return }
+            canvas.drawingGestureRecognizer.isEnabled = !isTextMode
+            textTapRecognizer.isEnabled = isTextMode
+            textDragRecognizer.isEnabled = isTextMode
+        }
+    }
+
+    /// Recognizers on the container, not on the canvas: a recognizer attached to an ancestor of
+    /// the view a touch lands in still sees that touch, so these can read taps over the canvas
+    /// without a view in front of it stealing the scroll.
+    private lazy var textTapRecognizer: UITapGestureRecognizer = {
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTextTap))
+        recognizer.isEnabled = false
+        return recognizer
+    }()
+
+    private lazy var textDragRecognizer: UIPanGestureRecognizer = {
+        let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handleTextDrag))
+        // Fails immediately unless the drag began on a box, which hands the gesture back to the
+        // scroll view — so dragging the paper still scrolls it while the text tool is up.
+        recognizer.maximumNumberOfTouches = 1
+        recognizer.isEnabled = false
+        return recognizer
+    }()
+
     /// PKCanvasView looks up its UndoManager through the responder chain, and SwiftUI's
     /// hosting controller does not supply one — which leaves the tool picker's undo/redo
     /// buttons inert. Owning a manager here puts it on the chain right above the canvas,
@@ -143,7 +201,30 @@ final class CanvasContainerView: UIView {
         // is what keeps an ordinary scroll from turning a page, not the absence of slack.
         canvas.alwaysBounceVertical = true
         canvas.alwaysBounceHorizontal = true
+        // Below the ink and below the seam, exactly where the page images go: typed text is
+        // page content, and a stroke written across it belongs on top of it.
+        addSubview(textLayer)
         addSubview(canvas)
+        // Above the canvas: while a box is open its caret and selection have to be reachable,
+        // and the canvas is not drawing anyway.
+        textEditor.isHidden = true
+        textEditor.isScrollEnabled = false
+        textEditor.backgroundColor = .clear
+        textEditor.textContainerInset = .zero
+        textEditor.textContainer.lineFragmentPadding = 0
+        textEditor.autocorrectionType = .no
+        textEditor.autocapitalizationType = .sentences
+        textEditor.layer.borderColor = UIColor(hex: 0x7D7979).cgColor
+        textEditor.layer.borderWidth = 1
+        addSubview(textEditor)
+        addGestureRecognizer(textTapRecognizer)
+        addGestureRecognizer(textDragRecognizer)
+        textDragRecognizer.delegate = self
+        // A drag that starts on a box moves the box; anywhere else it scrolls the page. The
+        // scroll waits for ours to fail, and ours fails at once (see `gestureRecognizerShouldBegin`)
+        // whenever the touch did not land on a box — so scrolling costs nothing, and outside text
+        // mode ours is disabled, which fails instantly too.
+        canvas.panGestureRecognizer.require(toFail: textDragRecognizer)
     }
 
     @available(*, unavailable)
@@ -153,6 +234,7 @@ final class CanvasContainerView: UIView {
         super.layoutSubviews()
         canvas.frame = bounds
         paperView.frame = bounds
+        textLayer.frame = bounds
         if bounds.width > 0, bounds.height > 0, bounds.size != laidOutSize {
             let isFirstLayout = laidOutSize == .zero
             let needsFit = bounds.width != laidOutSize.width || fitsWholePage
@@ -257,7 +339,8 @@ final class CanvasContainerView: UIView {
     /// already lies past it reaches.
     private var contentFloorHeight: CGFloat {
         var height = sheetHeight
-        for rect in [inkBounds, imageBounds, backgroundBounds] where Self.isReachable(rect) {
+        for rect in [inkBounds, imageBounds, backgroundBounds, textBounds]
+        where Self.isReachable(rect) {
             if rect.maxY > height { height = rect.maxY + Self.verticalInkSlack }
         }
         return height
@@ -576,6 +659,9 @@ final class CanvasContainerView: UIView {
         } else {
             backgroundImageView.isHidden = true
         }
+        textLayer.zoomScale = scale
+        textLayer.contentOffset = offset
+        layoutTextEditor(scale: scale, offset: offset)
         for (view, pageImage) in zip(imageViews, pageImages) {
             let f = pageImage.frame
             view.frame = CGRect(
@@ -624,5 +710,210 @@ final class CanvasContainerView: UIView {
                 x: -offset.x, y: seamY, width: width,
                 height: nextPage.contentHeight * scale)
         }
+    }
+}
+
+// MARK: - Text boxes
+
+/// What the container reports back about the text tool. The coordinator implements it; the
+/// editor model owns the blocks themselves.
+@MainActor
+protocol CanvasContainerTextDelegate: AnyObject {
+    /// A tap on bare paper, in page units.
+    func canvasContainer(_ container: CanvasContainerView, didTapEmptyPageAt point: CGPoint)
+    /// A tap on an existing box.
+    func canvasContainer(_ container: CanvasContainerView, didTapTextBlock id: String)
+    /// A finished drag of a box to a new top-left, in page units.
+    func canvasContainer(
+        _ container: CanvasContainerView, didMoveTextBlock id: String, to point: CGPoint)
+    /// A finished drag of a box's right edge to a new width, in page units.
+    func canvasContainer(
+        _ container: CanvasContainerView, didResizeTextBlock id: String, to width: CGFloat)
+    /// A tap anywhere while a box is open, which ends the session before anything else happens.
+    func canvasContainerDidTapOutsideEditor(_ container: CanvasContainerView)
+}
+
+extension CanvasContainerView: UIGestureRecognizerDelegate {
+
+    /// How close to a box's right edge a drag has to start to mean "resize", in page units.
+    private static var resizeEdgeBand: CGFloat { 24 }
+    /// How far a drag may wander and still be treated as a tap on the same box.
+    private static var dragSlop: CGFloat { 4 }
+
+    /// Replaces the page's text boxes. Idempotent, like `setImages`.
+    func setTextBlocks(_ blocks: [CouchBlock]) {
+        guard blocks != textBlocks else { return }
+        textBlocks = blocks
+        textLayer.blocks = blocks
+        // A box can sit below the sheet or past its right edge — typed there, or arrived from
+        // the BOOX. Without growing the scrollable area there is no scroll that reaches it, so
+        // it would exist, render, and be unreachable.
+        textBounds = blocks.reduce(CGRect.null) { $0.union(TextBoxLayout.frame(of: $1) ?? .null) }
+        // Both, and in this order. `growContent` reaches a box that overflows a page with no
+        // declared sheet; on a page that has one it caps at the sheet, and the extent past the
+        // paper is `applySeamExtent`'s to give — which reads `contentFloorHeight`, which is why
+        // `textBounds` had to join the rectangles it unions.
+        growContent(toCover: textBounds)
+        applySeamExtent()
+        updateContentGeometry()
+    }
+
+    /// Opens `block` for typing: hides it from the drawn layer and puts a text view over it.
+    func beginTextEditing(_ block: CouchBlock, source: String) {
+        textLayer.editingBlockID = block.id
+        editingBlock = block
+        textEditor.resetUndo()
+        textEditor.text = source
+        textEditor.isHidden = false
+        updateContentGeometry()
+        textEditor.becomeFirstResponder()
+    }
+
+    /// Takes the text view away and hands back what was typed.
+    @discardableResult
+    func endTextEditing() -> (block: CouchBlock, text: String)? {
+        guard let block = editingBlock else { return nil }
+        let text = textEditor.text ?? ""
+        editingBlock = nil
+        textLayer.editingBlockID = nil
+        textEditor.isHidden = true
+        textEditor.resignFirstResponder()
+        textEditor.text = ""
+        // The canvas is the first responder again, so a pencil double-tap and the undo manager
+        // go back to the page rather than to a text view nobody can see.
+        canvas.becomeFirstResponder()
+        return (block, text)
+    }
+
+    /// The box being typed into, if any.
+    var editingTextBlock: CouchBlock? { editingBlock }
+
+    /// The height the text view wants for what is in it now, in page units.
+    var editorMeasuredHeight: CGFloat {
+        guard let block = editingBlock, let width = block.width else { return 0 }
+        return TextBoxLayout.measuredHeight(source: textEditor.text ?? "", width: CGFloat(width))
+    }
+
+    /// Grows the open text view to fit what has been typed, so the caret never runs off the
+    /// bottom of a box that has not been committed yet.
+    func textEditorContentChanged() {
+        updateContentGeometry()
+    }
+
+    func layoutTextEditor(scale: CGFloat, offset: CGPoint) {
+        guard let block = editingBlock, let x = block.x, let y = block.y,
+              let width = block.width
+        else { return }
+        let metrics = TextBoxMetrics.standard
+        let height = max(editorMeasuredHeight, CGFloat(block.height ?? 0))
+        textEditor.frame = CGRect(
+            x: CGFloat(x) * scale - offset.x,
+            y: CGFloat(y) * scale - offset.y,
+            width: CGFloat(width) * scale,
+            height: height * scale)
+        textEditor.textContainerInset = UIEdgeInsets(
+            top: metrics.padding * scale, left: metrics.padding * scale,
+            bottom: metrics.padding * scale, right: metrics.padding * scale)
+        // The source is shown at the body size whatever the markdown says, because while it is
+        // being edited it *is* source: a heading typed as `# Title` that jumped to twice the size
+        // the moment the hash was typed would reflow the line under the caret.
+        textEditor.font = .systemFont(ofSize: metrics.body * scale)
+    }
+
+    // MARK: Hit testing
+
+    /// A point in this view's coordinates, in page units.
+    func pagePoint(_ point: CGPoint) -> CGPoint {
+        let scale = max(canvas.zoomScale, 0.01)
+        let offset = canvas.contentOffset
+        return CGPoint(x: (point.x + offset.x) / scale, y: (point.y + offset.y) / scale)
+    }
+
+    /// The box under `point` (page units), or nil. Walked backwards so the box drawn last — the
+    /// one on top — is the one that answers.
+    func textBlock(at point: CGPoint) -> CouchBlock? {
+        textBlocks.reversed().first { TextBoxLayout.frame(of: $0)?.contains(point) == true }
+    }
+
+    /// Whether `point` (page units) is in `block`'s right-edge band, which is what a drag there
+    /// means "resize" rather than "move".
+    func isOnResizeEdge(_ point: CGPoint, of block: CouchBlock) -> Bool {
+        guard let frame = TextBoxLayout.frame(of: block) else { return false }
+        return point.x >= frame.maxX - Self.resizeEdgeBand && frame.contains(point)
+    }
+
+    // MARK: Gestures
+
+    @objc private func handleTextTap(_ recognizer: UITapGestureRecognizer) {
+        let point = pagePoint(recognizer.location(in: self))
+        // A tap while something is open means "finish that first", whatever it lands on. The
+        // delegate reopens a box if the tap was on one, so tapping straight from one box to
+        // the next still works — it just commits on the way.
+        if editingBlock != nil {
+            textDelegate?.canvasContainerDidTapOutsideEditor(self)
+        }
+        if let block = textBlock(at: point) {
+            textDelegate?.canvasContainer(self, didTapTextBlock: block.id)
+        } else {
+            textDelegate?.canvasContainer(self, didTapEmptyPageAt: point)
+        }
+    }
+
+    @objc private func handleTextDrag(_ recognizer: UIPanGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            let point = pagePoint(recognizer.location(in: self))
+            // `gestureRecognizerShouldBegin` already refused every drag that did not start on a
+            // box, so this only re-reads which one.
+            guard let block = textBlock(at: point), let x = block.x, let y = block.y else {
+                return
+            }
+            dragging = DragState(
+                id: block.id,
+                isResize: isOnResizeEdge(point, of: block),
+                grabOffset: CGPoint(x: point.x - CGFloat(x), y: point.y - CGFloat(y)),
+                startWidth: CGFloat(block.width ?? 0))
+        case .changed:
+            break
+        case .ended:
+            guard let drag = dragging else { return }
+            // Cleared first, so no path out of here can leave a finished drag looking live.
+            dragging = nil
+            let point = pagePoint(recognizer.location(in: self))
+            let travel = recognizer.translation(in: self)
+            // A drag that went nowhere is a tap that wobbled; the tap recognizer will not have
+            // fired, because this one claimed the touch.
+            if abs(travel.x) < Self.dragSlop, abs(travel.y) < Self.dragSlop {
+                textDelegate?.canvasContainer(self, didTapTextBlock: drag.id)
+            } else if drag.isResize {
+                if let block = textBlocks.first(where: { $0.id == drag.id }), let x = block.x {
+                    textDelegate?.canvasContainer(
+                        self, didResizeTextBlock: drag.id, to: point.x - CGFloat(x))
+                }
+            } else {
+                textDelegate?.canvasContainer(
+                    self, didMoveTextBlock: drag.id,
+                    to: CGPoint(
+                        x: point.x - drag.grabOffset.x, y: point.y - drag.grabOffset.y))
+            }
+        case .cancelled, .failed:
+            dragging = nil
+        default:
+            break
+        }
+    }
+
+    /// A box drag and a page scroll are alternatives, never both at once.
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool { false }
+
+    /// The drag only starts if it started on a box. Refusing here rather than cancelling in
+    /// `began` is what lets the scroll view take the gesture instead: it has been told to wait
+    /// for this one to fail, and a refusal is a failure it sees immediately.
+    override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        guard recognizer === textDragRecognizer else { return true }
+        return textBlock(at: pagePoint(recognizer.location(in: self))) != nil
     }
 }
