@@ -215,6 +215,10 @@ public enum CouchMerge {
             // wins like any other scalar.
             pageWidth: winner.pageWidth ?? loser.pageWidth,
             pageHeight: winner.pageHeight ?? loser.pageHeight,
+            // Same rule, and for a sharper reason: a peer that has not learned about `layout`
+            // drops the field, so letting it win the scalar tiebreak would silently re-bind a
+            // journal entry to its sheet — and the next split would divide it.
+            layout: winner.layout ?? loser.layout,
             strokes: strokes,
             deletedStrokes: deletedStrokes,
             images: images,
@@ -302,8 +306,9 @@ public enum CouchMerge {
     /// `text` is last because it is the only component that can contain the separator. Every field
     /// before it is drawn from a grammar that excludes `|` — ids and asset ids are UUID- or
     /// `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal, and `kind` is
-    /// normatively `[a-z][a-z0-9-]*` — so with exactly one separator-bearing component, and it
-    /// terminal, the map from block to key is injective and this order is genuinely total.
+    /// normatively `[a-z][a-z0-9-]*`, and a link's targets are ids — so with exactly one
+    /// separator-bearing component, and it terminal, the map from block to key is injective and
+    /// this order is genuinely total.
     /// Broken into named steps with explicit types rather than written as one array literal: the
     /// literal mixed `String.init` — which is overloaded dozens of ways — with interpolation inside
     /// a closure, and the type checker gave up on it ("unable to type-check this expression in
@@ -317,6 +322,7 @@ public enum CouchMerge {
             b.deviceId, b.createdAt, b.updatedAt, b.kind, b.orderKey,
             decimal(b.x), decimal(b.y), decimal(b.width), decimal(b.height),
             b.startedAt ?? "", b.imageAssetId ?? "",
+            b.targetNotebookId ?? "", b.targetPageId ?? "",
             segments, strokeIDs, b.text ?? "",
         ]
         return parts.joined(separator: "|")
@@ -366,6 +372,7 @@ public enum CouchMerge {
             ("background", page.background), ("backgroundType", page.backgroundType),
             ("pageWidth", page.pageWidth.map(String.init)),
             ("pageHeight", page.pageHeight.map(String.init)),
+            ("layout", page.layout),
         ])
     }
 

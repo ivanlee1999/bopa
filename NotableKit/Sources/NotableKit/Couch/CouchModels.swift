@@ -293,6 +293,7 @@ public struct CouchBlock: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, kind, orderKey, text, imageAssetId, segments, strokeIds
         case x, y, width, height, startedAt
+        case targetNotebookId, targetPageId
         case createdAt, updatedAt, deviceId
     }
 
@@ -300,7 +301,7 @@ public struct CouchBlock: Codable, Equatable, Sendable {
     /// same rule a redrawn stroke follows, and that is what makes remove-wins sound here.
     public var id: String
 
-    /// `md` | `image` | `audio` | `ink`.
+    /// `md` | `image` | `audio` | `ink` | `link`.
     ///
     /// A string rather than an enum, and an unrecognized value is carried verbatim and drawn as a
     /// placeholder — never dropped, never coerced. This is the field that lets a fifth kind ship on
@@ -337,7 +338,8 @@ public struct CouchBlock: Codable, Equatable, Sendable {
     /// The recording, in playback order, for `kind == "audio"`; empty otherwise.
     public var segments: [CouchAudioSegment]
 
-    /// The `page.strokes` this block groups, for `kind == "ink"`; empty otherwise.
+    /// The `page.strokes` this block groups, for `kind == "ink"` and `kind == "link"`; empty
+    /// otherwise.
     ///
     /// The strokes stay in `page.strokes` and are named from here rather than nested inside. A peer
     /// that has not learned about blocks strips this field, which costs the *grouping* — and the
@@ -366,6 +368,24 @@ public struct CouchBlock: Codable, Equatable, Sendable {
     /// say something both clocks already say.
     public var startedAt: String?
 
+    /// The notebook this block points at, for `kind == "link"`; nil otherwise — protocol §3.3.4.
+    ///
+    /// A bare id, like `page.notebookId`, not a `notebook:<id>` document id: the field already
+    /// says what kind of thing it names, and the two apps' stores address notebooks by the bare
+    /// form everywhere else.
+    ///
+    /// There is deliberately no cached title beside it. A trashed notebook still syncs and still
+    /// resolves, so a reader can name the target from its own library in every case but an
+    /// outright purge — and a free-text field here would be a second `|`-bearing component in
+    /// `blockTiebreak`, whose injectivity argument rests on there being exactly one, terminal.
+    public var targetNotebookId: String?
+
+    /// A page within [targetNotebookId], or nil to point at the notebook as a whole.
+    ///
+    /// A page and never a position on one, for the reason `CouchOutlineEntry` gives: a page
+    /// anchor is the only one that survives the page being written on.
+    public var targetPageId: String?
+
     public var createdAt: String
     public var updatedAt: String
     /// Which device last wrote this block. The first component of `blockTiebreak`.
@@ -381,6 +401,8 @@ public struct CouchBlock: Codable, Equatable, Sendable {
         strokeIds: [String] = [],
         x: Int? = nil, y: Int? = nil, width: Int? = nil, height: Int? = nil,
         startedAt: String? = nil,
+        targetNotebookId: String? = nil,
+        targetPageId: String? = nil,
         createdAt: String,
         updatedAt: String,
         deviceId: String = ""
@@ -397,6 +419,8 @@ public struct CouchBlock: Codable, Equatable, Sendable {
         self.width = width
         self.height = height
         self.startedAt = startedAt
+        self.targetNotebookId = targetNotebookId
+        self.targetPageId = targetPageId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.deviceId = deviceId
@@ -418,6 +442,8 @@ public struct CouchBlock: Codable, Equatable, Sendable {
         width = try c.decodeIfPresent(Int.self, forKey: .width)
         height = try c.decodeIfPresent(Int.self, forKey: .height)
         startedAt = try c.decodeIfPresent(String.self, forKey: .startedAt)
+        targetNotebookId = try c.decodeIfPresent(String.self, forKey: .targetNotebookId)
+        targetPageId = try c.decodeIfPresent(String.self, forKey: .targetPageId)
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
         deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId) ?? ""
@@ -437,6 +463,8 @@ public struct CouchBlock: Codable, Equatable, Sendable {
         try c.encode(width, forKey: .width)
         try c.encode(height, forKey: .height)
         try c.encode(startedAt, forKey: .startedAt)
+        try c.encode(targetNotebookId, forKey: .targetNotebookId)
+        try c.encode(targetPageId, forKey: .targetPageId)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(deviceId, forKey: .deviceId)
@@ -444,6 +472,9 @@ public struct CouchBlock: Codable, Equatable, Sendable {
 
     /// Whether this block joins the page's linear flow, rather than sitting at a point on it.
     public var isFlowing: Bool { x == nil || y == nil }
+
+    /// Whether this block points at a notebook — protocol §3.3.4.
+    public var isLink: Bool { kind == "link" }
 
     /// The assets this block's bytes live in, whatever its kind — what the push ordering, the
     /// "still to download" enumeration and §3.5.1's referenced set all read.
@@ -471,7 +502,7 @@ public struct CouchBlock: Codable, Equatable, Sendable {
 public struct CouchPage: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case type, schema, notebookId, title, background, backgroundType
-        case pageWidth, pageHeight
+        case pageWidth, pageHeight, layout
         case strokes, deletedStrokes, images, deletedImages
         case blocks, deletedBlocks
         case createdAt, updatedAt, updatedBy
@@ -492,6 +523,10 @@ public struct CouchPage: Codable, Equatable, Sendable {
     /// before page sizes existed. Mirrors `PageFile.pageWidth`/`pageHeight` — see there.
     public var pageWidth: Int?
     public var pageHeight: Int?
+    /// Whether the page ends at its sheet — `PageLayout.sheet` (the default) or
+    /// `PageLayout.scroll`. See `PageLayout`, and §3.3.3 for why a scroll page still declares a
+    /// `pageHeight`.
+    public var layout: String?
     public var strokes: [CouchStroke]
     public var deletedStrokes: [CouchTombstone]
     public var images: [CouchImage]
@@ -511,7 +546,7 @@ public struct CouchPage: Codable, Equatable, Sendable {
         type: String = CouchDocType.page, schema: Int = couchSchemaVersion,
         notebookId: String?, title: String? = nil,
         background: String = "blank", backgroundType: String = "native",
-        pageWidth: Int? = nil, pageHeight: Int? = nil,
+        pageWidth: Int? = nil, pageHeight: Int? = nil, layout: String? = nil,
         strokes: [CouchStroke] = [], deletedStrokes: [CouchTombstone] = [],
         images: [CouchImage] = [], deletedImages: [CouchTombstone] = [],
         blocks: [CouchBlock] = [], deletedBlocks: [CouchTombstone] = [],
@@ -525,6 +560,7 @@ public struct CouchPage: Codable, Equatable, Sendable {
         self.backgroundType = backgroundType
         self.pageWidth = pageWidth
         self.pageHeight = pageHeight
+        self.layout = layout
         self.strokes = strokes
         self.deletedStrokes = deletedStrokes
         self.images = images
@@ -548,6 +584,7 @@ public struct CouchPage: Codable, Equatable, Sendable {
         pageWidth = try c.decodeIfPresent(Int.self, forKey: .pageWidth).flatMap { $0 > 0 ? $0 : nil }
         pageHeight = try c.decodeIfPresent(Int.self, forKey: .pageHeight)
             .flatMap { $0 > 0 ? $0 : nil }
+        layout = try c.decodeIfPresent(String.self, forKey: .layout)
         strokes = try c.decodeIfPresent([CouchStroke].self, forKey: .strokes) ?? []
         deletedStrokes = try c.decodeIfPresent([CouchTombstone].self, forKey: .deletedStrokes) ?? []
         images = try c.decodeIfPresent([CouchImage].self, forKey: .images) ?? []
@@ -569,6 +606,7 @@ public struct CouchPage: Codable, Equatable, Sendable {
         try c.encode(backgroundType, forKey: .backgroundType)
         try c.encode(pageWidth, forKey: .pageWidth)
         try c.encode(pageHeight, forKey: .pageHeight)
+        try c.encode(layout, forKey: .layout)
         try c.encode(strokes, forKey: .strokes)
         try c.encode(deletedStrokes, forKey: .deletedStrokes)
         try c.encode(images, forKey: .images)
@@ -579,6 +617,9 @@ public struct CouchPage: Codable, Equatable, Sendable {
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(updatedBy, forKey: .updatedBy)
     }
+
+    /// Whether this page scrolls instead of ending at its sheet — `PageLayout.isScroll`.
+    public var isScroll: Bool { PageLayout.isScroll(layout) }
 }
 
 /// A page the reader starred, or the record of it being un-starred — protocol §3.2.1.

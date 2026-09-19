@@ -155,4 +155,50 @@ struct PageBlockWireTests {
         picture.imageAssetId = "asset:cc"
         #expect(picture.referencedAssetIDs == ["asset:cc"])
     }
+
+    // MARK: - Links
+
+    let link = CouchBlock(
+        id: "l1", kind: "link",
+        strokeIds: ["s1", "s2"],
+        x: 212, y: 1480, width: 640, height: 210,
+        targetNotebookId: "nb-groceries", targetPageId: "page-7",
+        createdAt: "2026-09-19T10:00:00Z", updatedAt: "2026-09-19T10:00:00Z", deviceId: "ipad")
+
+    @Test("A link block round-trips through both wire formats")
+    func linkRoundTrip() throws {
+        let document = try decoder.decode(CouchPage.self, from: encoder.encode(page([link])))
+        #expect(document.blocks == [link])
+
+        let file = PageFile(
+            id: "p1", notebookId: "nb1",
+            createdAt: "2026-09-19T09:00:00Z", updatedAt: "2026-09-19T10:00:00Z",
+            blocks: [link])
+        let decoded = try decoder.decode(PageFile.self, from: encoder.encode(file))
+        #expect(decoded.blocks == [link])
+    }
+
+    /// kotlinx.serialization needs the key present to decode it at all, so an absent target is
+    /// written as `null` rather than omitted — the rule every other optional here follows.
+    @Test("A block with no target writes both fields as explicit nulls")
+    func absentTargetsAreExplicitNulls() throws {
+        let json = try #require(
+            String(data: encoder.encode(paragraph), encoding: .utf8))
+        #expect(json.contains("\"targetNotebookId\":null"))
+        #expect(json.contains("\"targetPageId\":null"))
+    }
+
+    @Test("A page that predates links decodes with none, and a link declares itself one")
+    func targetsAreOptional() throws {
+        let old = """
+            {"id":"b9","kind":"md","orderKey":"a0","text":"x",
+             "createdAt":"2026-09-01T10:00:00Z","updatedAt":"2026-09-01T10:00:00Z"}
+            """
+        let decoded = try decoder.decode(CouchBlock.self, from: Data(old.utf8))
+        #expect(decoded.targetNotebookId == nil)
+        #expect(decoded.targetPageId == nil)
+        #expect(!decoded.isLink)
+        #expect(link.isLink)
+        #expect(!link.isFlowing)
+    }
 }
