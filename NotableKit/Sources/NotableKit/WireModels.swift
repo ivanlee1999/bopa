@@ -147,7 +147,7 @@ public struct NotebookManifest: Codable, Equatable, Sendable {
 public struct PageFile: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case version, id, notebookId, title, background, backgroundType, parentFolderId, scroll
-        case pageWidth, pageHeight
+        case pageWidth, pageHeight, layout
         case createdAt, updatedAt, strokes, images, deletedStrokes, deletedImages, updatedBy
         case blocks, deletedBlocks
     }
@@ -171,6 +171,10 @@ public struct PageFile: Codable, Equatable, Sendable {
     /// every other format that solved this (`.xopp`, OneNote, GoodNotes templates) puts it.
     public var pageWidth: Int?
     public var pageHeight: Int?
+    /// Whether this page ends at its sheet — see `PageLayout`. Carried in the file for the same
+    /// reason blocks are: this is the local on-disk format, and a field the file has no room for
+    /// is a field that does not survive a restart.
+    public var layout: String?
     public var createdAt: String
     public var updatedAt: String
     public var strokes: [StrokeDTO]
@@ -208,6 +212,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         scroll: Int = 0,
         pageWidth: Int? = nil,
         pageHeight: Int? = nil,
+        layout: String? = nil,
         createdAt: String,
         updatedAt: String,
         strokes: [StrokeDTO] = [],
@@ -228,6 +233,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         self.scroll = scroll
         self.pageWidth = pageWidth
         self.pageHeight = pageHeight
+        self.layout = layout
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.strokes = strokes
@@ -254,6 +260,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         pageWidth = try c.decodeIfPresent(Int.self, forKey: .pageWidth).flatMap { $0 > 0 ? $0 : nil }
         pageHeight = try c.decodeIfPresent(Int.self, forKey: .pageHeight)
             .flatMap { $0 > 0 ? $0 : nil }
+        layout = try c.decodeIfPresent(String.self, forKey: .layout)
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
         strokes = try c.decodeIfPresent([StrokeDTO].self, forKey: .strokes) ?? []
@@ -277,6 +284,7 @@ public struct PageFile: Codable, Equatable, Sendable {
         try c.encode(scroll, forKey: .scroll)
         try c.encode(pageWidth, forKey: .pageWidth)
         try c.encode(pageHeight, forKey: .pageHeight)
+        try c.encode(layout, forKey: .layout)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(strokes, forKey: .strokes)

@@ -130,6 +130,9 @@ extension PageFile {
     /// The sheet to lay this page out on: its own declaration, or what bopa has always used.
     public var pageSize: PageSize { declaredPageSize ?? .legacyUndeclared }
 
+    /// Whether this page scrolls instead of ending at its sheet — `PageLayout.isScroll`.
+    public var isScroll: Bool { PageLayout.isScroll(layout) }
+
     public mutating func setPageSize(_ size: PageSize) {
         pageWidth = size.width
         pageHeight = size.height

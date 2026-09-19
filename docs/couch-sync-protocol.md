@@ -48,6 +48,49 @@ tiebreak is needed, because two writers never meet on one such document. This is
 is far easier to reason about as several documents each with one author than as one document with
 a merge rule.
 
+### 1.3 Derived identifiers
+
+Some identifiers are **computed** rather than minted. Where two devices that cannot see each
+other would otherwise each create "the same" thing — one notebook per year, one page per day —
+random ids produce two documents the merge has no grounds to combine. Deriving the id from
+something both devices already know produces one document, which the ordinary merge then unions.
+
+```
+derive(seed) = lowercase hex of the first 16 bytes of SHA-256(UTF-8(seed)),
+               written 8-4-4-4-12
+```
+
+The result is shaped like a UUID because every other id in the library is; nothing parses it as
+one. It is **not** a UUIDv5 — no namespace, no version nibble. The only property required of it
+is that both implementations compute the same string.
+
+| seed | names |
+|---|---|
+| `notable-page-split:<parentId>:<k>` | sheet `k` of a divided page (§6.6) |
+| `notable-journal:<yyyy>` | the notebook holding that year's journal |
+| `notable-journal-day:<yyyy-mm-dd>` | the page holding that day's entry |
+| `notable-journal-folder` | the folder the year notebooks are filed in |
+
+Seeds are exact, including the zero-padding: `notable-journal:0999`, never `notable-journal:999`.
+Every seed in use is pinned by a `derive` vector (§8), because a change to the derivation is not
+a broken hash — it is every existing journal entry moving to an address nobody looks at.
+
+**A journal notebook is identified, not flagged.** There is no wire field saying "this is a
+journal": a notebook is one when its id equals `derive("notable-journal:<y>")` for some year, and
+a page is a day entry when its id equals `derive("notable-journal-day:<its title>")`. Keeping it
+out of the documents keeps it out of §5.5's scalar envelope, where a peer could win it.
+
+**The date is the writer's local civil date**, formatted `yyyy-MM-dd`. Two devices in different
+zones can briefly resolve "today" to different days for one instant. That is accepted: a journal
+is about human days, and the alternative — UTC — would put an evening's notes under tomorrow for
+much of the world.
+
+**Creating a derived document is find-or-create, and has two traps.** A purged id may still have
+a local deletion recorded against it, which would push the new document straight back out as a
+tombstone; the creator must clear that record first. And a derived document that exists but is
+trashed must be *un-trashed* rather than re-created — there cannot be a second one, the id is
+fixed.
+
 ### 1.2 `sync-meta:database` — database identity
 
 Local sync state — the change-feed checkpoint and the per-document revision cache — is scoped by
@@ -232,7 +275,7 @@ implementations clamp identically, or they would render different outlines from 
   "notebookId": "<uuid>",
   "title": "Shopping list",
   "background": "blank", "backgroundType": "native",
-  "pageWidth": 1400, "pageHeight": 1980,
+  "pageWidth": 1400, "pageHeight": 1980, "layout": "sheet",
   "strokes": [ { "id": "<uuid>", "createdAt": "…", "updatedAt": "…", "deviceId": "boox",
                  "pen": "FOUNTAIN", "color": -16777216, "size": 4.48, "maxPressure": 1,
                  "top": 312, "bottom": 393, "left": 214, "right": 262,
@@ -246,6 +289,7 @@ implementations clamp identically, or they would render different outlines from 
                 "segments": [], "strokeIds": [],
                 "x": null, "y": null, "width": null, "height": null,
                 "startedAt": null,
+                "targetNotebookId": null, "targetPageId": null,
                 "createdAt": "…", "updatedAt": "…", "deviceId": "ipad" } ],
   "deletedBlocks": [ { "id": "<uuid>", "deletedAt": "…" } ],
   "createdAt": "…", "updatedAt": "…", "updatedBy": "boox" }
@@ -263,14 +307,16 @@ Content that is not ink: typed markdown, a placed picture, a recording, a groupi
 | field | meaning |
 |---|---|
 | `id` | merge key. Never reused — retyping a deleted paragraph mints a new id, the rule that makes remove-wins sound here as it is for a stroke. |
-| `kind` | `md` \| `image` \| `audio` \| `ink`. Matches `[a-z][a-z0-9-]*`. An unrecognized value is **carried verbatim and rendered as a placeholder**, never dropped or coerced — this is what lets a fifth kind ship on one app before the other without §6.5 quarantining every page that uses it. |
+| `kind` | `md` \| `image` \| `audio` \| `ink` \| `link`. Matches `[a-z][a-z0-9-]*`. An unrecognized value is **carried verbatim and rendered as a placeholder**, never dropped or coerced — this is what lets a fifth kind ship on one app before the other without §6.5 quarantining every page that uses it. |
 | `orderKey` | position in the page's flow; see below. Compared as UTF-8 bytes (§4). Empty is legal and sorts first. |
 | `text` | markdown **source**, for `kind: "md"`. Not a parsed tree, not rendered HTML, not attributed runs: those oblige two implementations to agree on a parser, which the vectors cannot pin and which a peer with a different flavour rewrites on re-encode. |
 | `imageAssetId` | the `asset:<sha256>` holding the picture, for `kind: "image"`. |
 | `segments` | the recording, in playback order, for `kind: "audio"` — see §3.3.2. |
-| `strokeIds` | the `strokes[]` this block groups, for `kind: "ink"`. The strokes **stay in `strokes[]`**; see below. |
+| `strokeIds` | the `strokes[]` this block groups, for `kind: "ink"` and `kind: "link"`. The strokes **stay in `strokes[]`**; see below. |
 | `x`, `y`, `width`, `height` | page units, top-left, same space and same integer type as an image's. **Both `x` and `y` absent means the block joins the flow; both present means it sits at that point. Exactly one present means flowing** — a reader rule, never a decode failure. |
 | `startedAt` | when a recording began, on the corrected clock (§7.1a). A stroke's offset into it is `stroke.createdAt − startedAt`, so no per-stroke wire field is needed — but see the note below. |
+| `targetNotebookId` | the notebook this block points at, for `kind: "link"` — see §3.3.4. A bare id, not a `notebook:` document id. |
+| `targetPageId` | a page within `targetNotebookId`, or absent to point at the notebook as a whole. |
 | `createdAt`, `updatedAt`, `deviceId` | as elsewhere. |
 
 The flowing blocks of a page, in `(orderKey, id)` order, with their `text` joined by a blank
@@ -306,6 +352,45 @@ feature and losing content. It also keeps §6.6's sheet division and §6.1a's "c
 saw" single-level. Ids naming strokes that no longer exist are kept, not filtered; readers skip
 them, as §5.2.2 keeps an outline entry whose page is gone. If two live blocks name one stroke
 after a merge, the block with the byte-lower `id` owns it.
+
+#### 3.3.1a link
+
+A region of one page that points at a notebook.
+
+```json
+{ "id": "<uuid>", "kind": "link", "orderKey": "",
+  "strokeIds": ["<uuid>", "<uuid>"],
+  "x": 212, "y": 1480, "width": 640, "height": 210,
+  "targetNotebookId": "<uuid>", "targetPageId": null,
+  "createdAt": "…", "updatedAt": "…", "deviceId": "ipad" }
+```
+
+A link is a **positioned** block, so §6.6 rule 10 already divides it like an image, and §5.1
+already merges it whole. Only the following is additional:
+
+1. **The region is the strokes, and the rectangle is a cache.** A reader takes the region from
+   the live strokes named in `strokeIds`; `x`/`y`/`width`/`height` are what they measured when
+   the link was made, used only as a fallback when none of those strokes is still on the page. A
+   writer that moves the ink refreshes the rectangle. This is why a link follows ink that is
+   lassoed to a new spot instead of pointing at bare paper.
+2. **Removing a link is a block tombstone, and takes nothing with it.** The strokes it named stay
+   on the page. Conversely, erasing every stroke a link names **does not** remove the link: the
+   block is kept and readers show nothing for it, so undoing the erase brings the link back.
+   Ids naming absent strokes are kept unfiltered, exactly as for `ink`.
+3. **A dangling target is kept.** If `targetNotebookId` names a notebook that is trashed, the
+   link still resolves — a trashed notebook still syncs. If it names one that has been purged, the
+   link is still kept and rendered as unresolved, never silently dropped; this is §5.2.2's rule
+   for an outline entry whose page is gone.
+4. **Nothing is written into the target.** A notebook does not carry a list of what points at it.
+   Any "what links here" view is derived locally by scanning link blocks, so a link costs one
+   write, to one document, on the page the reader was already editing.
+5. **Any page may link to any notebook.** Nothing here is specific to a journal; a link on an
+   ordinary page is the same block with the same rules.
+
+There is deliberately **no cached title** of the target. A reader names the target from its own
+library, which succeeds in every case but an outright purge — and a free-text field here would
+be a second separator-bearing component in `blockTiebreak` (§4), whose totality argument rests on
+there being exactly one, and it terminal.
 
 #### 3.3.2 audio segment
 
@@ -348,6 +433,49 @@ that names them.
 > stroke, not to the stamp.** The residual error is then the drift in the correction between
 > drawing and playing rather than its whole value, no wire field is added, and the identity channel
 > is left alone.
+
+#### 3.3.3 `layout` — pages that do not end at their sheet
+
+```
+"layout": "sheet"   (or absent)  the page ends at its sheet — every page, until now
+"layout": "scroll"                sheet width, unbounded height
+```
+
+A page ends at its sheet: that is the rule §6.6 exists to enforce, and the reason it exists is
+that everything below the first sheet used to be invisible to the overview, to bookmarks and to
+reordering. A journal entry is the one thing that argument does not cover — a day is not a sheet
+of paper that ran out — so a page may declare that it scrolls, and a page that declares it is
+exempt from §6.6 entirely.
+
+**An unrecognized value is read as `scroll`.** The two mistakes are not symmetric: declining to
+divide a page is undone by a later build that understands the value, while dividing one that
+should not have been divided mints derived child ids, moves content between documents and writes
+tombstones, and no later build can reassemble it.
+
+**A scroll page still declares `pageHeight`, and must.** It is written as
+
+```
+pageHeight = ceil((lowest content edge + 1000) / defaultSheetHeight) * defaultSheetHeight
+```
+
+never less than one sheet, where 1000 page units (~150 mm) is the blank paper kept below the
+writing so there is always somewhere to continue. Both values are normative: two devices that
+padded differently would rewrite each other's `pageHeight` on every save, and rounding to whole
+sheets means the number only changes when the writing crosses a boundary rather than drifting
+with every stroke.
+
+The reason it is written at all is the peer that predates this field. That peer erases `layout`
+on its next write and sees an ordinary page — and if the page declared a short height, every
+stroke below it would start past the sheet and §6.6 would carve the day into pieces. A height
+that already covers the content means the division finds nothing below sheet 0 and leaves the
+page alone. The residual risk is one merge: if two current builds edit the same day concurrently
+and the envelope winner carries the smaller height, a pre-`layout` build reading that result
+before either device saves again could still divide it. Deploying this field to every device
+before any device writes a scroll page closes it.
+
+`layout` is carried in the WebDAV page file as well (see
+[notable-sync-protocol.md](notable-sync-protocol.md) §3.1). A stock Notable install strips it,
+which leaves a tall bounded page — the same degradation, and the same answer, as bookmarks.
 
 ### 3.4 asset
 
@@ -573,7 +701,7 @@ millis(ts)         = parsed epoch millis, or Long.MIN_VALUE if unparseable
 scalarKey(doc)     = the doc's scalar fields only, rendered as key-sorted minimal JSON:
                      type, schema, createdAt, updatedAt, updatedBy, and per type —
                      page:     notebookId, title, background, backgroundType,
-                               pageWidth, pageHeight
+                               pageWidth, pageHeight, layout
                      notebook: title, parentFolderId, defaultBackground, defaultBackgroundType,
                                defaultPageWidth, defaultPageHeight, deletedAt
                      folder:   title, parentFolderId, deletedAt
@@ -641,6 +769,7 @@ bit patterns are identical by definition. For an image, the same shape over
 ```
 deviceId|createdAt|updatedAt|kind|orderKey|
 x|y|width|height|startedAt|imageAssetId|
+targetNotebookId|targetPageId|
 segments|strokeIds|text
 ```
 
@@ -651,8 +780,9 @@ like an image's, so the bit-pattern rendering above is unreachable here.
 
 `text` is **last, and last deliberately**: it is the only component that can itself contain a `|`
 or a newline. Every field before it is drawn from a grammar that excludes the separator — ids and
-asset ids are UUID- or `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal, and
-`kind` is normatively `[a-z][a-z0-9-]*`. With exactly one separator-bearing component, and it
+asset ids are UUID- or `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal,
+`kind` is normatively `[a-z][a-z0-9-]*`, and a link's targets are ids. With exactly one
+separator-bearing component, and it
 terminal, the map from block to key is injective and the order is genuinely total.
 
 Two honest gaps in that claim, neither worth a wire change. An absent optional and an empty one
@@ -826,12 +956,17 @@ other scalar **except** that the winner's value is only used when it has one:
 
 ```
 pageWidth(merge(a, b)) = pick(a, b).pageWidth ?? other(a, b).pageWidth
+layout(merge(a, b))    = pick(a, b).layout    ?? other(a, b).layout
 ```
 
 A page's sheet describes how the ink already on that page is laid out. A writer that has not
 learned the field would otherwise un-declare the size by merely writing last, silently reflowing
 every page it touched. The dimensions are also in `scalarKey` (§4): the merge picks them, so
 omitting them there would make both argument orders "win" and cost commutativity.
+
+`layout` (§3.3.3) follows the same rule and for a sharper reason: un-declaring it does not
+merely reflow a page, it re-binds a journal entry to a sheet and hands it to §6.6 to be divided.
+`layout` is in `scalarKey` for the same commutativity reason as the dimensions.
 
 ### 5.5 Scalar metadata is last-writer-wins over the whole envelope
 
@@ -1103,6 +1238,10 @@ The division is a local repair, not a wire change: it produces ordinary pages, a
 never run it sees nothing it cannot already read. But two devices can run it independently on the
 same page before either has seen the other, so the result MUST be a function of the page alone:
 
+0. **A page that declares `layout: "scroll"` is never divided** (§3.3.3), whatever its content.
+   It is returned unchanged — not merely undivided: a reader MUST NOT stamp the sheet's height
+   onto a page whose declaration is that it has none. Rule 0 is first because it overrides every
+   rule below it.
 1. **The sheet** is the page's declared `pageWidth`/`pageHeight`; failing that the notebook's
    default; failing that `1404x1872`. It MUST NOT be the device's screen, which the two apps
    disagree about for undeclared pages (§3.4) and which would divide the same page differently on
@@ -1116,11 +1255,10 @@ same page before either has seen the other, so the result MUST be a function of 
    find one sheet more than it fills and file an empty page, for ever.
 4. **Sheet 0 keeps the page's id.** Bookmarks (§3.2.1) and outline entries (§3.2.2) name a page id,
    and renaming sheet 0 would strand every one of them.
-5. **Sheet `k > 0` takes the id** `uuid(sha256("notable-page-split:" + parentId + ":" + k)[0..16])`
-   — the first 16 bytes of the digest, lowercase hex, in UUID shape. Not a UUIDv5; the only
-   required property is that both implementations compute the same one. Derived rather than random
-   so that two devices dividing the same page produce the *same* pages: with random ids the merge
-   would take the union and the notebook would hold every page twice.
+5. **Sheet `k > 0` takes the id** `derive("notable-page-split:" + parentId + ":" + k)` — §1.3,
+   which is where this construction is defined and where the rest of its users are. Derived
+   rather than random so that two devices dividing the same page produce the *same* pages: with
+   random ids the merge would take the union and the notebook would hold every page twice.
 6. Content moves with its sheet: `y`, `top`, `bottom` and every encoded point shift by
    `-k * sheetHeight`. `createdAt` is the parent's — these are not new notes — and `scroll` is 0.
 7. **Sheet 0 records what left it.** Its `deletedStrokes`/`deletedImages` gain a tombstone
@@ -1316,13 +1454,24 @@ they are looking at a 900 KB photograph or a 60 MB book.
                  "a": { … }, "b": { … }, "expected": { … } } ] }
 ```
 
-For every vector both suites assert:
+For every merge vector both suites assert:
 
 1. `merge(a, b) == expected`
 2. `merge(b, a) == expected` (commutativity)
 3. `merge(expected, a) == expected` and `merge(expected, b) == expected` (idempotence)
 
 Documents in vectors omit `_id`/`_rev`; merges operate on document bodies.
+
+Two kinds are not merges and carry different fields:
+
+- **`split`** takes `page`, `sheet` and `now` in place of `a`/`b`, and `expected` is the list of
+  pages §6.6 must produce. Both suites also re-run the division over its own output and require
+  nothing to change.
+- **`derive`** takes a `seed` and expects `{ "id": "…" }` — the identifier §1.3 must compute from
+  it. These are pinned rather than merely compared between the two apps, because the value of a
+  derived id is that a device offline today computes what a device offline last year computed. A
+  change here is not a broken hash; it is every existing journal entry moving to an address
+  nobody looks at.
 
 ### 8.1 Scenario suite
 

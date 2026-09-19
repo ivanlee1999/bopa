@@ -22,6 +22,13 @@ final class CouchMergeVectorTests: XCTestCase {
         var page: AnyDoc?
         var sheet: Sheet?
         var now: String?
+        // A `derive` vector takes neither: just the seed whose digest is pinned.
+        var seed: String?
+    }
+
+    /// What a `derive` vector asserts: the identifier the seed must hash to, on both apps.
+    private struct ExpectedID: Decodable {
+        var id: String
     }
 
     private struct Sheet: Decodable {
@@ -52,6 +59,10 @@ final class CouchMergeVectorTests: XCTestCase {
     private struct ExpectedBlock: Decodable {
         var id: String
         var y: Int?
+        // Stated only by the vectors that care: a link carried across a split is worthless if it
+        // arrives pointing nowhere.
+        var targetNotebookId: String?
+        var targetPageId: String?
     }
 
     private struct ExpectedTombstone: Decodable {
@@ -132,7 +143,7 @@ final class CouchMergeVectorTests: XCTestCase {
         XCTAssertFalse(vectors.isEmpty)
         // Every merge rule with a branch of its own should have at least one vector.
         let kinds = Set(vectors.map(\.kind))
-        XCTAssertEqual(kinds, ["page", "notebook", "folder", "split"])
+        XCTAssertEqual(kinds, ["page", "notebook", "folder", "split", "derive"])
     }
 
     func testVectors() throws {
@@ -146,6 +157,8 @@ final class CouchMergeVectorTests: XCTestCase {
                 try check(vector, as: CouchFolder.self, merge: CouchMerge.merge)
             case "split":
                 try checkSplit(vector)
+            case "derive":
+                try checkDerive(vector)
             default:
                 XCTFail("vector \(vector.name): unknown kind \(vector.kind)")
             }
@@ -166,6 +179,18 @@ final class CouchMergeVectorTests: XCTestCase {
         XCTAssertEqual(merge(b, a), expected, "\(vector.name): merge(b,a) — not commutative")
         XCTAssertEqual(merge(expected, a), expected, "\(vector.name): merge(expected,a) — not idempotent")
         XCTAssertEqual(merge(expected, b), expected, "\(vector.name): merge(expected,b) — not idempotent")
+    }
+
+    /// Runs a `derive` vector: the seed, and the identifier both apps must compute from it.
+    ///
+    /// Pinned rather than merely tested for agreement between the two implementations, because
+    /// the whole value of a derived id is that a device offline *now* computes what a device
+    /// offline last year computed. A change here is a change to where existing journal entries
+    /// live, and it would look like data loss rather than like a broken hash.
+    private func checkDerive(_ vector: Vector) throws {
+        let seed = try XCTUnwrap(vector.seed, "\(vector.name): derive vector needs a seed")
+        let expected = try JSONDecoder().decode(ExpectedID.self, from: vector.expected.json)
+        XCTAssertEqual(DerivedID.derive(seed), expected.id, "\(vector.name)")
     }
 
     /// Runs a `split` vector: divides the page and checks, page by page, that the same pages come
@@ -228,6 +253,16 @@ final class CouchMergeVectorTests: XCTestCase {
             for (block, wantBlock) in zip(made.page.blocks, want.blocks ?? []) {
                 XCTAssertEqual(
                     block.y, wantBlock.y, "\(vector.name): \(block.id) y on \(want.id)")
+                if let wantTarget = wantBlock.targetNotebookId {
+                    XCTAssertEqual(
+                        block.targetNotebookId, wantTarget,
+                        "\(vector.name): \(block.id) target notebook on \(want.id)")
+                }
+                if let wantPage = wantBlock.targetPageId {
+                    XCTAssertEqual(
+                        block.targetPageId, wantPage,
+                        "\(vector.name): \(block.id) target page on \(want.id)")
+                }
             }
             XCTAssertEqual(
                 made.page.deletedBlocks.map { [$0.id, $0.deletedAt] },

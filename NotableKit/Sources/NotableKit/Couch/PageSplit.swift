@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// Cutting a page that grew past its sheet into one page per sheet.
@@ -19,6 +18,9 @@ import Foundation
 ///   would then keep both of. This is the whole reason the id is a hash and not a UUID.
 /// - **Ink is never cut.** A stroke belongs to the sheet its top edge falls in and travels whole,
 ///   so a descender crossing the boundary stays in one piece rather than being severed.
+/// - **A page that declares it scrolls is never divided.** A journal entry is a day, not a sheet
+///   of paper that ran out, so `PageLayout.scroll` exempts it — see `PageLayout` for why that is
+///   a declaration rather than something inferred from how tall the page is.
 /// - **The parent remembers what left it.** The first sheet carries a tombstone for every stroke
 ///   and image that moved to a child. Without them, a peer still holding the tall copy unions the
 ///   moved ink straight back into the parent on merge — the page re-grows on every pull, each side
@@ -50,21 +52,11 @@ public enum PageSplit {
 
     /// The id of sheet [index] of [parentId] — `index` 0 is the parent itself.
     ///
-    /// SHA-256 over an ASCII string, rendered in the shape of a UUID because that is what every
-    /// other page id in the file looks like. Not a UUIDv5: no namespace, no version nibble, just
-    /// the first 16 bytes of the digest — the only property required of it is that Kotlin and
-    /// Swift compute the same one.
+    /// `DerivedID` over the split's seed — see there for why an id is computed rather than
+    /// minted, and for the shape of the result.
     public static func childId(parentId: String, sheet index: Int) -> String {
         if index == 0 { return parentId }
-        let digest = SHA256.hash(data: Data("notable-page-split:\(parentId):\(index)".utf8))
-        let hex = digest.map { String(format: "%02x", $0) }.joined()
-        let bytes = String(hex.prefix(32))
-        func part(_ range: Range<Int>) -> String {
-            let start = bytes.index(bytes.startIndex, offsetBy: range.lowerBound)
-            let end = bytes.index(bytes.startIndex, offsetBy: range.upperBound)
-            return String(bytes[start..<end])
-        }
-        return "\(part(0..<8))-\(part(8..<12))-\(part(12..<16))-\(part(16..<20))-\(part(20..<32))"
+        return DerivedID.derive(DerivedID.pageSplitSeed(parentId: parentId, sheet: index))
     }
 
     /// Which sheet a piece of content belongs to: the one its *top edge* falls in.
@@ -127,6 +119,9 @@ public enum PageSplit {
     public static func split(
         _ page: PageFile, sheet: PageSize, now: String, updatedBy: String
     ) throws -> [PageFile] {
+        // Rule 0 — and returned *untouched*, not merely undivided: `declaring` would stamp a
+        // sheet height onto a page whose whole claim is that it has none.
+        guard !page.isScroll else { return [page] }
         let count = sheetCount(of: page, sheet: sheet)
         guard count > 1 else { return [declaring(sheet, on: page)] }
 
@@ -238,6 +233,7 @@ public enum PageSplit {
     public static func split(
         _ page: CouchPage, id: String, sheet: PageSize, now: String, updatedBy: String
     ) throws -> [(id: String, page: CouchPage)] {
+        guard !page.isScroll else { return [(id, page)] }
         let tops = tops(
             strokeTops: page.strokes.map(\.top), imageYs: page.images.map(\.y), blocks: page.blocks)
         let count = sheetCount(tops: tops, sheetHeight: sheet.height)

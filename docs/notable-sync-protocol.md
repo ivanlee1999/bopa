@@ -141,6 +141,13 @@ Rules both implementations follow:
   past the right edge whenever it was written on a device wider than the sheet (including every
   undeclared page). An area that stops at the sheet's edge does not merely park that ink
   off-page, it makes it unreachable.
+- **`layout`** (`"sheet"`, the default, or `"scroll"`) says whether the page ends at its height
+  at all — a journal entry declares `"scroll"` and is exempt from the division. See
+  [couch-sync-protocol.md](couch-sync-protocol.md) §3.3.3, which is normative for it. Like
+  bookmarks (§3.2) this is not an upstream field: a stock install strips it when it rewrites the
+  page. That is survivable here and nowhere else, because a scroll page also declares a
+  `pageHeight` that already covers its content — so a reader that has lost the flag sees a tall
+  ordinary page rather than one to divide.
 
 ### 3.2 Bookmarks and outline
 
@@ -183,6 +190,7 @@ first, then `strokes`, then `images`. Parsers must not rely on whitespace.
   "scroll": 0,                          // int, vertical scroll position
   "pageWidth": 1400,                    // page units; null = undeclared, see §3.1
   "pageHeight": 1980,
+  "layout": "sheet",                    // or "scroll"; null = "sheet". See §3.1
   "createdAt": "...", "updatedAt": "...",
   "strokes": [ <StrokeDto>... ],
   "images":  [ <ImageDto>... ]

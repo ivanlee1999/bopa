@@ -205,6 +205,82 @@ final class PageSplitTests: XCTestCase {
         }
     }
 
+    // MARK: Pages that declare they scroll
+
+    /// Rule 0. Everything about this page says "divide me" — ink starting two sheets down, a
+    /// declared sheet it has outgrown — and the declaration overrides all of it.
+    func testAScrollPageIsNeverDivided() throws {
+        var journal = page([try stroke(id: "s1", top: 2500, bottom: 2600)])
+        journal.layout = PageLayout.scroll
+
+        let result = try PageSplit.split(journal, sheet: sheet, now: now, updatedBy: "ipad")
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].id, "page-a")
+        XCTAssertEqual(result[0].strokes.map(\.id), ["s1"])
+        XCTAssertEqual(result[0].strokes[0].top, 2500, accuracy: 0.01)
+        XCTAssertTrue(result[0].deletedStrokes.isEmpty)
+    }
+
+    /// Returned untouched, not merely undivided: `declaring` would stamp the sheet's height onto
+    /// a page whose whole claim is that it has none, and the next reader would believe it.
+    func testAScrollPageComesBackUnchanged() throws {
+        var journal = page([try stroke(id: "s1", top: 2500, bottom: 2600)])
+        journal.layout = PageLayout.scroll
+        journal.pageHeight = 4000
+
+        let result = try PageSplit.split(journal, sheet: sheet, now: now, updatedBy: "ipad")
+
+        XCTAssertEqual(result, [journal])
+    }
+
+    func testTheSameHoldsForTheDocumentForm() throws {
+        var journal = CouchPage(
+            notebookId: "book", pageWidth: sheet.width, pageHeight: 4000,
+            layout: PageLayout.scroll,
+            strokes: [], createdAt: now, updatedAt: now, updatedBy: "ipad")
+        journal.blocks = [
+            CouchBlock(
+                id: "b1", kind: "link", strokeIds: ["s1"], x: 10, y: 2400, width: 100, height: 40,
+                targetNotebookId: "nb-other", createdAt: now, updatedAt: now)
+        ]
+
+        let result = try PageSplit.split(
+            journal, id: "page-a", sheet: sheet, now: now, updatedBy: "ipad")
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].id, "page-a")
+        XCTAssertEqual(result[0].page, journal)
+    }
+
+    // MARK: Journal identifiers
+
+    /// Pinned for the same reason the split's own seed is: the BOOX computes these independently,
+    /// and a disagreement would not look like a broken hash. It would look like every journal
+    /// entry on one device being invisible to the other.
+    ///
+    /// Reproduce without either app:
+    /// `printf 'notable-journal-day:2026-09-19' | shasum -a 256 | cut -c1-32`
+    func testJournalIdsAreTheseExactValues() {
+        XCTAssertEqual(
+            DerivedID.journalNotebookId(year: 2026), "57008734-1905-d544-39b5-4e1806e663df")
+        XCTAssertEqual(
+            DerivedID.journalDayPageId(date: "2026-09-19"),
+            "546732d7-b5b7-3e3a-36c2-5289f669308c")
+        XCTAssertEqual(DerivedID.journalFolderId, "21de662f-e961-4ece-7cf5-f3c8b6f937ad")
+    }
+
+    func testTheSplitsOwnIdStillComesFromTheSharedDerivation() {
+        XCTAssertEqual(
+            PageSplit.childId(parentId: "page-a", sheet: 1),
+            DerivedID.derive(DerivedID.pageSplitSeed(parentId: "page-a", sheet: 1)))
+    }
+
+    func testAYearIsZeroPadded() {
+        XCTAssertEqual(DerivedID.journalNotebookSeed(year: 999), "notable-journal:0999")
+        XCTAssertEqual(DerivedID.journalNotebookSeed(year: 2026), "notable-journal:2026")
+    }
+
     // MARK: Images
 
     func testAnImageBelowTheSheetTravelsWithIt() throws {

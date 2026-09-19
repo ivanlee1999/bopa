@@ -34,6 +34,7 @@ public enum CouchMapping {
             backgroundType: file.backgroundType,
             pageWidth: file.pageWidth,
             pageHeight: file.pageHeight,
+            layout: file.layout,
             strokes: file.strokes.map { couchStroke(from: $0, deviceID: deviceID) },
             deletedStrokes: file.deletedStrokes,
             images: file.images.map {
@@ -97,6 +98,7 @@ public enum CouchMapping {
             // be able to un-declare it and reflow the page.
             pageWidth: page.pageWidth ?? existing?.pageWidth,
             pageHeight: page.pageHeight ?? existing?.pageHeight,
+            layout: page.layout ?? existing?.layout,
             createdAt: page.createdAt,
             updatedAt: page.updatedAt,
             strokes: page.strokes.map(strokeDTO(from:)) + surviving,

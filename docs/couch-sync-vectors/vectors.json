@@ -4634,6 +4634,1076 @@
         "updatedAt": "2026-09-01T10:05:00Z",
         "updatedBy": "boox"
       }
+    },
+    {
+      "name": "derive-page-split-child",
+      "kind": "derive",
+      "why": "The split's own seed, pinned here beside the journal's so the shared derivation has one home. Same value the split vectors already depend on.",
+      "seed": "notable-page-split:page-a:1",
+      "expected": {
+        "id": "82b2c548-bbc8-c002-5ea9-3e81ce812b9e"
+      }
+    },
+    {
+      "name": "derive-journal-notebook",
+      "kind": "derive",
+      "why": "Two devices that both start a journal offline must land on one notebook, so the id is computed from the year rather than minted. Four digits, zero-padded.",
+      "seed": "notable-journal:2026",
+      "expected": {
+        "id": "57008734-1905-d544-39b5-4e1806e663df"
+      }
+    },
+    {
+      "name": "derive-journal-day",
+      "kind": "derive",
+      "why": "The whole identity of a day page is its date: no device, no notebook, no counter. That is what makes two devices writing Saturday offline write to one page instead of two.",
+      "seed": "notable-journal-day:2026-09-19",
+      "expected": {
+        "id": "546732d7-b5b7-3e3a-36c2-5289f669308c"
+      }
+    },
+    {
+      "name": "derive-journal-folder",
+      "kind": "derive",
+      "why": "The folder the year notebooks are filed in, derived for the same reason they are.",
+      "seed": "notable-journal-folder",
+      "expected": {
+        "id": "21de662f-e961-4ece-7cf5-f3c8b6f937ad"
+      }
+    },
+    {
+      "name": "page-scroll-layout-survives-undeclaring-peer",
+      "kind": "page",
+      "why": "A peer that predates `layout` drops the field. If winning the envelope let it un-declare a scroll page, one sync from an older build would re-bind a journal entry to its sheet and the next split would divide it. So the winner's value is used only when it has one \u2014 the same rule as pageWidth, with a sharper consequence.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad",
+        "pageWidth": 1400,
+        "pageHeight": 4000,
+        "layout": "scroll"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:05:00Z",
+        "updatedBy": "boox",
+        "pageWidth": 1400,
+        "pageHeight": 4000
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:05:00Z",
+        "updatedBy": "boox",
+        "pageWidth": 1400,
+        "pageHeight": 4000,
+        "layout": "scroll"
+      }
+    },
+    {
+      "name": "page-scroll-layout-lww-when-both-declare",
+      "kind": "page",
+      "why": "When both sides have an opinion the later write wins, like any other scalar. Turning a journal entry back into an ordinary sheet is a thing a writer may do; it is only silent erasure by an ignorant peer that is forbidden.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad",
+        "pageWidth": 1400,
+        "pageHeight": 4000,
+        "layout": "scroll"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:05:00Z",
+        "updatedBy": "boox",
+        "pageWidth": 1400,
+        "pageHeight": 1980,
+        "layout": "sheet"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:05:00Z",
+        "updatedBy": "boox",
+        "pageWidth": 1400,
+        "pageHeight": 1980,
+        "layout": "sheet"
+      }
+    },
+    {
+      "name": "page-layout-in-scalar-key",
+      "kind": "page",
+      "why": "Two pages written in the same millisecond by the same device, differing only in layout. The last-resort tiebreak must see the field, or the two apps could pick different winners and never converge. \"scroll\" sorts before \"sheet\", so b wins.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad",
+        "pageWidth": 1400,
+        "pageHeight": 4000,
+        "layout": "scroll"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad",
+        "pageWidth": 1400,
+        "pageHeight": 4000,
+        "layout": "sheet"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad",
+        "pageWidth": 1400,
+        "pageHeight": 4000,
+        "layout": "sheet"
+      }
+    },
+    {
+      "name": "page-journal-day-both-create-union",
+      "kind": "page",
+      "why": "Both devices opened the same day offline. Because the page id is derived from the date they wrote to one document, so this is an ordinary union rather than two rival pages: the ink from both survives, createdAt falls back to the earlier, and the scroll declaration is kept.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-09-19T09:00:00Z",
+            "updatedAt": "2026-09-19T09:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T09:00:00Z",
+        "updatedBy": "ipad",
+        "title": "2026-09-19",
+        "pageWidth": 1400,
+        "pageHeight": 2000,
+        "layout": "scroll"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s2",
+            "createdAt": "2026-09-19T11:00:00Z",
+            "updatedAt": "2026-09-19T11:00:00Z",
+            "deviceId": "boox",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 300,
+            "bottom": 310,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T08:40:00Z",
+        "updatedAt": "2026-09-19T11:00:00Z",
+        "updatedBy": "boox",
+        "title": "2026-09-19",
+        "pageWidth": 1400,
+        "pageHeight": 2000,
+        "layout": "scroll"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-09-19T09:00:00Z",
+            "updatedAt": "2026-09-19T09:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          },
+          {
+            "id": "s2",
+            "createdAt": "2026-09-19T11:00:00Z",
+            "updatedAt": "2026-09-19T11:00:00Z",
+            "deviceId": "boox",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 300,
+            "bottom": 310,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T08:40:00Z",
+        "updatedAt": "2026-09-19T11:00:00Z",
+        "updatedBy": "boox",
+        "title": "2026-09-19",
+        "pageWidth": 1400,
+        "pageHeight": 2000,
+        "layout": "scroll"
+      }
+    },
+    {
+      "name": "notebook-journal-same-day-created-on-both",
+      "kind": "notebook",
+      "why": "Both devices added the same derived day id to the year's notebook while offline. The ordered add-wins union sees one id, not two, so the day appears once \u2014 that is the whole payoff of deriving it. Note the result is not in date order: the winner's ordering is authoritative, so a writer inserts a new day at its sorted position and a reader of a journal sorts by page title anyway.",
+      "a": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "Journal 2026",
+        "pageIds": [
+          "f6909117-de07-341c-0371-03925fb7335a",
+          "546732d7-b5b7-3e3a-36c2-5289f669308c"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-09-18T08:00:00Z",
+        "updatedAt": "2026-09-19T09:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "Journal 2026",
+        "pageIds": [
+          "546732d7-b5b7-3e3a-36c2-5289f669308c"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-09-18T08:00:00Z",
+        "updatedAt": "2026-09-19T09:05:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "notebook",
+        "schema": 1,
+        "title": "Journal 2026",
+        "pageIds": [
+          "546732d7-b5b7-3e3a-36c2-5289f669308c",
+          "f6909117-de07-341c-0371-03925fb7335a"
+        ],
+        "deletedPageIds": [],
+        "parentFolderId": null,
+        "defaultBackground": "blank",
+        "defaultBackgroundType": "native",
+        "createdAt": "2026-09-18T08:00:00Z",
+        "updatedAt": "2026-09-19T09:05:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-link-block-edit-lww",
+      "kind": "page",
+      "why": "The same link re-pointed on both devices. A link is an ordinary block, so the later write wins it whole \u2014 target and bounds together, never half of each.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-a",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:00:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-b",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:04:00Z",
+            "deviceId": "boox",
+            "targetPageId": "page-7"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:04:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-b",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:04:00Z",
+            "deviceId": "boox",
+            "targetPageId": "page-7"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:04:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-link-block-delete-beats-edit",
+      "kind": "page",
+      "why": "Removing a link is a block tombstone and wins over a concurrent edit of it, like every other block. What it never does is take the ink with it: the strokes the link named are still on the page.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-09-19T09:00:00Z",
+            "updatedAt": "2026-09-19T09:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-a",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:04:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:04:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-09-19T09:00:00Z",
+            "updatedAt": "2026-09-19T09:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [
+          {
+            "id": "l1",
+            "deletedAt": "2026-09-19T10:00:00Z"
+          }
+        ],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-09-19T09:00:00Z",
+            "updatedAt": "2026-09-19T09:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [
+          {
+            "id": "l1",
+            "deletedAt": "2026-09-19T10:00:00Z"
+          }
+        ],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:04:00Z",
+        "updatedBy": "ipad"
+      }
+    },
+    {
+      "name": "page-link-block-same-instant-tiebreak-includes-target",
+      "kind": "page",
+      "why": "Two writes of one link in the same millisecond, differing only in where it points. The block tiebreak has to read the target fields or the two apps could keep different links under one id and never converge. Byte-greater wins, so nb-z does.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-a",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:00:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-z",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:00:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-z",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:00:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad"
+      }
+    },
+    {
+      "name": "page-link-block-keeps-ids-of-tombstoned-strokes",
+      "kind": "page",
+      "why": "One of the two strokes a link named was erased on the other device. The stroke goes; the id stays in strokeIds, unfiltered, exactly as an ink block's does \u2014 readers skip what is not there. Filtering would make the merge lossy the moment an erase and an undo crossed.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-09-19T09:00:00Z",
+            "updatedAt": "2026-09-19T09:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          },
+          {
+            "id": "s2",
+            "createdAt": "2026-09-19T09:01:00Z",
+            "updatedAt": "2026-09-19T09:01:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 40,
+            "bottom": 50,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1",
+              "s2"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-a",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:00:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-09-19T09:00:00Z",
+            "updatedAt": "2026-09-19T09:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [
+          {
+            "id": "s2",
+            "deletedAt": "2026-09-19T10:02:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1",
+              "s2"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-a",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:00:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:02:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-09-19T09:00:00Z",
+            "updatedAt": "2026-09-19T09:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 10,
+            "bottom": 20,
+            "left": 5,
+            "right": 15,
+            "pointsData": "AAA="
+          }
+        ],
+        "deletedStrokes": [
+          {
+            "id": "s2",
+            "deletedAt": "2026-09-19T10:02:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "",
+            "strokeIds": [
+              "s1",
+              "s2"
+            ],
+            "x": 200,
+            "y": 1480,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-a",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T10:00:00Z",
+            "deviceId": "ipad"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T09:00:00Z",
+        "updatedAt": "2026-09-19T10:02:00Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "split-scroll-page-is-never-divided",
+      "kind": "split",
+      "why": "A page that declares it scrolls is exempt \u2014 rule 0. The ink here starts well past the sheet, which on any other page would make three of them; this one comes back as itself, with the ink where it was, no derived children and no tombstones. The page is also returned untouched rather than merely undivided: stamping the sheet height onto it would contradict the declaration it just made.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-09-19T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-j",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 3000,
+        "layout": "scroll",
+        "scroll": 0,
+        "strokes": [
+          {
+            "id": "s2",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "ipad",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 1100,
+            "bottom": 1200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF96dUVfcFIAgACA"
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T06:00:00Z",
+        "updatedAt": "2026-09-19T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-j",
+          "strokes": [
+            {
+              "id": "s2",
+              "top": 1100,
+              "bottom": 1200,
+              "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF96dUVfcFIAgACA"
+            }
+          ],
+          "images": [],
+          "blocks": [],
+          "pageWidth": 1400,
+          "pageHeight": 3000
+        }
+      ]
+    },
+    {
+      "name": "split-link-block-divides-like-an-image",
+      "kind": "split",
+      "why": "On a page that does *not* scroll, a link is a positioned block and divides like any other: it counts toward the sheet count, travels to the sheet its y falls in, has its y shifted there, and leaves a tombstone on sheet 0. Its target travels with it \u2014 a link cut loose from what it points at would be worse than no link.",
+      "sheet": {
+        "width": 1400,
+        "height": 1000
+      },
+      "now": "2026-09-19T12:00:00Z",
+      "page": {
+        "type": "page",
+        "schema": 1,
+        "id": "page-p",
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "scroll": 0,
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "l1",
+            "kind": "link",
+            "orderKey": "a",
+            "strokeIds": [
+              "s1"
+            ],
+            "x": 200,
+            "y": 2100,
+            "width": 640,
+            "height": 210,
+            "targetNotebookId": "nb-target",
+            "createdAt": "2026-09-19T09:30:00Z",
+            "updatedAt": "2026-09-19T06:00:00Z",
+            "deviceId": "ipad",
+            "targetPageId": "page-7"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-09-19T06:00:00Z",
+        "updatedAt": "2026-09-19T06:00:00Z",
+        "deviceId": "ipad"
+      },
+      "expected": [
+        {
+          "id": "page-p",
+          "strokes": [],
+          "images": [],
+          "blocks": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000,
+          "deletedBlocks": [
+            {
+              "id": "l1",
+              "deletedAt": "2026-09-19T12:00:00Z"
+            }
+          ]
+        },
+        {
+          "id": "472b2466-8eee-8e8e-a8a7-42e3bb315e6e",
+          "strokes": [],
+          "images": [],
+          "blocks": [],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        },
+        {
+          "id": "a7243185-73fb-a638-6eb9-f16679773888",
+          "strokes": [],
+          "images": [],
+          "blocks": [
+            {
+              "id": "l1",
+              "y": 100,
+              "targetNotebookId": "nb-target",
+              "targetPageId": "page-7"
+            }
+          ],
+          "pageWidth": 1400,
+          "pageHeight": 1000
+        }
+      ]
     }
   ]
 }
