@@ -202,6 +202,18 @@ final class NotebookStore: ObservableObject {
         return try decoder.decode(PageFile.self, from: data)
     }
 
+    /// `loadPage` for a caller off the main actor — the editor reading a neighbouring page ahead
+    /// of the scroll. An inked page file is megabytes of JSON, and decoding it on the main thread
+    /// in the middle of a scroll is a dropped frame per page.
+    ///
+    /// Its own decoder, because the store's belongs to the main actor. Safe against a concurrent
+    /// write: every writer replaces the file atomically, so a read sees the old file or the new
+    /// one, never half of each.
+    nonisolated func readPage(notebookId: String, pageId: String) throws -> PageFile {
+        let url = notebookDirURL(notebookId).appendingPathComponent("pages/\(pageId).json")
+        return try JSONDecoder().decode(PageFile.self, from: Data(contentsOf: url))
+    }
+
     /// A cheap revision stamp for one page: when its file was last written. What the thumbnail
     /// cache keys on, so it has to move when the page changes — and only then.
     ///
