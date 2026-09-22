@@ -1148,7 +1148,12 @@ struct EditorCanvasView: UIViewRepresentable {
             // opens under the same scroll, which crosses it on its own if the finger keeps
             // going. Guarded by the same threshold a page turn used, so an ordinary scroll that
             // merely reaches the bottom does not silently grow the notebook.
-            if !container.seamActive, scrollView.isDragging {
+            //
+            // And only while a finger is actually on the glass. `isDragging` stays set while a
+            // released flick decelerates, and now that momentum carries through every seam, a
+            // hard flick from the front of the notebook would fly off the end of the last page
+            // and append a blank one nobody asked for. Growing the notebook is a deliberate pull.
+            if !container.seamActive, scrollView.isTracking, scrollView.isDragging {
                 let past = Self.overshoot(
                     offset: scrollView.contentOffset.y,
                     contentLength: scrollView.contentSize.height,
