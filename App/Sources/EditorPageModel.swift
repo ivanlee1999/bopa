@@ -25,9 +25,14 @@ final class EditorPageModel: NSObject, ObservableObject {
     @Published private(set) var contentRevision = 0
     @Published private(set) var loadError: String?
     @Published var saveError: String?
-    /// The top of the page after this one, drawn below the seam under continuous scrolling.
-    /// Nil at the end of the notebook — there is nothing below the last page to look at.
-    @Published private(set) var nextPagePreview: NextPagePreview?
+    /// The page after this one, drawn below the seam under continuous scrolling. Nil at the end
+    /// of the notebook — there is nothing below the last page to look at — and while the first
+    /// picture of a new neighbour is still being prepared.
+    @Published private(set) var nextPagePreview: PagePreview?
+    /// The page before this one, drawn above the top of the sheet: the mirror of
+    /// `nextPagePreview`, so scrolling up runs on into it the way scrolling down runs on into the
+    /// next.
+    @Published private(set) var previousPagePreview: PagePreview?
     /// The neighbouring page ids, as of the last load. What the seam commits to, and what
     /// scrolling off the top enters.
     @Published private(set) var nextPageId: String?
@@ -88,13 +93,19 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// loaded, and a sentinel offset would be published (and saved) as the page's scroll
     /// position before the canvas ever laid out and clamped it.
     enum EntryScroll {
+        /// Measured from the top of the page being entered.
         case carried(CGFloat)
-        case end
+        /// Measured from the *bottom* of the page being entered — how a backward crossing
+        /// arrives, since it knows where the view sits relative to the page it is leaving, whose
+        /// top is the end of this one.
+        case fromEnd(CGFloat)
 
+        /// Either can be negative: a page with a page above it scrolls into the room above its
+        /// top, and a crossing may land there.
         func resolved(against page: PageFile) -> CGFloat {
             switch self {
-            case .carried(let y): return max(y, 0)
-            case .end: return CGFloat(page.pageSize.height)
+            case .carried(let y): return y
+            case .fromEnd(let y): return CGFloat(page.pageSize.height) + y
             }
         }
     }
@@ -269,8 +280,15 @@ final class EditorPageModel: NSObject, ObservableObject {
 
     /// - Returns: whether the page loaded. Callers that are retrying something use it; the
     ///   ordinary ones do not, because `loadError` already puts the failure on screen.
+    ///
+    /// - Parameter persistingScroll: whether the page being left should be written just because
+    ///   its scroll position moved. A seam crossing passes false: scrolling through the notebook
+    ///   is not an edit, and writing a page file for it put a disk write, a library rescan and a
+    ///   sync push into the middle of every scroll that crossed a page — and pushed a new revision
+    ///   of the page to the other device for no change a reader could see. Unsaved ink is written
+    ///   either way.
     @discardableResult
-    func open(pageId newPageId: String) -> Bool {
+    func open(pageId newPageId: String, persistingScroll: Bool = true) -> Bool {
         // Every route off the current page runs through here, so this is where its debounced
         // work is flushed. The navigator panel's jump used to be the one switch that never did:
         // anything drawn inside the 2s re-arming window was silently lost, along with the
@@ -283,19 +301,33 @@ final class EditorPageModel: NSObject, ObservableObject {
         entryScroll = nil
         // A failed flush must keep the current canvas alive. Loading another page here used
         // to replace the unsaved drawing and clear `dirty` despite the save error.
-        guard saveNow() else { return false }
+        guard saveNow(persistingScroll: persistingScroll) else { return false }
         guard let store else { return false }
         do {
-            let loaded = try store.loadPage(notebookId: notebookId, pageId: newPageId)
+            let loaded: PageFile
+            // Read ahead while the reader was on a neighbouring page, and still exactly what is
+            // on disk: open from that rather than reading and decoding the file again. This is
+            // what keeps a seam crossing — which lands here from inside a scroll callback — from
+            // stalling the scroll. Anything else reads the file as it always did.
+            if let ready = prepared[newPageId],
+               ready.revision == store.pageRevision(notebookId: notebookId, pageId: newPageId)
+            {
+                loaded = ready.file
+                drawing = ready.drawing
+                pageBackground = ready.background
+                pageImages = ready.images
+            } else {
+                loaded = try store.loadPage(notebookId: notebookId, pageId: newPageId)
+                drawing = PencilKitBridge.drawing(from: loaded.strokes)
+                let notebookDir = store.notebookDirURL(notebookId)
+                pageBackground = BackgroundRenderer.image(
+                    for: loaded,
+                    notebookDir: notebookDir,
+                    storeRoot: store.rootURL)
+                pageImages = BackgroundRenderer.pageImages(for: loaded, notebookDir: notebookDir)
+            }
             page = loaded
             pageId = newPageId
-            drawing = PencilKitBridge.drawing(from: loaded.strokes)
-            let notebookDir = store.notebookDirURL(notebookId)
-            pageBackground = BackgroundRenderer.image(
-                for: loaded,
-                notebookDir: notebookDir,
-                storeRoot: store.rootURL)
-            pageImages = BackgroundRenderer.pageImages(for: loaded, notebookDir: notebookDir)
             shownSurfaces = SurfaceState(of: loaded)
             canvasStrokeIDs = Set(loaded.strokes.map(\.id))
             blockBaseline = Set(loaded.blocks.map(\.id))
@@ -339,18 +371,19 @@ final class EditorPageModel: NSObject, ObservableObject {
     func enterNextPageAcrossSeam(carrying scroll: CGFloat) -> Bool {
         guard let nextPageId else { return false }
         entryScroll = .carried(scroll)
-        return open(pageId: nextPageId)
+        return open(pageId: nextPageId, persistingScroll: false)
     }
 
-    /// Enters the previous page at its own end — the position where this page is what shows
-    /// under its seam, so scrolling up reads as one continuous surface rather than a jump.
+    /// Enters the page above, at the position that shows what is on screen now: `offset` is
+    /// where the view sits measured from the top of the page being left, which is the bottom of
+    /// the one being entered.
     /// - Returns: whether a page was actually entered — false at the first page, which is the
     ///   case that used to leave the caller's latch stuck for the rest of the session.
     @discardableResult
-    func enterPreviousPageAtItsEnd() -> Bool {
+    func enterPreviousPageAcrossSeam(carrying offset: CGFloat) -> Bool {
         guard let previousPageId else { return false }
-        entryScroll = .end
-        return open(pageId: previousPageId)
+        entryScroll = .fromEnd(offset)
+        return open(pageId: previousPageId, persistingScroll: false)
     }
 
     /// Files ink drawn below the seam onto the page it was drawn *on*, rather than leaving it
@@ -389,23 +422,58 @@ final class EditorPageModel: NSObject, ObservableObject {
             saveError = String(describing: error)
             return nil
         }
-        // Re-render the strip so what is under the seam matches what was just written there.
-        previewedNeighbor = nil
+        // The neighbour's file just changed, so its revision did: this re-prepares it, and the
+        // picture under the seam catches up with what was just written there.
         refreshNeighbors()
         let kept = drawing.strokes.filter { $0.renderBounds.minY < sheetHeight }
         return PKDrawing(strokes: kept)
     }
 
-    /// Re-reads the neighbours of the open page and renders the strip drawn under the seam.
+    /// Files ink drawn in the room above the page onto the page it was drawn *on* — the one
+    /// before — the mirror of `fileInkBelowTheSeam`.
+    ///
+    /// Only the strokes the caller names as just drawn are candidates. Ink already on the page
+    /// that happens to start a little above its top — a page from the BOOX, or from before
+    /// sheets were agreed — has always been this page's, and lifting the pencil somewhere else
+    /// on the page must not move it.
+    ///
+    /// Same top-edge rule as below the seam: a stroke whose top edge is above this page's top
+    /// belongs to the page above, and travels whole. Not undoable, for the same reason.
+    ///
+    /// - Returns: the drawing with those strokes removed, or nil when none crossed.
+    func fileInkAboveTheTop(from drawing: PKDrawing, newStrokes: Range<Int>) -> PKDrawing? {
+        guard let previousPageId, let store else { return nil }
+        let candidates = newStrokes.clamped(to: drawing.strokes.indices)
+        let above = Set(candidates.filter { drawing.strokes[$0].renderBounds.minY < 0 })
+        guard !above.isEmpty else { return nil }
+        do {
+            var neighbor = try store.loadPage(notebookId: notebookId, pageId: previousPageId)
+            let moved = PKDrawing(strokes: above.sorted().map { drawing.strokes[$0] })
+                .transformed(
+                    using: CGAffineTransform(
+                        translationX: 0, y: CGFloat(neighbor.pageSize.height)))
+            let existing = neighbor.strokes
+            neighbor.strokes = existing + PencilKitBridge.strokeDTOs(from: moved)
+            _ = try store.savePage(neighbor, baselineStrokeIDs: Set(existing.map(\.id)))
+        } catch {
+            saveError = String(describing: error)
+            return nil
+        }
+        refreshNeighbors()
+        return PKDrawing(
+            strokes: drawing.strokes.enumerated()
+                .filter { !above.contains($0.offset) }
+                .map(\.element))
+    }
+
+    /// Re-reads the neighbours of the open page and makes sure each is prepared.
     ///
     /// The ids are settled synchronously — they are read from a manifest already in memory, and
-    /// everything that decides navigation depends on them. The *picture* is not: reading a page
-    /// file and rasterizing a strip of it is tens of milliseconds, and this is called from a
-    /// store notification that can arrive in the middle of a drag (appending a page off the end
-    /// of the notebook does exactly that). Doing it inline blocked the main thread hard enough
-    /// that the simulator could not even synthesize the rest of the gesture. So the strip is
-    /// rendered off the main actor and published when it is ready; until then the seam shows
-    /// blank paper, which is what a freshly appended page looks like anyway.
+    /// everything that decides navigation depends on them. The pages themselves are not: reading
+    /// a page file, rebuilding its ink and rasterizing a picture of it is tens of milliseconds,
+    /// and this runs right after a crossing, while the scroll that made it is still moving. So
+    /// each neighbour is prepared off the main actor and published when it is ready. Until then
+    /// the seam shows the last picture of that page if there is one, or blank paper.
     private func refreshNeighbors() {
         guard let store, let pageId,
               let manifest = store.manifest(id: notebookId),
@@ -413,83 +481,81 @@ final class EditorPageModel: NSObject, ObservableObject {
         else {
             nextPageId = nil
             previousPageId = nil
-            nextPagePreview = nil
-            previewTask?.cancel()
+            for job in preparing.values { job.task.cancel() }
+            preparing = [:]
+            prepared = [:]
+            publishPreviews()
             return
         }
-        previousPageId = index > 0 ? manifest.pageIds[index - 1] : nil
+        let previous = index > 0 ? manifest.pageIds[index - 1] : nil
         let following = index + 1 < manifest.pageIds.count ? manifest.pageIds[index + 1] : nil
+        previousPageId = previous
         nextPageId = following
-        guard let following else {
-            nextPagePreview = nil
-            previewTask?.cancel()
-            previewedNeighbor = nil
-            return
+
+        // The open page is kept too: unedited, its prepared copy is still exactly the file, and
+        // it is the page the next crossing will leave — so scrolling back to it is instant.
+        let wanted = Set([previous, pageId, following].compactMap { $0 })
+        prepared = prepared.filter { wanted.contains($0.key) }
+        for (id, job) in preparing where !wanted.contains(id) {
+            job.task.cancel()
+            preparing[id] = nil
         }
-        // Already rendered for this neighbour *as it currently stands*: re-reading it on every
-        // store notification would rasterize a strip per sync tick. Keyed on the file's
-        // revision as well as its id, so ink that arrives on the neighbour — written on the
-        // BOOX and synced in, or drawn there and scrolled back to — is picked up rather than
-        // frozen at whatever the strip held the first time it was rendered.
-        let revision = store.pageRevision(notebookId: notebookId, pageId: following)
-        guard previewedNeighbor?.id != following || previewedNeighbor?.revision != revision
-        else { return }
-        previewedNeighbor = (id: following, revision: revision)
-        previewTask?.cancel()
-        // The page below the seam changed identity; what is on screen belongs to the old one.
-        if nextPagePreview?.pageId != following { nextPagePreview = nil }
-        previewTask = Task { [notebookId] in
-            let rendered = await Self.renderPreview(
-                of: following, notebookId: notebookId, store: store)
-            guard !Task.isCancelled, previewedNeighbor?.id == following else { return }
-            if rendered == nil {
-                // Nothing came back — an unreadable file, or a page with nothing in its strip.
-                // Do not hold the latch shut on a failure: a page that could not be read must be
-                // retried on the next notification rather than previewing as blank for ever.
-                previewedNeighbor = nil
-            }
-            nextPagePreview = rendered
+        for neighbor in [previous, following].compactMap({ $0 }) {
+            prepare(neighbor, store: store)
         }
+        publishPreviews()
     }
 
-    /// The neighbour the current preview (or the render in flight) is for, and the revision it
-    /// was rendered from. Kept separately from `nextPagePreview`, which is nil while a render is
-    /// in flight and for a page with nothing to show.
-    private var previewedNeighbor: (id: String, revision: String)?
-    private var previewTask: Task<Void, Never>?
-
-    /// Reads a neighbour off disk and renders what the seam shows of it, off the main actor.
-    ///
-    /// A page that cannot be read previews as blank paper rather than failing anything: this is
-    /// only a picture of where the scroll is heading, and the page itself is loaded properly
-    /// when the scroll commits to it.
-    private nonisolated static func renderPreview(
-        of neighborId: String, notebookId: String, store: NotebookStore
-    ) async -> NextPagePreview? {
-        let read: (PageFile, URL, URL)? = await MainActor.run {
-            guard let file = try? store.loadPage(notebookId: notebookId, pageId: neighborId)
-            else { return nil }
-            return (file, store.notebookDirURL(notebookId), store.rootURL)
+    /// Starts reading `id` ahead of the scroll, unless a copy of its current revision is already
+    /// held or on its way. Keyed on the file's revision as well as its id, so ink that arrives
+    /// on a neighbour — written on the BOOX and synced in, or filed there across a seam — is
+    /// picked up rather than frozen at whatever the page held the first time it was read.
+    private func prepare(_ id: String, store: NotebookStore) {
+        let revision = store.pageRevision(notebookId: notebookId, pageId: id)
+        guard prepared[id]?.revision != revision, preparing[id]?.revision != revision
+        else { return }
+        preparing[id]?.task.cancel()
+        let task = Task { [weak self, notebookId] in
+            let ready = await Task.detached(priority: .userInitiated) {
+                PreparedPage.read(pageId: id, notebookId: notebookId, store: store)
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            self.preparing[id] = nil
+            // Nothing came back — an unreadable or missing file. Nothing is recorded, so the next
+            // refresh tries again rather than the neighbour staying blank for good.
+            guard let ready,
+                  [self.pageId, self.previousPageId, self.nextPageId].contains(id)
+            else { return }
+            self.prepared[id] = ready
+            self.publishPreviews()
         }
-        guard let (file, notebookDir, storeRoot) = read else { return nil }
+        preparing[id] = (revision, task)
+    }
 
-        let background = PageBackground(
-            background: file.background, backgroundType: file.backgroundType)
-        var template = NativeTemplate.blank
-        if case .native(let native) = background, native.isDrawable { template = native }
-        let strip = NextPagePreviewRenderer.content(
-            strokes: PencilKitBridge.drawing(from: file.strokes),
-            images: BackgroundRenderer.pageImages(for: file, notebookDir: notebookDir),
-            blocks: file.blocks,
-            pageSize: file.pageSize)
-        return NextPagePreview(
-            pageId: neighborId,
-            pageSize: file.pageSize,
-            template: template,
-            content: strip?.image,
-            contentHeight: strip?.height ?? 0,
-            background: BackgroundRenderer.image(
-                for: file, notebookDir: notebookDir, storeRoot: storeRoot))
+    /// Puts the prepared pictures of the two neighbours on screen. A neighbour whose newest
+    /// revision is still being prepared keeps showing its previous picture meanwhile: a moment
+    /// of the page as it was reads far better than a flash of blank paper where ink should be.
+    private func publishPreviews() {
+        let next = nextPageId.flatMap { prepared[$0]?.preview }
+        let previous = previousPageId.flatMap { prepared[$0]?.preview }
+        // Compared first: every assignment to a published property re-renders the editor, and
+        // this runs on every store notification.
+        if next != nextPagePreview { nextPagePreview = next }
+        if previous != previousPagePreview { previousPagePreview = previous }
+    }
+
+    /// Pages read ahead of the scroll: the neighbours of the open page, and the open page itself
+    /// for as long as its copy is current. Never opened from once the file has moved on.
+    private var prepared: [String: PreparedPage] = [:]
+    /// Reads in flight, and the revision each was started for.
+    private var preparing: [String: (revision: String, task: Task<Void, Never>)] = [:]
+
+    /// Waits for every read-ahead in flight. For tests, which otherwise could not tell a
+    /// neighbour that is not ready yet from one that will never be.
+    func waitForNeighbors() async {
+        while let job = preparing.values.first {
+            await job.task.value
+        }
     }
 
     /// Puts ink sync wrote underneath the editor onto the canvas.
@@ -779,8 +845,11 @@ final class EditorPageModel: NSObject, ObservableObject {
 
     /// Whether the page is safely saved. Navigation must honour a failure; background flushes
     /// keep the model alive and can retry when the app becomes active again.
+    ///
+    /// - Parameter persistingScroll: false writes only when there is unsaved content — the scroll
+    ///   position alone is not worth a write. See `open(pageId:persistingScroll:)`.
     @discardableResult
-    func saveNow() -> Bool {
+    func saveNow(persistingScroll: Bool = true) -> Bool {
         guard !savingPage else { return false }
         saveTask?.cancel()
         if recoveryPending {
@@ -793,7 +862,7 @@ final class EditorPageModel: NSObject, ObservableObject {
         }
         guard var page, let store else { return !dirty }
         let scroll = max(0, Int(liveState.pageY.rounded()))
-        guard dirty || scroll != page.scroll else { return true }
+        guard dirty || (persistingScroll && scroll != page.scroll) else { return true }
         // What the canvas held going into this save. `savePage` needs it to tell ink the user
         // erased from ink that arrived from the BOOX while this page was open — the file cannot
         // answer that, because sync may have rewritten it since.

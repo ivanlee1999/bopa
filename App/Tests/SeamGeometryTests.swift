@@ -23,14 +23,25 @@ final class SeamGeometryTests: XCTestCase {
             a4Height)
     }
 
-    /// With one below, a whole viewport of room — enough for the screen to fill with the next
-    /// page before the switch commits.
-    func testAPageWithANextPageCanBeScrolledAViewportPastItsEnd() {
+    /// With one below, room for the screen to fill with the next page before the switch
+    /// commits — and a second viewport past that, so a fast scroll still in motion when the
+    /// switch is asked for does not reach the end of the room and bounce before the page lands.
+    func testAPageWithANextPageCanBeScrolledTwoViewportsPastItsEnd() {
         XCTAssertEqual(
             SeamGeometry.scrollExtent(
                 contentHeight: a4Height, sheetHeight: a4Height, viewportHeight: viewport,
                 hasNextPage: true),
-            a4Height + viewport)
+            a4Height + 2 * viewport)
+    }
+
+    /// The room above the page mirrors the room below it, and exists only when there is a page
+    /// above to show — the first page of a notebook starts at its paper.
+    func testTheRoomAboveMirrorsTheRoomBelow() {
+        XCTAssertEqual(
+            SeamGeometry.leadingRoom(viewportHeight: viewport, hasPreviousPage: true),
+            2 * viewport)
+        XCTAssertEqual(
+            SeamGeometry.leadingRoom(viewportHeight: viewport, hasPreviousPage: false), 0)
     }
 
     /// A page holding legacy ink below its sheet keeps every bit of the reach that shows it.
@@ -81,39 +92,110 @@ final class SeamGeometryTests: XCTestCase {
         // Exactly at the seam: the next page opens at its very top.
         XCTAssertEqual(
             SeamGeometry.carriedScroll(offsetY: a4Height, sheetHeight: a4Height), 0)
-        // Never negative, however the scroll was clamped on the way in.
+        // A scroll that turned back while the page was on its way lands in the room above the
+        // entered page — the page just left is drawn there, so that is still the same picture.
         XCTAssertEqual(
-            SeamGeometry.carriedScroll(offsetY: a4Height - 50, sheetHeight: a4Height), 0)
+            SeamGeometry.carriedScroll(offsetY: a4Height - 50, sheetHeight: a4Height), -50)
     }
 
     // MARK: Backwards
 
-    /// Scrolling up past the top brings the previous page in. Measured against the inset, not
-    /// zero: a page narrower than the viewport is centred and rests at a negative offset, which
-    /// read against zero looks like a permanent pull backwards.
-    func testScrollingAboveTheTopEntersThePreviousPage() {
-        let threshold: CGFloat = 48
-        func pulled(_ offsetY: CGFloat, inset: CGFloat = 0) -> Bool {
+    /// Scrolling up brings the page above in, and the switch to it commits once this page has
+    /// left the bottom of the screen — the mirror of the forward rule, and just as independent of
+    /// whether a finger is down, so a flick upwards carries on into the page above.
+    func testThePreviousPageTakesOverWhenThisPageLeavesTheBottomOfTheScreen() {
+        XCTAssertFalse(
+            SeamGeometry.shouldEnterPreviousPage(offsetY: -viewport + 1, viewportHeight: viewport))
+        XCTAssertTrue(
+            SeamGeometry.shouldEnterPreviousPage(offsetY: -viewport, viewportHeight: viewport))
+        XCTAssertTrue(
             SeamGeometry.shouldEnterPreviousPage(
-                offsetY: offsetY, leadingInset: inset, threshold: threshold)
-        }
-        XCTAssertTrue(pulled(-60))
-        XCTAssertFalse(pulled(-10), "a short pull is not a request for the previous page")
-        XCTAssertFalse(pulled(1))
+                offsetY: -viewport - 200, viewportHeight: viewport))
     }
 
-    /// Sitting at the top is where a page rests the entire time it is not scrolled — including
-    /// while the finger is dragging sideways. Without a threshold that resting position read as
-    /// a backward pull, and any drag at the top walked the reader back through the notebook.
-    func testRestingAtTheTopIsNotAPullBackwards() {
-        func pulled(_ offsetY: CGFloat, inset: CGFloat) -> Bool {
-            SeamGeometry.shouldEnterPreviousPage(
-                offsetY: offsetY, leadingInset: inset, threshold: 48)
+    /// Resting at the top of a page — where it sits the whole time it is not scrolled, including
+    /// while a finger drags sideways — and an ordinary pull past it are nowhere near the rule, so
+    /// nothing walks the reader backwards through the notebook on its own.
+    func testRestingOrPeekingAboveTheTopIsNotACrossing() {
+        XCTAssertFalse(SeamGeometry.shouldEnterPreviousPage(offsetY: 0, viewportHeight: viewport))
+        XCTAssertFalse(
+            SeamGeometry.shouldEnterPreviousPage(offsetY: -300, viewportHeight: viewport))
+        XCTAssertFalse(SeamGeometry.shouldEnterPreviousPage(offsetY: -300, viewportHeight: 0))
+    }
+
+    /// The page above opens showing exactly what is on screen: the position measured from the
+    /// top of the page being left is the same position measured from the end of the page above.
+    func testTheScrollIsCarriedOntoThePageAbove() {
+        XCTAssertEqual(
+            SeamGeometry.scrollOnPreviousPage(
+                offsetY: -viewport, previousSheetHeight: a4Height),
+            a4Height - viewport)
+    }
+
+    /// The two crossings cannot fire back to back: landing on either side of a seam puts the view
+    /// a whole viewport away from the crossing that would undo it.
+    func testCrossingOneWayDoesNotImmediatelyCrossBack() {
+        // Forward: lands at the top of the next page.
+        let forward = SeamGeometry.carriedScroll(offsetY: a4Height, sheetHeight: a4Height)
+        XCTAssertFalse(
+            SeamGeometry.shouldEnterPreviousPage(offsetY: forward, viewportHeight: viewport))
+        // Backward: lands with the page left just below the screen.
+        let backward = SeamGeometry.scrollOnPreviousPage(
+            offsetY: -viewport, previousSheetHeight: a4Height)
+        XCTAssertFalse(SeamGeometry.shouldEnterNextPage(offsetY: backward, sheetHeight: a4Height))
+    }
+}
+
+/// What a drawn layer keeps rendered while the page scrolls under it.
+final class LayerBufferTests: XCTestCase {
+    private let page = CGRect(x: 0, y: 0, width: 1000, height: 1400)
+    private let margin = CGSize(width: 100, height: 500)
+
+    private func screen(atY y: CGFloat) -> CGRect {
+        CGRect(x: 0, y: y, width: 1000, height: 1000)
+    }
+
+    /// Scrolling within what is held changes nothing, which is the whole point: no redraw.
+    func testScrollingInsideTheHeldRegionKeepsIt() {
+        var buffer = LayerBuffer()
+        let first = buffer.update(visible: screen(atY: 0), page: page, scale: 1, margin: margin)
+        XCTAssertEqual(first, page, "a sheet that fits inside the margins is held whole")
+        for y in stride(from: 0, through: 400, by: 50) {
+            XCTAssertEqual(
+                buffer.update(visible: screen(atY: CGFloat(y)), page: page, scale: 1, margin: margin),
+                first)
         }
-        XCTAssertFalse(pulled(0, inset: 0), "the top of an uninset page is a resting position")
-        // A page narrower than the viewport is centred and rests at -inset, not at 0.
-        XCTAssertFalse(pulled(-40, inset: 40), "the centred resting position is not a pull")
-        XCTAssertFalse(pulled(-80, inset: 40), "still inside the threshold")
-        XCTAssertTrue(pulled(-100, inset: 40), "a real pull past the top, inset and all")
+    }
+
+    /// Scrolled out of what is held, the region moves to follow — never past the page.
+    func testScrollingOutOfTheHeldRegionMovesIt() {
+        var buffer = LayerBuffer()
+        let tall = CGRect(x: 0, y: 0, width: 1000, height: 6000)
+        let first = buffer.update(visible: screen(atY: 0), page: tall, scale: 1, margin: margin)
+        XCTAssertEqual(first, CGRect(x: 0, y: 0, width: 1000, height: 1500))
+        let moved = buffer.update(visible: screen(atY: 2000), page: tall, scale: 1, margin: margin)
+        XCTAssertEqual(moved, CGRect(x: 0, y: 1500, width: 1000, height: 2000))
+    }
+
+    /// A zoom change redraws at the new scale, whatever was held.
+    func testAZoomChangeRedraws() {
+        var buffer = LayerBuffer()
+        _ = buffer.update(visible: screen(atY: 0), page: page, scale: 1, margin: margin)
+        let zoomed = CGRect(x: 0, y: 0, width: 2000, height: 2800)
+        XCTAssertEqual(
+            buffer.update(visible: screen(atY: 0), page: zoomed, scale: 2, margin: margin),
+            CGRect(x: 0, y: 0, width: 1100, height: 1500))
+    }
+
+    /// Off screen, what is held is kept, so scrolling back costs nothing.
+    func testOffScreenKeepsWhatIsHeld() {
+        var buffer = LayerBuffer()
+        let held = buffer.update(visible: screen(atY: 0), page: page, scale: 1, margin: margin)
+        XCTAssertEqual(
+            buffer.update(visible: screen(atY: 5000), page: page, scale: 1, margin: margin), held)
+        var fresh = LayerBuffer()
+        XCTAssertNil(
+            fresh.update(visible: screen(atY: 5000), page: page, scale: 1, margin: margin),
+            "a page never on screen holds nothing")
     }
 }

@@ -26,7 +26,6 @@
 		402052C8B168A671EBBAAC3E /* BackgroundFlushAssertion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B7E13E1B6B977C4D18D3F6 /* BackgroundFlushAssertion.swift */; };
 		41553EDB7232E60A06C58F8F /* Thumbnails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7346F25A719C7EB849AE025F /* Thumbnails.swift */; };
 		4283276297678BE54BBF534F /* LibrarySidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 760C1A94995C19FE535F60AB /* LibrarySidebar.swift */; };
-		43EB0F980795627D2C4146CD /* NextPagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E3760B82FBF58BD001BE759 /* NextPagePreview.swift */; };
 		498A8102F008B5009724766B /* TrashTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 644E642232F1FF6B8C96F02D /* TrashTests.swift */; };
 		4B7D4955A3CE1C1DE4D0BEB9 /* CanvasSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF0DCF11DD97B800E68436AC /* CanvasSnapshotTests.swift */; };
 		4EB98901D0A38D4C8075F8DE /* SeamGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C44DEE709374FB7ED572377A /* SeamGeometry.swift */; };
@@ -51,9 +50,12 @@
 		91F53EE72E12425656A7AC33 /* CouchSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AFFABA1DDE490CD0E242993 /* CouchSettings.swift */; };
 		9268909E990BFF4774CFA57A /* CanvasContainerViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */; };
 		9421552A3A0EE2076E5F65FE /* PageManagementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BED7857BA1ED1AF56A3E901 /* PageManagementTests.swift */; };
+		9B63756E5F42268FA7D5CE62 /* TextBoxEditingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1E3251DC13FD58651A270C /* TextBoxEditingTests.swift */; };
 		A1471E4E620D75D068E248B4 /* PageOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8095DDA1485688CAA4A759 /* PageOverviewView.swift */; };
 		A3D0730C529082C0A8291EA9 /* EditorPageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624C9DCA72BB5EC9F4CD6C41 /* EditorPageModel.swift */; };
+		A4C16171D363DF55788F2047 /* SeamNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 193FF0B412DE5F8A2BE66FA3 /* SeamNavigationTests.swift */; };
 		A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */; };
+		A6D09FECD4E56F1FF4F19B6D /* TextBoxCanvasTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE95BA298A8CC3AF738EF2B3 /* TextBoxCanvasTests.swift */; };
 		A70C5C162D4647CADA1CE982 /* testEachPenRendersItsOwnInk.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 97F9329828F4B8B59849650D /* testEachPenRendersItsOwnInk.1.png */; };
 		B0FE2C02333C9FE8EEC0C5EF /* SeamGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C055958D03FC50BBD23F28B0 /* SeamGeometryTests.swift */; };
 		B188FC9BE3CDA7096D52D546 /* HandwritingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */; };
@@ -71,11 +73,13 @@
 		E46386971C89909F5E7E0CB4 /* RemoteFolderPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B5B24D30EBF003DBBA84C9 /* RemoteFolderPicker.swift */; };
 		E85BA9A56A392DAB893D469A /* ConflictResolutionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F51F41B920291A1DC95CED0 /* ConflictResolutionView.swift */; };
 		EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1F470FDAB39308F0A7795F /* NotebookStore.swift */; };
+		F34899E23C18E7872DF2303E /* TextBoxViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAF156BC1DB366DC726A8CF6 /* TextBoxViews.swift */; };
 		F6A26EF4A3D7C39C2ECB8579 /* BareCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D3EA159F6A8667952EEF771 /* BareCanvas.swift */; };
 		F87EA93E3A4FDFDD65331287 /* SyncProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF6E3D1C4AFC7669DC53F4AE /* SyncProvenance.swift */; };
 		F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */; };
 		FA0CD3225E87C852D0FA1FD3 /* CouchAppLayerEndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85494F72E1F1F68C7031176B /* CouchAppLayerEndToEndTests.swift */; };
 		FA21BDF779D2388F37EBC05D /* SyncBackendHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99F8898B646F5E5EF3397B53 /* SyncBackendHost.swift */; };
+		FBBCAC70786EACD0AB111028 /* PagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CE5D3ECCC1A5D62ED19B7F0 /* PagePreview.swift */; };
 		FF7C044CA7FDF7E6EB768057 /* LibrarySearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B340F9F70E3CA45974E8C544 /* LibrarySearchTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -102,6 +106,7 @@
 		0DA342EBFED166F5EF7F44CC /* LibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryUITests.swift; sourceTree = "<group>"; };
 		13EC02E525247FA06BC975D5 /* BopaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BopaApp.swift; sourceTree = "<group>"; };
 		16D436CB210A8416B43424AF /* BopaUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BopaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		193FF0B412DE5F8A2BE66FA3 /* SeamNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeamNavigationTests.swift; sourceTree = "<group>"; };
 		1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareCanvasUITests.swift; sourceTree = "<group>"; };
 		1F51F41B920291A1DC95CED0 /* ConflictResolutionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictResolutionView.swift; sourceTree = "<group>"; };
 		20E5664786E552395A787117 /* TrashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrashView.swift; sourceTree = "<group>"; };
@@ -117,6 +122,7 @@
 		3D8D206021F65D447A23CFD5 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
 		3DCE8EE06C7B861F1AAEA8DC /* EditorPageModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPageModelTests.swift; sourceTree = "<group>"; };
 		467920EDEC849CD5B59CA33B /* NotableKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NotableKit; path = ../NotableKit; sourceTree = SOURCE_ROOT; };
+		4CE5D3ECCC1A5D62ED19B7F0 /* PagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PagePreview.swift; sourceTree = "<group>"; };
 		4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		51065DC8A1BE9070F3A77ADB /* Bopa.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Bopa.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		513AE03C724D18B26E321FE0 /* NavigatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigatorTests.swift; sourceTree = "<group>"; };
@@ -130,7 +136,6 @@
 		660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
 		6BED7857BA1ED1AF56A3E901 /* PageManagementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageManagementTests.swift; sourceTree = "<group>"; };
 		6CD4E58D4FC68D795F4E6447 /* CoverIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverIdentityTests.swift; sourceTree = "<group>"; };
-		6E3760B82FBF58BD001BE759 /* NextPagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextPagePreview.swift; sourceTree = "<group>"; };
 		7079102757F82D89F8EECEAE /* ServerBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerBrowserView.swift; sourceTree = "<group>"; };
 		7346F25A719C7EB849AE025F /* Thumbnails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Thumbnails.swift; sourceTree = "<group>"; };
 		74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasContainerViewTests.swift; sourceTree = "<group>"; };
@@ -159,12 +164,15 @@
 		D4126EFEF1F3BD43C4F0CEFD /* ThumbnailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailTests.swift; sourceTree = "<group>"; };
 		D536F4C792F192A319C22B7F /* ToolRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolRail.swift; sourceTree = "<group>"; };
 		D7A86459981084A1F96E5AAC /* CouchSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchSyncController.swift; sourceTree = "<group>"; };
+		DD1E3251DC13FD58651A270C /* TextBoxEditingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBoxEditingTests.swift; sourceTree = "<group>"; };
 		DD5C5AAED817FFD0B00C7144 /* NotebookNavigatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookNavigatorView.swift; sourceTree = "<group>"; };
 		DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettings.swift; sourceTree = "<group>"; };
 		DF0DCF11DD97B800E68436AC /* CanvasSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasSnapshotTests.swift; sourceTree = "<group>"; };
 		E0A2DCF1975275C94A7F1FEC /* HandwritingSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandwritingSettings.swift; sourceTree = "<group>"; };
 		E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilKitBridge.swift; sourceTree = "<group>"; };
 		E6178739BEED09C246CFF032 /* CouchSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchSettingsView.swift; sourceTree = "<group>"; };
+		EAF156BC1DB366DC726A8CF6 /* TextBoxViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBoxViews.swift; sourceTree = "<group>"; };
+		EE95BA298A8CC3AF738EF2B3 /* TextBoxCanvasTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBoxCanvasTests.swift; sourceTree = "<group>"; };
 		EF326225E306629D3DA5C34B /* BackgroundFlushTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundFlushTests.swift; sourceTree = "<group>"; };
 		F6FD0321F5909489F9B68DED /* testPressureShapesTheBallpenStroke.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = testPressureShapesTheBallpenStroke.1.png; sourceTree = "<group>"; };
 		FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -271,11 +279,11 @@
 				3D8D206021F65D447A23CFD5 /* LibraryView.swift */,
 				CE8FC7C65660D305A2D38822 /* MacWindow.swift */,
 				37599E4D83A385BCE5B8170D /* Modernist.swift */,
-				6E3760B82FBF58BD001BE759 /* NextPagePreview.swift */,
 				BE0FF747D670DE264447CF5D /* NotebookCover.swift */,
 				DD5C5AAED817FFD0B00C7144 /* NotebookNavigatorView.swift */,
 				5C1F470FDAB39308F0A7795F /* NotebookStore.swift */,
 				8B8095DDA1485688CAA4A759 /* PageOverviewView.swift */,
+				4CE5D3ECCC1A5D62ED19B7F0 /* PagePreview.swift */,
 				2B0BAB6AF0A9B4CD233DD405 /* PaperTemplateView.swift */,
 				E209F67CF018B29E37E7A268 /* PencilKitBridge.swift */,
 				FD4F14B1C9E5734ED1065F63 /* PrivacyInfo.xcprivacy */,
@@ -286,6 +294,7 @@
 				660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */,
 				FF6E3D1C4AFC7669DC53F4AE /* SyncProvenance.swift */,
 				DDB2D42BE40F93CA9D0F2414 /* SyncSettings.swift */,
+				EAF156BC1DB366DC726A8CF6 /* TextBoxViews.swift */,
 				7346F25A719C7EB849AE025F /* Thumbnails.swift */,
 				D536F4C792F192A319C22B7F /* ToolRail.swift */,
 				20E5664786E552395A787117 /* TrashView.swift */,
@@ -316,7 +325,10 @@
 				3BC29184D0B7E9262391EDA7 /* PencilKitBridgeTests.swift */,
 				5C708E78695B6C125620979F /* RemoteFolderPickerTests.swift */,
 				C055958D03FC50BBD23F28B0 /* SeamGeometryTests.swift */,
+				193FF0B412DE5F8A2BE66FA3 /* SeamNavigationTests.swift */,
 				4F97D40F01BD2033F59CEF9F /* SyncCoordinatorTests.swift */,
+				EE95BA298A8CC3AF738EF2B3 /* TextBoxCanvasTests.swift */,
+				DD1E3251DC13FD58651A270C /* TextBoxEditingTests.swift */,
 				D4126EFEF1F3BD43C4F0CEFD /* ThumbnailTests.swift */,
 				B51F1EB6848E29DD2054222A /* ToolSelectionWidthTests.swift */,
 				644E642232F1FF6B8C96F02D /* TrashTests.swift */,
@@ -488,7 +500,10 @@
 				29E7851E49856092B6E316AD /* PencilKitBridgeTests.swift in Sources */,
 				8AA222EE7E1E70A50620353E /* RemoteFolderPickerTests.swift in Sources */,
 				B0FE2C02333C9FE8EEC0C5EF /* SeamGeometryTests.swift in Sources */,
+				A4C16171D363DF55788F2047 /* SeamNavigationTests.swift in Sources */,
 				F90EF34BA900F1E7CDF20493 /* SyncCoordinatorTests.swift in Sources */,
+				A6D09FECD4E56F1FF4F19B6D /* TextBoxCanvasTests.swift in Sources */,
+				9B63756E5F42268FA7D5CE62 /* TextBoxEditingTests.swift in Sources */,
 				64036BE1100F4299C1BD7CBC /* ThumbnailTests.swift in Sources */,
 				51A4216ACBCFACE585AB9335 /* ToolSelectionWidthTests.swift in Sources */,
 				498A8102F008B5009724766B /* TrashTests.swift in Sources */,
@@ -517,11 +532,11 @@
 				CC5AEB7EFA42F59680831067 /* LibraryView.swift in Sources */,
 				7298CC949552312CB784AAF7 /* MacWindow.swift in Sources */,
 				502F56C0FD5818927AD81DC5 /* Modernist.swift in Sources */,
-				43EB0F980795627D2C4146CD /* NextPagePreview.swift in Sources */,
 				020B2B60C10166F6B44D6904 /* NotebookCover.swift in Sources */,
 				E249AFDAEEC09F1533F5A822 /* NotebookNavigatorView.swift in Sources */,
 				EC803E9DE03A864F7F00802A /* NotebookStore.swift in Sources */,
 				A1471E4E620D75D068E248B4 /* PageOverviewView.swift in Sources */,
+				FBBCAC70786EACD0AB111028 /* PagePreview.swift in Sources */,
 				2CAA8B3BBB4BE8C4120A287E /* PaperTemplateView.swift in Sources */,
 				C7F86175E5F22CA5FB7C9B56 /* PencilKitBridge.swift in Sources */,
 				E46386971C89909F5E7E0CB4 /* RemoteFolderPicker.swift in Sources */,
@@ -531,6 +546,7 @@
 				122E21FD884486D3B1F6AEDC /* SyncCoordinator.swift in Sources */,
 				F87EA93E3A4FDFDD65331287 /* SyncProvenance.swift in Sources */,
 				D6048EDBC5536F19E7F15366 /* SyncSettings.swift in Sources */,
+				F34899E23C18E7872DF2303E /* TextBoxViews.swift in Sources */,
 				41553EDB7232E60A06C58F8F /* Thumbnails.swift in Sources */,
 				372779FDBE2A4FB32C80E097 /* ToolRail.swift in Sources */,
 				E1B3B68CFEB0226A03F56CEF /* TrashView.swift in Sources */,
@@ -747,7 +763,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Bopa.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 6;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -759,7 +775,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.ivan.bopa;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = YES;
@@ -775,7 +791,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Bopa.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 6;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -787,7 +803,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.ivan.bopa;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = YES;

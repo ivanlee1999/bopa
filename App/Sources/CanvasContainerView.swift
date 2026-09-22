@@ -45,15 +45,14 @@ final class CanvasContainerView: UIView {
     }
 
     private var pendingScrollY: CGFloat?
-    /// The next page, drawn below the seam: its paper, its background, and a picture of its
-    /// ink. See [NextPagePreview] for why it is a picture and not a second canvas.
-    private let nextPageSheet = UIView()
-    private let nextPagePaperView = PaperTemplateView()
-    private let nextPageBackgroundView = UIImageView()
-    private let nextPageContentView = UIImageView()
-    /// The line the next page starts at — drawn so the boundary is legible while scrolling
-    /// through it, the way a page change is a thin rule in Notability rather than a gap.
-    private let seamLine = UIView()
+    /// The neighbouring pages, drawn below the seam and above the top of the sheet: their
+    /// paper, their backgrounds, and a picture of what is on them. See [PagePreview] for why it
+    /// is a picture and not a second canvas.
+    private let previousPageViews = NeighborPageViews()
+    private let nextPageViews = NeighborPageViews()
+    /// What the paper and the text layers currently hold drawn. See [LayerBuffer].
+    private var paperBuffer = LayerBuffer()
+    private var textBuffer = LayerBuffer()
     /// The viewport at the last layout pass. Whole-page fit depends on height as well as
     /// width, so a window shortened without getting narrower still needs to re-fit. Zero
     /// until the first real layout, i.e. before the zoom is known.
@@ -172,24 +171,12 @@ final class CanvasContainerView: UIView {
         backgroundImageView.isHidden = true
         addSubview(backgroundImageView)
 
-        // Below the seam, in the same order as the current page's own layers. Installed once
-        // and hidden until there is a next page to show; all four are inert to touch, so a
-        // stroke started over them still lands on the canvas above (and belongs to this page —
-        // ink is filed against the page the canvas holds, not against what is drawn under it).
-        nextPageSheet.backgroundColor = .white
-        nextPageSheet.isUserInteractionEnabled = false
-        addSubview(nextPageSheet)
-        nextPageBackgroundView.contentMode = .scaleAspectFit
-        nextPageBackgroundView.isUserInteractionEnabled = false
-        addSubview(nextPageBackgroundView)
-        addSubview(nextPagePaperView)
-        nextPageContentView.contentMode = .scaleToFill
-        nextPageContentView.isUserInteractionEnabled = false
-        addSubview(nextPageContentView)
-        seamLine.backgroundColor = UIColor(hex: 0x7D7979)
-        seamLine.isUserInteractionEnabled = false
-        addSubview(seamLine)
-        setSeamHidden(true)
+        // Above and below the sheet, in the same order as the current page's own layers.
+        // Installed once and hidden until there is a neighbour to show; all of it is inert to
+        // touch, so a stroke started over them still lands on the canvas above (and is filed
+        // onto the page it was drawn on when the pencil lifts).
+        previousPageViews.install(in: self)
+        nextPageViews.install(in: self)
 
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
@@ -233,8 +220,6 @@ final class CanvasContainerView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         canvas.frame = bounds
-        paperView.frame = bounds
-        textLayer.frame = bounds
         if bounds.width > 0, bounds.height > 0, bounds.size != laidOutSize {
             let isFirstLayout = laidOutSize == .zero
             let needsFit = bounds.width != laidOutSize.width || fitsWholePage
@@ -292,17 +277,31 @@ final class CanvasContainerView: UIView {
 
     /// The picture drawn below the seam, or nil while it is still being rendered (and for
     /// pagination, where there is no seam to look through). Controls only what is *drawn*:
-    /// until it arrives the seam shows the next page's blank paper.
-    var nextPage: NextPagePreview? {
+    /// until it arrives the seam shows blank paper.
+    var nextPage: PagePreview? {
         didSet {
             guard nextPage != oldValue else { return }
-            nextPagePaperView.template = nextPage?.template ?? .blank
-            nextPagePaperView.pageWidth = CGFloat(
-                nextPage?.pageSize.width ?? PageSize.legacyUndeclared.width)
-            nextPagePaperView.sheetHeight = CGFloat(nextPage?.pageSize.height ?? 0)
-            nextPageContentView.image = nextPage?.content
-            nextPageBackgroundView.image = nextPage?.background
+            nextPageViews.show(nextPage)
+            updateContentGeometry()
+        }
+    }
+
+    /// Whether a page exists above this one — the mirror of `hasNextPage`, and for the same
+    /// reason known synchronously: it sizes the room above the sheet, which cannot wait for a
+    /// picture to render.
+    var hasPreviousPage = false {
+        didSet {
+            guard hasPreviousPage != oldValue else { return }
             applySeamExtent()
+            updateContentGeometry()
+        }
+    }
+
+    /// The picture drawn above the top of the sheet. See `nextPage`.
+    var previousPage: PagePreview? {
+        didSet {
+            guard previousPage != oldValue else { return }
+            previousPageViews.show(previousPage)
             updateContentGeometry()
         }
     }
@@ -311,17 +310,17 @@ final class CanvasContainerView: UIView {
     /// below it to scroll into. Deliberately not conditioned on the picture having rendered.
     var seamActive: Bool { !fitsWholePage && sheetHeight > 0 && hasNextPage }
 
-    private func setSeamHidden(_ hidden: Bool) {
-        nextPageSheet.isHidden = hidden
-        nextPageBackgroundView.isHidden = hidden || nextPage?.background == nil
-        nextPagePaperView.isHidden = hidden
-        nextPageContentView.isHidden = hidden || nextPage?.content == nil
-        seamLine.isHidden = hidden
-    }
+    /// Whether the top of the sheet is a seam too: the same conditions, looking up.
+    var previousSeamActive: Bool { !fitsWholePage && sheetHeight > 0 && hasPreviousPage }
 
-    /// Gives the scroll a viewport of room past the sheet when there is a page below it, so the
-    /// screen can fill with the next page before the switch commits — and takes it away again
-    /// when there is not, so the last page of a notebook still ends at its paper.
+    /// Gives the scroll room past the sheet when there is a page below it, and room above the
+    /// sheet when there is one above — so the screen can fill with either neighbour before the
+    /// switch commits — and takes each away again when there is not, so the first page of a
+    /// notebook still starts at its paper and the last one ends at it.
+    ///
+    /// The room above is a content inset, measured in points: it is a view's worth of scrolling,
+    /// whatever the zoom, and leaving the content itself alone keeps y=0 at the top of the page,
+    /// which is where the ink's coordinates start.
     private func applySeamExtent() {
         guard bounds.height > 0, sheetHeight > 0 else { return }
         let current = contentExtent
@@ -331,8 +330,14 @@ final class CanvasContainerView: UIView {
             sheetHeight: sheetHeight,
             viewportHeight: viewportInPage,
             hasNextPage: seamActive)
-        guard abs(wanted - current.height) > 0.5 else { return }
-        contentExtent = CGSize(width: current.width, height: wanted)
+        if abs(wanted - current.height) > 0.5 {
+            contentExtent = CGSize(width: current.width, height: wanted)
+        }
+        let top = SeamGeometry.leadingRoom(
+            viewportHeight: bounds.height, hasPreviousPage: previousSeamActive)
+        if abs(canvas.contentInset.top - top) > 0.5 {
+            canvas.contentInset.top = top
+        }
     }
 
     /// How tall the page is without any seam overshoot: its sheet, or as far as content that
@@ -462,9 +467,9 @@ final class CanvasContainerView: UIView {
             let view = UIImageView(image: pageImage.image)
             view.contentMode = .scaleToFill
             view.clipsToBounds = true
-            // Above the page background, below the ink — and below the seam: an image dropped
-            // past this page's sheet must not paint over the page drawn beneath it.
-            insertSubview(view, belowSubview: nextPageSheet)
+            // Above the page background, below the ink — and below the neighbours: an image
+            // dropped past this page's sheet must not paint over the page drawn beside it.
+            insertSubview(view, belowSubview: previousPageViews.lowestView)
             return view
         }
         // An image can sit anywhere on the page, including well below the sheet or past its right
@@ -603,11 +608,21 @@ final class CanvasContainerView: UIView {
     /// initial layout/zoom has happened; before that it is deferred to the first layout
     /// pass (zoomScale is not final until then).
     func setInitialScroll(pageY: CGFloat) {
-        let y = max(0, pageY)
+        setScroll(pageY: max(0, pageY))
+    }
+
+    /// Scrolls to where a seam crossing lands, which — unlike a persisted position — may be in the
+    /// room above the page: a crossing from below arrives with the page it left still on screen
+    /// above this one.
+    func setScrollAcrossSeam(pageY: CGFloat) {
+        setScroll(pageY: pageY)
+    }
+
+    private func setScroll(pageY: CGFloat) {
         if laidOutSize.width > 0 {
-            applyScroll(pageY: y)
+            applyScroll(pageY: pageY)
         } else {
-            pendingScrollY = y
+            pendingScrollY = pageY
         }
     }
 
@@ -627,8 +642,9 @@ final class CanvasContainerView: UIView {
 
     private func applyScroll(pageY: CGFloat) {
         let target = pageY * canvas.zoomScale
+        let minOffset = -canvas.adjustedContentInset.top
         let maxOffset = max(canvas.contentSize.height - canvas.bounds.height, 0)
-        canvas.contentOffset.y = min(max(target, 0), maxOffset)
+        canvas.contentOffset.y = min(max(target, minOffset), maxOffset)
     }
 
     /// Called on init, layout, scroll, and zoom. Keeps the content layer (background +
@@ -646,7 +662,10 @@ final class CanvasContainerView: UIView {
             y: -offset.y,
             width: pageWidth * scale,
             height: paperHeight)
-        paperView.setGeometry(zoomScale: scale, contentOffset: offset)
+        Self.place(
+            paperView, buffer: &paperBuffer,
+            region: CGRect(x: 0, y: 0, width: pageWidth * scale, height: paperHeight),
+            pageTop: -offset.y, scale: scale, offsetX: offset.x, viewport: bounds.size)
         if let image = backgroundImage {
             backgroundImageView.isHidden = false
             let width = pageWidth * scale
@@ -659,8 +678,7 @@ final class CanvasContainerView: UIView {
         } else {
             backgroundImageView.isHidden = true
         }
-        textLayer.zoomScale = scale
-        textLayer.contentOffset = offset
+        layoutTextLayer(scale: scale, offset: offset)
         layoutTextEditor(scale: scale, offset: offset)
         for (view, pageImage) in zip(imageViews, pageImages) {
             let f = pageImage.frame
@@ -673,42 +691,181 @@ final class CanvasContainerView: UIView {
         layoutSeam(scale: scale, offset: offset)
     }
 
-    /// Places the next page directly below this one's sheet, in the same coordinate space
+    /// Places the neighbours directly against this page's sheet, in the same coordinate space
     /// everything else here uses: page units scaled by the zoom, translated by the scroll.
     ///
-    /// Its own width, not this page's — a notebook may mix sheet sizes, and drawing an A5 page
-    /// stretched to an A4's width would be a lie about what you are scrolling into.
+    /// Each at its own size, not this page's — a notebook may mix sheet sizes, and drawing an A5
+    /// page stretched to an A4's width would be a lie about what you are scrolling into. Until a
+    /// neighbour's picture arrives it is drawn as blank paper the size of this page.
     private func layoutSeam(scale: CGFloat, offset: CGPoint) {
-        guard seamActive, let nextPage else {
-            setSeamHidden(true)
-            return
-        }
         let seamY = sheetHeight * scale - offset.y
-        // Nothing of it on screen yet: keep the views hidden rather than laying out every tick.
-        guard seamY < bounds.height else {
-            setSeamHidden(true)
+        if seamActive, seamY < bounds.height {
+            nextPageViews.layout(
+                pageTop: seamY, seamY: seamY, fallbackSize: currentSheetSize,
+                scale: scale, offsetX: offset.x, viewport: bounds.size)
+        } else {
+            nextPageViews.hide()
+        }
+
+        let topY = -offset.y
+        if previousSeamActive, topY > 0 {
+            let height = (previousPage.map { CGFloat($0.pageSize.height) } ?? sheetHeight) * scale
+            previousPageViews.layout(
+                pageTop: topY - height, seamY: topY, fallbackSize: currentSheetSize,
+                scale: scale, offsetX: offset.x, viewport: bounds.size)
+        } else {
+            previousPageViews.hide()
+        }
+    }
+
+    private var currentSheetSize: CGSize { CGSize(width: pageWidth, height: sheetHeight) }
+
+    /// Sizes and positions a drawn layer over the part of its page it should hold — see
+    /// [LayerBuffer]. `region` is the page's drawable area and `pageTop` where the page's top
+    /// edge sits on screen, both in points.
+    fileprivate static func place(
+        _ paper: PaperTemplateView, buffer: inout LayerBuffer, region: CGRect,
+        pageTop: CGFloat, scale: CGFloat, offsetX: CGFloat, viewport: CGSize
+    ) {
+        let visible = CGRect(origin: CGPoint(x: offsetX, y: -pageTop), size: viewport)
+        guard let held = buffer.update(
+            visible: visible, page: region, scale: scale, margin: bufferMargin(viewport))
+        else {
+            paper.frame = .zero
             return
         }
-        setSeamHidden(false)
-        let width = CGFloat(nextPage.pageSize.width) * scale
-        let height = CGFloat(nextPage.pageSize.height) * scale
-        nextPageSheet.frame = CGRect(x: -offset.x, y: seamY, width: width, height: height)
-        seamLine.frame = CGRect(x: -offset.x, y: seamY, width: width, height: 1)
-        if let background = nextPage.background {
-            let backgroundHeight = width * background.size.height / background.size.width
-            nextPageBackgroundView.frame = CGRect(
-                x: -offset.x, y: seamY, width: width, height: backgroundHeight)
+        // Moving the frame is all a scroll does. The geometry only changes when the held region
+        // does, and that is the one time the paper redraws.
+        paper.frame = held.offsetBy(dx: -offsetX, dy: pageTop)
+        paper.setGeometry(zoomScale: scale, contentOffset: held.origin)
+    }
+
+    /// How far past the screen a drawn layer keeps drawn, each way. Enough that a sheet at the
+    /// width fit is held whole; not so much that a zoomed-in page holds a wall of bitmap.
+    fileprivate static func bufferMargin(_ viewport: CGSize) -> CGSize {
+        CGSize(width: viewport.width * 0.25, height: viewport.height * 0.5)
+    }
+
+    /// The text layer over the boxes it draws, and only them. A page with no text boxes has no
+    /// text layer at all — it used to be a transparent full-screen bitmap redrawn on every scroll
+    /// tick whether it had anything to show or not.
+    private func layoutTextLayer(scale: CGFloat, offset: CGPoint) {
+        guard !textBlocks.isEmpty, Self.isReachable(textBounds) else {
+            textLayer.isHidden = true
+            textBuffer.invalidate()
+            return
         }
-        // The paper draws in the next page's coordinates, so its viewport is this scroll
-        // measured from the seam rather than from the top of the current page.
-        nextPagePaperView.frame = CGRect(
-            x: 0, y: seamY, width: bounds.width, height: max(bounds.height - seamY, 0))
-        nextPagePaperView.setGeometry(
-            zoomScale: scale, contentOffset: CGPoint(x: offset.x, y: 0))
-        if nextPage.content != nil {
-            nextPageContentView.frame = CGRect(
-                x: -offset.x, y: seamY, width: width,
-                height: nextPage.contentHeight * scale)
+        let region = CGRect(
+            x: textBounds.minX * scale, y: textBounds.minY * scale,
+            width: textBounds.width * scale, height: textBounds.height * scale
+        ).insetBy(dx: -2, dy: -2)
+        let visible = CGRect(origin: offset, size: bounds.size)
+        guard let held = textBuffer.update(
+            visible: visible, page: region, scale: scale, margin: Self.bufferMargin(bounds.size))
+        else {
+            textLayer.isHidden = true
+            return
+        }
+        textLayer.isHidden = false
+        textLayer.frame = held.offsetBy(dx: -offset.x, dy: -offset.y)
+        textLayer.zoomScale = scale
+        textLayer.contentOffset = held.origin
+    }
+}
+
+/// One neighbouring page, drawn beside the live canvas: its sheet, its background, its paper,
+/// a picture of what is on it, and the seam line it shares with the current page.
+@MainActor
+private final class NeighborPageViews {
+    private let sheet = UIView()
+    private let background = UIImageView()
+    private let paper = PaperTemplateView()
+    private let content = UIImageView()
+    private let seam = UIView()
+    private var paperBuffer = LayerBuffer()
+    private var preview: PagePreview?
+
+    /// The bottom of the stack, which the current page's own images are inserted below.
+    var lowestView: UIView { sheet }
+
+    init() {
+        sheet.backgroundColor = .white
+        background.contentMode = .scaleAspectFit
+        content.contentMode = .scaleToFill
+        // The line a neighbour starts at — drawn so the boundary is legible while scrolling
+        // through it, the way a page change is a thin rule in Notability rather than a gap.
+        seam.backgroundColor = UIColor(hex: 0x7D7979)
+        for view in all { view.isUserInteractionEnabled = false }
+        hide()
+    }
+
+    private var all: [UIView] { [sheet, background, paper, content, seam] }
+
+    func install(in container: UIView) {
+        for view in all { container.addSubview(view) }
+    }
+
+    func show(_ preview: PagePreview?) {
+        self.preview = preview
+        paper.template = preview?.template ?? .blank
+        if let preview {
+            paper.pageWidth = CGFloat(preview.pageSize.width)
+            paper.sheetHeight = CGFloat(preview.pageSize.height)
+        }
+        content.image = preview?.content
+        background.image = preview?.background
+        paperBuffer.invalidate()
+    }
+
+    func hide() {
+        for view in all where !view.isHidden { view.isHidden = true }
+    }
+
+    /// - Parameters:
+    ///   - pageTop: where the neighbour's top edge sits on screen, in points.
+    ///   - seamY: where the line it shares with the current page is drawn.
+    ///   - fallbackSize: the sheet, in page units, to draw while there is no picture yet.
+    func layout(
+        pageTop: CGFloat, seamY: CGFloat, fallbackSize: CGSize,
+        scale: CGFloat, offsetX: CGFloat, viewport: CGSize
+    ) {
+        let size = preview.map {
+            CGSize(width: CGFloat($0.pageSize.width), height: CGFloat($0.pageSize.height))
+        } ?? fallbackSize
+        let width = size.width * scale
+        let height = size.height * scale
+        sheet.isHidden = false
+        seam.isHidden = false
+        sheet.frame = CGRect(x: -offsetX, y: pageTop, width: width, height: height)
+        seam.frame = CGRect(x: -offsetX, y: seamY, width: width, height: 1)
+
+        if let image = preview?.background, image.size.width > 0 {
+            background.isHidden = false
+            background.frame = CGRect(
+                x: -offsetX, y: pageTop, width: width,
+                height: width * image.size.height / image.size.width)
+        } else {
+            background.isHidden = true
+        }
+
+        if let preview, preview.template.isDrawable {
+            paper.isHidden = false
+            CanvasContainerView.place(
+                paper, buffer: &paperBuffer,
+                region: CGRect(x: 0, y: 0, width: width, height: height),
+                pageTop: pageTop, scale: scale, offsetX: offsetX, viewport: viewport)
+        } else {
+            paper.isHidden = true
+        }
+
+        if let preview, preview.content != nil {
+            content.isHidden = false
+            let frame = preview.contentFrame
+            content.frame = CGRect(
+                x: frame.minX * scale - offsetX, y: pageTop + frame.minY * scale,
+                width: frame.width * scale, height: frame.height * scale)
+        } else {
+            content.isHidden = true
         }
     }
 }
