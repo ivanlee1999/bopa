@@ -407,7 +407,7 @@ struct EditorView: View {
     private func appendPageWithoutLeaving() {
         commitOpenTextBox()
         guard model.nextPageId == nil else { return }
-        guard model.saveNow() else { return }
+        guard model.saveNow(persistingScroll: false) else { return }
         do {
             _ = try store.addPage(
                 to: notebookId, fallbackTemplate: handwriting.config.defaultTemplate)
@@ -1149,11 +1149,16 @@ struct EditorCanvasView: UIViewRepresentable {
             // going. Guarded by the same threshold a page turn used, so an ordinary scroll that
             // merely reaches the bottom does not silently grow the notebook.
             //
-            // And only while a finger is actually on the glass. `isDragging` stays set while a
-            // released flick decelerates, and now that momentum carries through every seam, a
-            // hard flick from the front of the notebook would fly off the end of the last page
-            // and append a blank one nobody asked for. Growing the notebook is a deliberate pull.
-            if !container.seamActive, scrollView.isTracking, scrollView.isDragging {
+            // And only for a finger that is on the glass and pulling forward. `isDragging` stays
+            // set while a released flick decelerates, and now that momentum carries through every
+            // seam, a hard flick from the front of the notebook would fly off the end of the last
+            // page and append a blank one nobody asked for. A touch that lands while the page is
+            // still rubber-banding at its end is already past the threshold, too, whichever way
+            // the finger then goes — so the drag itself has to have moved forward that far.
+            // Growing the notebook is a deliberate pull.
+            if !container.seamActive, scrollView.isTracking, scrollView.isDragging,
+               scrollView.panGestureRecognizer.translation(in: scrollView).y
+                <= -Self.pageTurnThreshold {
                 let past = Self.overshoot(
                     offset: scrollView.contentOffset.y,
                     contentLength: scrollView.contentSize.height,
