@@ -665,7 +665,8 @@ final class CanvasContainerView: UIView {
         Self.place(
             paperView, buffer: &paperBuffer,
             region: CGRect(x: 0, y: 0, width: pageWidth * scale, height: paperHeight),
-            pageTop: -offset.y, scale: scale, offsetX: offset.x, viewport: bounds.size)
+            pageTop: -offset.y, scale: scale, offsetX: offset.x, viewport: bounds.size,
+            margin: bufferMargin)
         if let image = backgroundImage {
             backgroundImageView.isHidden = false
             let width = pageWidth * scale
@@ -702,7 +703,7 @@ final class CanvasContainerView: UIView {
         if seamActive, seamY < bounds.height {
             nextPageViews.layout(
                 pageTop: seamY, seamY: seamY, fallbackSize: currentSheetSize,
-                scale: scale, offsetX: offset.x, viewport: bounds.size)
+                scale: scale, offsetX: offset.x, viewport: bounds.size, margin: bufferMargin)
         } else {
             nextPageViews.hide()
         }
@@ -712,7 +713,7 @@ final class CanvasContainerView: UIView {
             let height = (previousPage.map { CGFloat($0.pageSize.height) } ?? sheetHeight) * scale
             previousPageViews.layout(
                 pageTop: topY - height, seamY: topY, fallbackSize: currentSheetSize,
-                scale: scale, offsetX: offset.x, viewport: bounds.size)
+                scale: scale, offsetX: offset.x, viewport: bounds.size, margin: bufferMargin)
         } else {
             previousPageViews.hide()
         }
@@ -725,11 +726,11 @@ final class CanvasContainerView: UIView {
     /// edge sits on screen, both in points.
     fileprivate static func place(
         _ paper: PaperTemplateView, buffer: inout LayerBuffer, region: CGRect,
-        pageTop: CGFloat, scale: CGFloat, offsetX: CGFloat, viewport: CGSize
+        pageTop: CGFloat, scale: CGFloat, offsetX: CGFloat, viewport: CGSize, margin: CGSize
     ) {
         let visible = CGRect(origin: CGPoint(x: offsetX, y: -pageTop), size: viewport)
         guard let held = buffer.update(
-            visible: visible, page: region, scale: scale, margin: bufferMargin(viewport))
+            visible: visible, page: region, scale: scale, margin: margin)
         else {
             paper.frame = .zero
             return
@@ -742,8 +743,13 @@ final class CanvasContainerView: UIView {
 
     /// How far past the screen a drawn layer keeps drawn, each way. Enough that a sheet at the
     /// width fit is held whole; not so much that a zoomed-in page holds a wall of bitmap.
-    fileprivate static func bufferMargin(_ viewport: CGSize) -> CGSize {
-        CGSize(width: viewport.width * 0.25, height: viewport.height * 0.5)
+    ///
+    /// None while a pinch is under way: every zoom step redraws whatever is held, so holding
+    /// more than the screen would make each frame of the pinch cost two or three screens of
+    /// drawing. The first scroll after the pinch grows the region back.
+    private var bufferMargin: CGSize {
+        guard !canvas.isZooming, !canvas.isZoomBouncing else { return .zero }
+        return CGSize(width: bounds.width * 0.25, height: bounds.height * 0.5)
     }
 
     /// The text layer over the boxes it draws, and only them. A page with no text boxes has no
@@ -761,7 +767,7 @@ final class CanvasContainerView: UIView {
         ).insetBy(dx: -2, dy: -2)
         let visible = CGRect(origin: offset, size: bounds.size)
         guard let held = textBuffer.update(
-            visible: visible, page: region, scale: scale, margin: Self.bufferMargin(bounds.size))
+            visible: visible, page: region, scale: scale, margin: bufferMargin)
         else {
             textLayer.isHidden = true
             return
@@ -827,7 +833,7 @@ private final class NeighborPageViews {
     ///   - fallbackSize: the sheet, in page units, to draw while there is no picture yet.
     func layout(
         pageTop: CGFloat, seamY: CGFloat, fallbackSize: CGSize,
-        scale: CGFloat, offsetX: CGFloat, viewport: CGSize
+        scale: CGFloat, offsetX: CGFloat, viewport: CGSize, margin: CGSize
     ) {
         let size = preview.map {
             CGSize(width: CGFloat($0.pageSize.width), height: CGFloat($0.pageSize.height))
@@ -853,7 +859,8 @@ private final class NeighborPageViews {
             CanvasContainerView.place(
                 paper, buffer: &paperBuffer,
                 region: CGRect(x: 0, y: 0, width: width, height: height),
-                pageTop: pageTop, scale: scale, offsetX: offsetX, viewport: viewport)
+                pageTop: pageTop, scale: scale, offsetX: offsetX, viewport: viewport,
+                margin: margin)
         } else {
             paper.isHidden = true
         }

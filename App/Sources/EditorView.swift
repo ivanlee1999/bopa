@@ -57,6 +57,7 @@ struct EditorView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 model.attach(store: store, notebookId: notebookId)
+                model.previewsNeighbors = !handwriting.config.pageNavigation.isPaged
                 // The model asks to close when its notebook vanishes underneath it — deleted
                 // locally or by a merge — because an editor over nothing has nothing to show.
                 model.requestClose = { onClose?() }
@@ -70,6 +71,9 @@ struct EditorView: View {
             // update pass so the model is written outside the render.
             .onChange(of: toolSelection.kind) { _, kind in
                 if kind != .text { commitOpenTextBox() }
+            }
+            .onChange(of: handwriting.config.pageNavigation) { _, navigation in
+                model.previewsNeighbors = !navigation.isPaged
             }
             .onDisappear {
                 commitOpenTextBox()
@@ -754,6 +758,8 @@ struct EditorCanvasView: UIViewRepresentable {
         }
         // The page asked for by a seam crossing has arrived; further scrolling may ask again.
         context.coordinator.noteSeamCrossingLanded()
+        // Whatever the canvas held when a pencil last went down belonged to the page before.
+        context.coordinator.noteCanvasReloaded(strokeCount: drawing.strokes.count)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -1075,6 +1081,11 @@ struct EditorCanvasView: UIViewRepresentable {
 
         func noteSeamCrossingLanded() { seamCrossingInFlight = false }
 
+        /// Resets the "strokes drawn since the pencil went down" baseline to the page just
+        /// loaded. Without it the baseline is the previous page's count, and the range of "new"
+        /// strokes covers ink this page already had.
+        func noteCanvasReloaded(strokeCount: Int) { strokeCountAtToolBegin = strokeCount }
+
         /// One page appended per drag, at most.
         ///
         /// The append is asked for from a scroll callback that runs at display rate, and it is
@@ -1120,7 +1131,13 @@ struct EditorCanvasView: UIViewRepresentable {
         /// picture — so the swap is invisible and is made there, not at a threshold or a release. That is what "one long surface" has to
         /// mean; anything read on release is a page turn wearing a scroll's clothes.
         private func commitSeamCrossingIfReached(_ scrollView: UIScrollView) {
-            guard let container, !seamCrossingInFlight, !parent.config.pageNavigation.isPaged
+            // Never mid-stroke. The model switches pages the moment a crossing is asked for, but
+            // the canvas only reloads a frame or two later — a pencil lifting in between would
+            // hand the old page's drawing to the new page and file its ink against the new page's
+            // neighbours. The room past each seam is two viewports deep so there is somewhere to
+            // wait; the lift re-checks (see `canvasViewDidEndUsingTool`).
+            guard let container, !seamCrossingInFlight, !parent.config.pageNavigation.isPaged,
+                  !parent.liveState.isDrawing
             else { return }
             let scale = max(scrollView.zoomScale, 0.01)
             let offsetY = scrollView.contentOffset.y / scale
@@ -1157,7 +1174,7 @@ struct EditorCanvasView: UIViewRepresentable {
             // the finger then goes — so the drag itself has to have moved forward that far.
             // Growing the notebook is a deliberate pull.
             if !container.seamActive, scrollView.isTracking, scrollView.isDragging,
-               scrollView.panGestureRecognizer.translation(in: scrollView).y
+               scrollView.panGestureRecognizer.translation(in: scrollView.superview).y
                 <= -Self.pageTurnThreshold {
                 let past = Self.overshoot(
                     offset: scrollView.contentOffset.y,
@@ -1224,6 +1241,16 @@ struct EditorCanvasView: UIViewRepresentable {
         /// an implausibly long pull and made vertical page creation appear broken.
         static let pageTurnThreshold: CGFloat = 48
 
+        /// A tap on the status bar goes to the top of *this* page. Left to UIKit it scrolls to
+        /// the top of the room above, which shows only the previous page — past the crossing, so
+        /// the tap would turn the page back rather than go to its top.
+        func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+            guard scrollView.adjustedContentInset.top > 0 else { return true }
+            scrollView.setContentOffset(
+                CGPoint(x: scrollView.contentOffset.x, y: 0), animated: true)
+            return false
+        }
+
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             container?.canvasZoomDidChange()
             container?.updateContentGeometry()
@@ -1249,6 +1276,9 @@ struct EditorCanvasView: UIViewRepresentable {
             fileAnyInkAboveTheTop(canvasView)
             fileAnyInkBelowTheSeam(canvasView)
             parent.onIdle()
+            // A crossing held back while the stroke was drawn goes ahead now — the scroll may
+            // have come to rest past the seam, and there will be no further scroll tick to ask.
+            commitSeamCrossingIfReached(canvasView)
         }
 
         /// Moves ink just drawn in the room above the page onto the page above — see

@@ -218,4 +218,58 @@ final class SeamNavigationTests: XCTestCase {
         XCTAssertNil(model.fileInkAboveTheTop(from: drawing, newStrokes: 1..<2))
         XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: pageIds[0]).strokes.isEmpty)
     }
+
+    /// A line written along the very top of the sheet pokes above it by the width of the nib.
+    /// That is still this page's ink, not the page above's.
+    func testInkThatOnlyGrazesTheTopStaysOnThePage() throws {
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: second.id))
+        let drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "grazing", y: -3)])
+        XCTAssertLessThan(drawing.strokes[0].renderBounds.minY, 0, "the nib reaches above")
+
+        XCTAssertNil(model.fileInkAboveTheTop(from: drawing, newStrokes: 0..<1))
+    }
+
+    /// Sync can land a page before the image it shows. A copy read in that gap must not be what
+    /// opens once the image has arrived — the file did not change to say so.
+    func testAReadAheadMissingAnImageIsNotWhatOpens() async throws {
+        let second = try store.addPage(to: notebookId)
+        var page = try store.loadPage(notebookId: notebookId, pageId: second.id)
+        page.images = [
+            ImageDTO(
+                id: "late-image", x: 10, y: 10, width: 100, height: 100,
+                uri: "images/late.png", createdAt: "2026-08-15T00:00:00.000Z",
+                updatedAt: "2026-08-15T00:00:00.000Z")
+        ]
+        try store.savePage(page)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        await model.waitForNeighbors()
+
+        let images = store.notebookDirURL(notebookId).appendingPathComponent("images")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).pngData { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+        try png.write(to: images.appendingPathComponent("late.png"))
+        XCTAssertTrue(model.enterNextPageAcrossSeam(carrying: 0))
+
+        XCTAssertEqual(model.pageImages.count, 1)
+    }
+
+    /// Pagination draws no neighbours, so none are pictured — but they are still read ahead.
+    func testPaginationPicturesNoNeighbours() async throws {
+        _ = try store.addPage(to: notebookId)
+        let model = makeModel()
+        model.previewsNeighbors = false
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        await model.waitForNeighbors()
+        XCTAssertNil(model.nextPagePreview)
+
+        model.previewsNeighbors = true
+        await model.waitForNeighbors()
+        XCTAssertNotNil(model.nextPagePreview, "switching to continuous scrolling pictures them")
+    }
 }
