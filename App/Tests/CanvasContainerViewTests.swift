@@ -685,4 +685,61 @@ final class CanvasContainerViewTests: XCTestCase {
         XCTAssertEqual(Double(points[0].y), Double(drawnAt.y), accuracy: 0.02)
         XCTAssertEqual(Double(points.last!.x), Double(drawnAt.x) + 40, accuracy: 0.02)
     }
+
+    // MARK: - The room around the seams
+
+    /// A continuous page opened with the given neighbours, laid out in portrait.
+    private func makeContinuousPage(previous: Bool, next: Bool) -> CanvasContainerView {
+        let sheet = PageSizePreset.a4.size
+        let container = makeContainer(portrait, pageSize: sheet)
+        container.sheetHeight = CGFloat(sheet.height)
+        container.fitsWholePage = false
+        container.hasPreviousPage = previous
+        container.hasNextPage = next
+        rotate(container, to: portrait)
+        return container
+    }
+
+    /// The page above gets the same room the page below does, so a scroll upwards can run on
+    /// into it instead of rubber-banding at the top of the sheet.
+    func testAPageWithAPageAboveHasRoomAboveItsTop() {
+        let container = makeContinuousPage(previous: true, next: true)
+        XCTAssertEqual(
+            container.canvas.contentInset.top,
+            SeamGeometry.roomInViewports * portrait.height, accuracy: 0.5)
+    }
+
+    /// The first page of a notebook still starts at its paper.
+    func testTheFirstPageHasNoRoomAbove() {
+        let container = makeContinuousPage(previous: false, next: true)
+        XCTAssertEqual(container.canvas.contentInset.top, 0)
+    }
+
+    /// Pagination turns whole pages and draws no neighbours, so it keeps no room for them.
+    func testPaginationHasNoRoomAbove() {
+        let container = makeContinuousPage(previous: true, next: true)
+        container.fitsWholePage = true
+        XCTAssertEqual(container.canvas.contentInset.top, 0)
+    }
+
+    /// A crossing from below lands with the page it left still showing above — in the room above
+    /// this page — while a persisted position never opens a page there.
+    func testACrossingCanLandInTheRoomAboveButAPersistedScrollCannot() {
+        let container = makeContinuousPage(previous: true, next: true)
+        let zoom = container.canvas.zoomScale
+
+        container.setScrollAcrossSeam(pageY: -300)
+        XCTAssertEqual(container.canvas.contentOffset.y / zoom, -300, accuracy: 0.5)
+
+        container.setInitialScroll(pageY: -300)
+        XCTAssertEqual(container.canvas.contentOffset.y, 0, accuracy: 0.5)
+    }
+
+    /// Nothing scrolls further up than the room there is.
+    func testACrossingLandingIsClampedToTheRoom() {
+        let container = makeContinuousPage(previous: true, next: true)
+        container.setScrollAcrossSeam(pageY: -100_000)
+        XCTAssertEqual(
+            container.canvas.contentOffset.y, -container.canvas.contentInset.top, accuracy: 0.5)
+    }
 }

@@ -110,12 +110,22 @@ struct PreparedPage: @unchecked Sendable {
     let drawing: PKDrawing
     let background: UIImage?
     let images: [PageImage]
-    let preview: PagePreview
+    /// Nil when it was not asked for — under pagination there is no seam to show it through.
+    let preview: PagePreview?
+    /// Whether every image and background the page refers to was there to read.
+    ///
+    /// The revision is the page file's, and the files it points at arrive separately: sync can
+    /// land a page document a moment before the image or PDF it names. A copy read in that gap
+    /// is missing something the file itself does not change to announce, so it is never opened
+    /// from — and is read again on the next store change, by which time the asset may be there.
+    let isComplete: Bool
 
     /// Reads and prepares a page, off the main actor. Nil when the file cannot be read — the
-    /// page itself is loaded properly (and its error reported) when the scroll commits to it.
+    /// page itself is loaded properly (and its error reported) when the scroll commits to it —
+    /// or when the task was cancelled part way, which a fast scroll through several pages does
+    /// to every read it has already scrolled past.
     nonisolated static func read(
-        pageId: String, notebookId: String, store: NotebookStore
+        pageId: String, notebookId: String, store: NotebookStore, rendersPreview: Bool
     ) -> PreparedPage? {
         // The revision is taken *before* the read. A write landing between the two then leaves
         // this copy looking older than the file, which only costs a synchronous load later; the
@@ -124,14 +134,26 @@ struct PreparedPage: @unchecked Sendable {
         guard let file = try? store.readPage(notebookId: notebookId, pageId: pageId) else {
             return nil
         }
+        guard !Task.isCancelled else { return nil }
         let notebookDir = store.notebookDirURL(notebookId)
         let drawing = PencilKitBridge.drawing(from: file.strokes)
+        guard !Task.isCancelled else { return nil }
         let background = BackgroundRenderer.image(
             for: file, notebookDir: notebookDir, storeRoot: store.rootURL)
         // Decoded here rather than left lazy: a UIImage read from a file decodes the first time
         // it is drawn, which would be on the main thread, on the frame the page arrives.
         let images = BackgroundRenderer.pageImages(for: file, notebookDir: notebookDir).map {
             PageImage(image: $0.image.preparingForDisplay() ?? $0.image, frame: $0.frame)
+        }
+        let isComplete =
+            images.count == file.images.filter { $0.width > 0 && $0.height > 0 }.count
+            && (background != nil
+                || BackgroundRenderer.pdfPageIndex(backgroundType: file.backgroundType) == nil)
+        guard !Task.isCancelled else { return nil }
+        guard rendersPreview else {
+            return PreparedPage(
+                file: file, revision: revision, drawing: drawing, background: background,
+                images: images, preview: nil, isComplete: isComplete)
         }
 
         var template = NativeTemplate.blank
@@ -152,6 +174,6 @@ struct PreparedPage: @unchecked Sendable {
             background: background)
         return PreparedPage(
             file: file, revision: revision, drawing: drawing, background: background,
-            images: images, preview: preview)
+            images: images, preview: preview, isComplete: isComplete)
     }
 }

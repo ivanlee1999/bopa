@@ -309,7 +309,7 @@ final class EditorPageModel: NSObject, ObservableObject {
             // on disk: open from that rather than reading and decoding the file again. This is
             // what keeps a seam crossing — which lands here from inside a scroll callback — from
             // stalling the scroll. Anything else reads the file as it always did.
-            if let ready = prepared[newPageId],
+            if let ready = prepared[newPageId], ready.isComplete,
                ready.revision == store.pageRevision(notebookId: notebookId, pageId: newPageId)
             {
                 loaded = ready.file
@@ -444,7 +444,9 @@ final class EditorPageModel: NSObject, ObservableObject {
     func fileInkAboveTheTop(from drawing: PKDrawing, newStrokes: Range<Int>) -> PKDrawing? {
         guard let previousPageId, let store else { return nil }
         let candidates = newStrokes.clamped(to: drawing.strokes.indices)
-        let above = Set(candidates.filter { drawing.strokes[$0].renderBounds.minY < 0 })
+        let above = Set(candidates.filter {
+            drawing.strokes[$0].renderBounds.minY < -Self.topSeamTolerance
+        })
         guard !above.isEmpty else { return nil }
         do {
             var neighbor = try store.loadPage(notebookId: notebookId, pageId: previousPageId)
@@ -465,6 +467,11 @@ final class EditorPageModel: NSObject, ObservableObject {
                 .filter { !above.contains($0.offset) }
                 .map(\.element))
     }
+
+    /// How far above the top of the page a stroke's edge may reach and still be this page's.
+    /// The render bounds include the nib, so a line written along the very top of the sheet
+    /// pokes a few units above it; without this it would be carried off to the page above.
+    static let topSeamTolerance: CGFloat = 12
 
     /// Re-reads the neighbours of the open page and makes sure each is prepared.
     ///
@@ -512,13 +519,28 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// picked up rather than frozen at whatever the page held the first time it was read.
     private func prepare(_ id: String, store: NotebookStore) {
         let revision = store.pageRevision(notebookId: notebookId, pageId: id)
-        guard prepared[id]?.revision != revision, preparing[id]?.revision != revision
-        else { return }
+        if let held = prepared[id], held.revision == revision, held.isComplete,
+           held.preview != nil || !previewsNeighbors
+        {
+            return
+        }
+        guard preparing[id]?.revision != revision else { return }
         preparing[id]?.task.cancel()
+        let rendersPreview = previewsNeighbors
         let task = Task { [weak self, notebookId] in
-            let ready = await Task.detached(priority: .userInitiated) {
-                PreparedPage.read(pageId: id, notebookId: notebookId, store: store)
-            }.value
+            // Detached so the work is off the main actor; cancellation is handed through by
+            // hand, because a detached task does not inherit it — and a flick through several
+            // pages cancels a read for every neighbour it scrolls past.
+            let work = Task.detached(priority: .userInitiated) {
+                PreparedPage.read(
+                    pageId: id, notebookId: notebookId, store: store,
+                    rendersPreview: rendersPreview)
+            }
+            let ready = await withTaskCancellationHandler {
+                await work.value
+            } onCancel: {
+                work.cancel()
+            }
             guard let self, !Task.isCancelled else { return }
             self.preparing[id] = nil
             // Nothing came back — an unreadable or missing file. Nothing is recorded, so the next
@@ -538,10 +560,26 @@ final class EditorPageModel: NSObject, ObservableObject {
     private func publishPreviews() {
         let next = nextPageId.flatMap { prepared[$0]?.preview }
         let previous = previousPageId.flatMap { prepared[$0]?.preview }
+        guard previewsNeighbors else {
+            if nextPagePreview != nil { nextPagePreview = nil }
+            if previousPagePreview != nil { previousPagePreview = nil }
+            return
+        }
         // Compared first: every assignment to a published property re-renders the editor, and
         // this runs on every store notification.
         if next != nextPagePreview { nextPagePreview = next }
         if previous != previousPagePreview { previousPagePreview = previous }
+    }
+
+    /// Whether the neighbours are pictured as well as read ahead — true under continuous
+    /// scrolling, where the seams show them. Pagination turns whole pages and never draws a
+    /// neighbour, so rendering a sheet-sized picture of each would be work and memory for
+    /// nothing; the read-ahead itself still makes each turn instant.
+    var previewsNeighbors = true {
+        didSet {
+            guard previewsNeighbors != oldValue else { return }
+            refreshNeighbors()
+        }
     }
 
     /// Pages read ahead of the scroll: the neighbours of the open page, and the open page itself
