@@ -21,6 +21,8 @@ final class NotebookStore: ObservableObject {
     @Published private(set) var notebooks: [NotebookManifest] = []
     @Published private(set) var notebookActivityDates: [String: Date] = [:]
     @Published private(set) var folders: [FolderDTO] = []
+    /// Device-local reading history, separate from edit dates and sync clocks.
+    @Published private(set) var recentNotebookIDs: [String] = []
     /// What the WebDAV server held at the end of the last sync; nil until this library has
     /// synced at least once. Read-only here — only the sync engine writes it.
     @Published private(set) var remoteIndex: RemoteIndex?
@@ -53,6 +55,9 @@ final class NotebookStore: ObservableObject {
                 .appendingPathComponent("notable", isDirectory: true)
         self.clock = clock
         self.preferences = preferences
+        var seen: Set<String> = []
+        recentNotebookIDs = Array((preferences.stringArray(forKey: "library.recentNotebooks") ?? [])
+            .filter { seen.insert($0).inserted }.prefix(12))
         refresh()
     }
 
@@ -195,6 +200,16 @@ final class NotebookStore: ObservableObject {
     func rememberOpenedPage(_ pageId: String, in notebookId: String) {
         guard manifest(id: notebookId)?.pageIds.contains(pageId) == true else { return }
         preferences.set(pageId, forKey: "library.lastPage.\(notebookId)")
+        guard recentNotebookIDs.first != notebookId else { return }
+        recentNotebookIDs = Array(([notebookId] + recentNotebookIDs.filter { $0 != notebookId }).prefix(12))
+        preferences.set(recentNotebookIDs, forKey: "library.recentNotebooks")
+    }
+
+    /// Resolve titles and visibility from the live library, so renames follow immediately and
+    /// deleted notebooks (including notebooks inside a trashed folder) cannot be reopened here.
+    var recentNotebooks: [NotebookManifest] {
+        let live = Dictionary(search("").notebooks.map { ($0.notebookId, $0) }, uniquingKeysWith: { a, _ in a })
+        return recentNotebookIDs.compactMap { live[$0] }
     }
 
     func loadPage(notebookId: String, pageId: String) throws -> PageFile {

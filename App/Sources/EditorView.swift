@@ -14,6 +14,7 @@ struct EditorView: View {
     /// Dismisses the editor. The chrome is drawn here rather than in a navigation bar, so
     /// the presenter hands the close action down instead of contributing a toolbar item.
     var onClose: (() -> Void)?
+    var onSwitchNotebook: ((String) -> Void)?
 
     @StateObject private var toolSelection = ToolSelection()
     /// Everything about the open page — what is loaded, what the canvas holds, when it is
@@ -21,6 +22,8 @@ struct EditorView: View {
     @StateObject private var model = EditorPageModel()
     @State private var actionError: LibraryActionError?
     @State private var showingPageOverview = false
+    @State private var showingNotebookSwitcher = false
+    @State private var notebookAfterSwitching: String?
     @StateObject private var undoController = CanvasUndoController()
     @State private var viewport = CanvasViewportController()
 
@@ -64,9 +67,10 @@ struct EditorView: View {
                 if model.pageId == nil { model.openInitialPage(preferredPageId: initialPageId) }
             }
             .focusedSceneValue(\.editorMenuActions,
-                showingPageOverview || model.saveError != nil || actionError != nil ? nil : EditorMenuActions(
+                showingPageOverview || showingNotebookSwitcher || model.saveError != nil || actionError != nil ? nil : EditorMenuActions(
                     pages: showPages,
-                    close: { model.close() }))
+                    close: closeNotebook,
+                    switchNotebook: showNotebookSwitcher))
             // Leaving the text tool ends the session. Watched here rather than in the canvas's
             // update pass so the model is written outside the render.
             .onChange(of: toolSelection.kind) { _, kind in
@@ -83,7 +87,10 @@ struct EditorView: View {
             // here too — otherwise switching apps or locking the iPad within two seconds of the
             // last stroke loses it.
             // Returning to the app retries a flush that failed while leaving it.
-            .onChange(of: scenePhase) { _, _ in model.saveNow() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { commitOpenTextBox() }
+                model.saveNow()
+            }
             .alert(
                 "Couldn’t save this page", isPresented: .constant(model.saveError != nil),
                 presenting: model.saveError
@@ -101,6 +108,18 @@ struct EditorView: View {
                         currentPageId: model.pageId,
                         openPage: { model.open(pageId: $0) })
                         .environmentObject(store)
+                }
+            }
+            .sheet(isPresented: $showingNotebookSwitcher, onDismiss: {
+                if let target = notebookAfterSwitching {
+                    notebookAfterSwitching = nil
+                    onSwitchNotebook?(target)
+                }
+            }) {
+                NotebookSwitcherView(currentNotebookID: notebookId) { target in
+                    guard model.prepareToLeave() else { return }
+                    notebookAfterSwitching = target
+                    showingNotebookSwitcher = false
                 }
             }
     }
@@ -133,7 +152,7 @@ struct EditorView: View {
     private var topBar: some View {
         HStack(spacing: 8) {
             Button {
-                model.close()
+                closeNotebook()
             } label: {
                 Image(systemName: "chevron.backward")
                     .font(.system(size: 17, weight: .semibold))
@@ -142,10 +161,22 @@ struct EditorView: View {
             .accessibilityLabel("Library")
             .accessibilityIdentifier("editor.close")
 
-            Text(manifest?.title ?? "Notebook")
-                .font(Modernist.font(15, .bold))
+            Button(action: showNotebookSwitcher) {
+                HStack(spacing: 4) {
+                    Text(manifest?.title ?? "Notebook")
+                        .font(Modernist.font(15, .bold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
+                }
                 .foregroundStyle(Modernist.ink)
-                .lineLimit(1)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(onSwitchNotebook == nil)
+            .accessibilityLabel("Switch notebook")
+            .accessibilityValue(manifest?.title ?? "Notebook")
+            .accessibilityIdentifier("editor.notebooks")
 
             Spacer(minLength: 8)
 
@@ -238,8 +269,26 @@ struct EditorView: View {
         showingPageOverview = true
     }
 
+    private func closeNotebook() {
+        commitOpenTextBox()
+        model.close()
+    }
+
+    private func showNotebookSwitcher() {
+        guard onSwitchNotebook != nil else { return }
+        commitOpenTextBox()
+        guard model.prepareToLeave() else { return }
+        showingNotebookSwitcher = true
+    }
+
     private var optionsMenu: some View {
         Menu {
+            Button(action: showNotebookSwitcher) {
+                Label("Switch notebook…", systemImage: "rectangle.on.rectangle")
+            }
+            .keyboardShortcut("k", modifiers: .command)
+            .disabled(onSwitchNotebook == nil || model.editingBlockID != nil)
+            Divider()
             Menu {
                 Picker("Paper", selection: paperBinding) {
                     ForEach(NativeTemplate.builtIn, id: \.name) { template in
@@ -467,7 +516,8 @@ struct EditorView: View {
 final class CanvasLiveState {
     /// Current scroll offset in unzoomed page space, read at save time.
     var pageY: CGFloat = 0
-    /// Whether a stroke is being drawn. Reloading the canvas while one is in flight cancels it.
+    /// Includes the settling interval after pencil-up, until PencilKit delivers the finished
+    /// drawing. Reloading the canvas anywhere in that interval cancels or replays ink.
     var isDrawing = false
 }
 
@@ -1261,20 +1311,35 @@ struct EditorCanvasView: UIViewRepresentable {
         // Bracketing every stroke: the editor must not reload the canvas between these two, and
         // wants to know the moment it may.
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+            // A new touch can start before the previous stroke's final pressure values arrive.
+            // Keep the earliest baseline until the whole sequence has settled.
+            if !parent.liveState.isDrawing {
+                strokeCountAtToolBegin = canvasView.drawing.strokes.count
+            }
+            toolIsDown = true
             parent.liveState.isDrawing = true
-            strokeCountAtToolBegin = canvasView.drawing.strokes.count
         }
 
         /// How many strokes the canvas held when the pencil went down. PencilKit appends what is
         /// drawn, so everything from here on is new — which is how ink just written above the
         /// top of the page is told apart from ink that was already there.
         private var strokeCountAtToolBegin = 0
+        private var toolIsDown = false
+        private var awaitingFinalDrawing = false
 
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-            parent.liveState.isDrawing = false
-            // At the lift, so a stroke is moved whole and only once it is finished.
+            toolIsDown = false
+            awaitingFinalDrawing = true
+            // Pencil-up precedes the final drawing change (WWDC19, Introducing PencilKit).
+            // Keep reconciliation, navigation and seam filing blocked until that callback.
+        }
+
+        private func finishDrawing(_ canvasView: PKCanvasView) {
+            awaitingFinalDrawing = false
+            // Only the final drawing contains the whole stroke and its final force values.
             fileAnyInkAboveTheTop(canvasView)
             fileAnyInkBelowTheSeam(canvasView)
+            parent.liveState.isDrawing = false
             parent.onIdle()
             // A crossing held back while the stroke was drawn goes ahead now — the scroll may
             // have come to rest past the seam, and there will be no further scroll tick to ask.
@@ -1328,6 +1393,9 @@ struct EditorCanvasView: UIViewRepresentable {
             canvasView.accessibilityValue = "strokes:\(drawing.strokes.count)"
             parent.onChanged()
             container?.growContent(toCover: drawing.bounds)
+            if awaitingFinalDrawing && !toolIsDown {
+                finishDrawing(canvasView)
+            }
         }
     }
 }

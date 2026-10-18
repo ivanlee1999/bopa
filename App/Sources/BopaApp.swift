@@ -90,6 +90,7 @@ struct LibraryMenuActions {
 struct EditorMenuActions {
     let pages: () -> Void
     let close: () -> Void
+    let switchNotebook: () -> Void
 }
 
 private struct LibraryMenuActionsKey: FocusedValueKey {
@@ -139,6 +140,9 @@ private struct NotebookAppCommands: Commands {
                 .keyboardShortcut("s", modifiers: [.command, .control])
                 .disabled(library == nil)
             Divider()
+            Button("Switch notebook…") { editor?.switchNotebook() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(editor == nil)
             Button("Pages") { editor?.pages() }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .disabled(editor == nil)

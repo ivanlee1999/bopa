@@ -48,8 +48,10 @@ jobs:
         if: github.event_name == 'pull_request'
         continue-on-error: true
         working-directory: .notable
+        env:
+          PR_BRANCH: ${{ github.head_ref }}
         run: |
-          branch='${{ github.head_ref }}'
+          branch="$PR_BRANCH"
           if git fetch --depth 1 origin "$branch" 2>/dev/null; then
             git checkout -q FETCH_HEAD
             echo "::notice::notable has a branch named $branch; diffing the vectors against it."
@@ -100,7 +102,11 @@ jobs:
         run: |
           xcodebuild build -project Bopa.xcodeproj -scheme Bopa \
             -destination 'platform=macOS,variant=Mac Catalyst,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/BopaDerivedData" \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Verify built version and signing status
+        run: ./scripts/verify-build.sh "$RUNNER_TEMP/BopaDerivedData/Build/Products/Debug-maccatalyst/Bopa.app"
 
   notablekit:
     name: NotableKit
@@ -165,11 +171,33 @@ jobs:
             -scheme Bopa \
             -destination "id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/BopaDerivedData" \
             -resultBundlePath "$RUNNER_TEMP/Bopa.xcresult" \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Verify built version and signing status
+        run: ./scripts/verify-build.sh "$RUNNER_TEMP/BopaDerivedData/Build/Products/Debug-iphonesimulator/Bopa.app"
+
+      - name: Export UI screenshots
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -d "$RUNNER_TEMP/Bopa.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Bopa.xcresult" \
+              --output-path "$RUNNER_TEMP/ui-attachments"
+          fi
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-attachments
+          path: ${{ runner.temp }}/ui-attachments
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Upload test results
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: xcresult

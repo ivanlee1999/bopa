@@ -37,7 +37,7 @@ struct LibraryView: View {
             if sidebarVisible {
                 LibrarySidebar(selection: $selection, isPresentingModal: $sidebarIsPresentingModal,
                                selectDestination: selectDestination,
-                               closeSidebar: { showsSidebar = false })
+                               closeSidebar: { showsSidebar = false }, openNotebook: open)
                     .frame(width: horizontalSizeClass == .compact ? nil : 300)
                     .accessibilityIdentifier("library.sidebar")
                     .overlay(alignment: .trailing) {
@@ -82,7 +82,12 @@ struct LibraryView: View {
         // No navigation stack around it: the editor draws its own docked top bar, and a
         // system bar over it would be a second row of chrome saying the same things.
         .fullScreenCover(item: $openNotebook) { target in
-            EditorView(notebookId: target.id, initialPageId: target.pageId, onClose: { openNotebook = nil })
+            EditorView(notebookId: target.id, initialPageId: target.pageId,
+                       onClose: { openNotebook = nil },
+                       onSwitchNotebook: { openTarget(OpenNotebook(id: $0)) })
+                // A new notebook needs its own model, canvas and undo stack even though the
+                // full-screen presentation stays open throughout the switch.
+                .id(target.id)
                 .environmentObject(store)
         }
         // Presented here rather than inside the grid, alongside the editor it stands in for:

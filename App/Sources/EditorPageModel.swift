@@ -289,6 +289,9 @@ final class EditorPageModel: NSObject, ObservableObject {
     ///   either way.
     @discardableResult
     func open(pageId newPageId: String, persistingScroll: Bool = true) -> Bool {
+        // PencilKit's final drawing change may arrive after pencil-up. Replacing the page in
+        // that gap loses the finished stroke or files it against the destination page.
+        guard !liveState.isDrawing else { return false }
         // Every route off the current page runs through here, so this is where its debounced
         // work is flushed. The navigator panel's jump used to be the one switch that never did:
         // anything drawn inside the 2s re-arming window was silently lost, along with the
@@ -357,9 +360,14 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// Deletion recovery calls `requestClose` directly because there is no live page to save.
     @discardableResult
     func close() -> Bool {
-        guard saveNow() else { return false }
+        guard prepareToLeave() else { return false }
         requestClose?()
         return true
+    }
+
+    /// Shared by closing and switching notebooks. Failed saves keep the current editor alive.
+    func prepareToLeave() -> Bool {
+        !liveState.isDrawing && saveNow()
     }
 
     /// Enters the page below the seam, carrying the overshoot with it: what was scroll past this

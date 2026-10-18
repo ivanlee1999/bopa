@@ -43,6 +43,11 @@ fully editable, stroke by stroke, on the other — pressure and tilt included.
 
 ## Running it on a real iPad
 
+The library sidebar shows the twelve most recently opened notebooks. This reading history stays
+on this device and never changes a notebook's edit date. While writing, tap the notebook title
+(or press **⌘K**) to switch notebooks, search the library, and resume the last page you opened.
+Switching saves ink and any open text box first; a failed save keeps the current notebook open.
+
 Simulator: `cd App && xcodegen generate && open Bopa.xcodeproj`, pick an iPad, Run.
 
 Device (free personal team): set your team under Signing & Capabilities, plug in the
