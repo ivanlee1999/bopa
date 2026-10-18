@@ -374,11 +374,8 @@ struct EditorView: View {
                     appendPage: appendPageWithoutLeaving,
                     fileInkBelowTheSeam: model.fileInkBelowTheSeam,
                     fileInkAboveTheTop: model.fileInkAboveTheTop,
-                    makeTextBlock: { point in
-                        guard let block = model.newTextBlock(at: point) else { return nil }
-                        model.beginEditing(block)
-                        return block
-                    },
+                    makeTextBlock: model.newTextBlock,
+                    beginTextBlockEditing: model.beginEditing,
                     commitTextBlock: { model.commitEditing($0, text: $1) },
                     moveTextBlock: { model.moveTextBlock(id: $0, to: $1) },
                     resizeTextBlock: { model.resizeTextBlock(id: $0, width: $1) },
@@ -647,6 +644,8 @@ struct EditorCanvasView: UIViewRepresentable {
     /// Asked to put a new box where the user tapped; answered with the box to type into, or
     /// nil if there is no page to put one on.
     var makeTextBlock: (CGPoint) -> CouchBlock? = { _ in nil }
+    /// Both new boxes and existing paragraphs acquire the same editing/navigation guard.
+    var beginTextBlockEditing: (CouchBlock) -> Void = { _ in }
     /// Typing finished: the box, and what was in it. An empty one is a delete.
     var commitTextBlock: (CouchBlock, String) -> Void = { _, _ in }
     var moveTextBlock: (String, CGPoint) -> Void = { _, _ in }
@@ -943,11 +942,13 @@ struct EditorCanvasView: UIViewRepresentable {
             _ container: CanvasContainerView, didTapEmptyPageAt point: CGPoint
         ) {
             guard let block = parent.makeTextBlock(point) else { return }
+            parent.beginTextBlockEditing(block)
             container.beginTextEditing(block, source: "")
         }
 
         func canvasContainer(_ container: CanvasContainerView, didTapTextBlock id: String) {
             guard let block = container.textBlocks.first(where: { $0.id == id }) else { return }
+            parent.beginTextBlockEditing(block)
             // The source, not the rendered text: while a box is open it *is* markdown, and a
             // heading whose hashes vanished the moment it was tapped could never be unmade.
             container.beginTextEditing(block, source: block.text ?? "")
