@@ -195,6 +195,7 @@ final class CanvasContainerView: UIView {
         // Above the canvas: while a box is open its caret and selection have to be reachable,
         // and the canvas is not drawing anyway.
         textEditor.isHidden = true
+        textEditor.accessibilityIdentifier = "editor.textbox.input"
         textEditor.isScrollEnabled = false
         textEditor.backgroundColor = .clear
         textEditor.textContainerInset = .zero

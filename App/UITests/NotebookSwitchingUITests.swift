@@ -3,6 +3,13 @@ import XCTest
 /// Exercise the presentation boundary as well as the store: a new notebook must not inherit
 /// the previous editor's StateObject, drawing, page selection or undo manager.
 final class NotebookSwitchingUITests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        // A failed navigation precondition makes later taps target the wrong screen.
+        // Stop that test at its first failure rather than cascading long UI timeouts.
+        continueAfterFailure = false
+    }
+
     @MainActor
     private func create(_ title: String, in app: XCUIApplication) {
         app.buttons["library.add"].tap()
@@ -167,7 +174,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
         canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
-        let text = app.textViews.firstMatch
+        let text = app.textViews["editor.textbox.input"]
         XCTAssertTrue(text.waitForExistence(timeout: 5))
         text.typeText("Keep this unfinished paragraph")
         app.buttons["editor.close"].tap()
@@ -175,9 +182,11 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.terminate()
         app.launch()
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
-        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
+        // Creation rounds page coordinates; tap inside the saved box, not its top-left edge.
+        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
+            .withOffset(CGVector(dx: 4, dy: 4)).tap()
         XCTAssertTrue(text.waitForExistence(timeout: 5))
-        XCTAssertEqual(text.value as? String, "Keep this unfinished paragraph")
+        waitForValue("Keep this unfinished paragraph", on: app.textViews["editor.textbox.input"])
     }
 
     @MainActor
@@ -193,28 +202,36 @@ final class NotebookSwitchingUITests: XCTestCase {
         create(b, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[a].tap()
         canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
-        let text = app.textViews.firstMatch
+        let text = app.textViews["editor.textbox.input"]
         XCTAssertTrue(text.waitForExistence(timeout: 5))
         text.typeText("Saved by switching")
         switchTo(b, in: app)
         switchTo(a, in: app)
-        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
+        // Creation rounds page coordinates; tap inside the saved box, not its top-left edge.
+        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
+            .withOffset(CGVector(dx: 4, dy: 4)).tap()
         XCTAssertTrue(text.waitForExistence(timeout: 5))
-        XCTAssertEqual(text.value as? String, "Saved by switching")
+        waitForValue("Saved by switching", on: app.textViews["editor.textbox.input"])
         // Leave this new edit active. Reopening from disk prevents a live text view from
         // making a missing background flush look like successful persistence.
         text.typeText(" background edit ")
         let expected = text.value as? String
         XCTAssertTrue(expected?.contains("background edit") == true)
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5)
+        if !app.wait(for: .runningBackground, timeout: 5), app.state == .runningForeground {
+            // Retry one missed Home event, then still require a verified background state.
+            XCUIDevice.shared.press(.home)
+        }
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10)
                       || app.state == .runningBackgroundSuspended)
         app.terminate()
         app.launch()
         app.descendants(matching: .any)["library.contents"].staticTexts[a].tap()
-        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
+        // Creation rounds page coordinates; tap inside the saved box, not its top-left edge.
+        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
+            .withOffset(CGVector(dx: 4, dy: 4)).tap()
         XCTAssertTrue(text.waitForExistence(timeout: 5))
-        XCTAssertEqual(text.value as? String, expected)
+        waitForValue(expected ?? "", on: app.textViews["editor.textbox.input"])
     }
 
 }
