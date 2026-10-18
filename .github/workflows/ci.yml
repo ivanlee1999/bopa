@@ -48,8 +48,10 @@ jobs:
         if: github.event_name == 'pull_request'
         continue-on-error: true
         working-directory: .notable
+        env:
+          PR_BRANCH: ${{ github.head_ref }}
         run: |
-          branch='${{ github.head_ref }}'
+          branch="$PR_BRANCH"
           if git fetch --depth 1 origin "$branch" 2>/dev/null; then
             git checkout -q FETCH_HEAD
             echo "::notice::notable has a branch named $branch; diffing the vectors against it."
@@ -100,7 +102,11 @@ jobs:
         run: |
           xcodebuild build -project Bopa.xcodeproj -scheme Bopa \
             -destination 'platform=macOS,variant=Mac Catalyst,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/BopaDerivedData" \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Verify built version and signing status
+        run: ./scripts/verify-build.sh "$RUNNER_TEMP/BopaDerivedData/Build/Products/Debug-maccatalyst/Bopa.app"
 
   notablekit:
     name: NotableKit
@@ -114,6 +120,55 @@ jobs:
       # Pure Swift package, no simulator needed — runs on the host macOS.
       - name: Test
         run: swift test --package-path NotableKit
+
+  # The application also declares iPhone support. Run the navigation boundaries at compact
+  # width without comparing iPad snapshot baselines against a different device's metrics.
+  phone:
+    name: Navigation (iPhone simulator)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: App
+        run: xcodegen generate
+      - name: Test notebook switching at compact width
+        run: |
+          udid=$(xcrun simctl list devices available -j | jq -r '
+            [.devices | to_entries[]
+             | select(.key | contains("SimRuntime.iOS"))
+             | .value[] | select(.name | startswith("iPhone"))] | .[0].udid // empty')
+          test -n "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          xcodebuild test -project App/Bopa.xcodeproj -scheme Bopa \
+            -destination "id=$udid" -destination-timeout 120 \
+            -only-testing:BopaUITests/NotebookSwitchingUITests \
+            -resultBundlePath "$RUNNER_TEMP/BopaPhone.xcresult" CODE_SIGNING_ALLOWED=NO
+      - name: Export UI screenshots
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -d "$RUNNER_TEMP/BopaPhone.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/BopaPhone.xcresult" \
+              --output-path "$RUNNER_TEMP/phone-ui-attachments"
+          fi
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-ui-attachments
+          path: ${{ runner.temp }}/phone-ui-attachments
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-xcresult
+          path: ${{ runner.temp }}/BopaPhone.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
 
   app:
     name: App (iPad simulator)
@@ -165,13 +220,59 @@ jobs:
             -scheme Bopa \
             -destination "id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/BopaDerivedData" \
             -resultBundlePath "$RUNNER_TEMP/Bopa.xcresult" \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Verify built version and signing status
+        run: ./scripts/verify-build.sh "$RUNNER_TEMP/BopaDerivedData/Build/Products/Debug-iphonesimulator/Bopa.app"
+
+      - name: Export UI screenshots
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -d "$RUNNER_TEMP/Bopa.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Bopa.xcresult" \
+              --output-path "$RUNNER_TEMP/ui-attachments"
+          fi
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-attachments
+          path: ${{ runner.temp }}/ui-attachments
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Upload test results
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: xcresult
           path: ${{ runner.temp }}/Bopa.xcresult
           retention-days: 7
+
+  source-package:
+    name: Verified source package
+    needs: [vectors, catalyst, notablekit, phone, app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package tested source
+        run: ./scripts/package-source.sh "$RUNNER_TEMP/bopa-source"
+      - name: Verify checksums and archive contents
+        run: |
+          cd "$RUNNER_TEMP/bopa-source"
+          sha256sum --check SHA256SUMS
+          tar -tzf ./*.tar.gz | grep '/App/project.yml$'
+          unzip -t ./*.zip
+      - name: Upload source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: bopa-source-${{ github.sha }}
+          path: ${{ runner.temp }}/bopa-source
+          if-no-files-found: error
+          retention-days: 30

@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		816E4A62FD5DF3D764374C80 /* NotebookSwitchingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6F70D61D16C83A40B277CB /* NotebookSwitchingUITests.swift */; };
+		BD4C5EECA01A811665E45A69 /* CanvasDrawingLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F6EBDBBA609C0054E9AA4E8 /* CanvasDrawingLifecycleTests.swift */; };
+		C075EA187090EF4D880EB96E /* RecentNotebookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FD266E54718FEB5999C8884 /* RecentNotebookTests.swift */; };
+		FA5F69562B4BE5D675F5155C /* NotebookSwitcherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66D07310AB1C50F62680EF81 /* NotebookSwitcherView.swift */; };
 		0039A71CECB36F833C1E1192 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BE21820564A6CE54CAC908C4 /* Assets.xcassets */; };
 		020B2B60C10166F6B44D6904 /* NotebookCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0FF747D670DE264447CF5D /* NotebookCover.swift */; };
 		02216434DB781C9AC93FFE6E /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37AA22765996393FB323A60 /* EditorView.swift */; };
@@ -101,6 +105,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		5E6F70D61D16C83A40B277CB /* NotebookSwitchingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookSwitchingUITests.swift; sourceTree = "<group>"; };
+		0F6EBDBBA609C0054E9AA4E8 /* CanvasDrawingLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasDrawingLifecycleTests.swift; sourceTree = "<group>"; };
+		8FD266E54718FEB5999C8884 /* RecentNotebookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentNotebookTests.swift; sourceTree = "<group>"; };
+		66D07310AB1C50F62680EF81 /* NotebookSwitcherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookSwitcherView.swift; sourceTree = "<group>"; };
 		007E2190A23B0021DB3B5752 /* EraserUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EraserUITests.swift; sourceTree = "<group>"; };
 		067F82B43BDD4E6D982DBA40 /* BopaTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BopaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0DA342EBFED166F5EF7F44CC /* LibraryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryUITests.swift; sourceTree = "<group>"; };
@@ -248,6 +256,7 @@
 		CA08E7DA5D20ED789AA336D6 /* UITests */ = {
 			isa = PBXGroup;
 			children = (
+				5E6F70D61D16C83A40B277CB /* NotebookSwitchingUITests.swift */,
 				1C6C87EB446AC370D0CF3F7B /* BareCanvasUITests.swift */,
 				3B29818F78C9EC3F96D1B394 /* DrawingUITests.swift */,
 				007E2190A23B0021DB3B5752 /* EraserUITests.swift */,
@@ -260,6 +269,7 @@
 		EBB9433109DCADDCCB9E64EC /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				66D07310AB1C50F62680EF81 /* NotebookSwitcherView.swift */,
 				BE21820564A6CE54CAC908C4 /* Assets.xcassets */,
 				93B7E13E1B6B977C4D18D3F6 /* BackgroundFlushAssertion.swift */,
 				27BB5272061EA302A49313CA /* BackgroundRenderer.swift */,
@@ -305,6 +315,8 @@
 		F98CDBC573F54114A6329452 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				0F6EBDBBA609C0054E9AA4E8 /* CanvasDrawingLifecycleTests.swift */,
+				8FD266E54718FEB5999C8884 /* RecentNotebookTests.swift */,
 				EF326225E306629D3DA5C34B /* BackgroundFlushTests.swift */,
 				74B56097ED40129E6E45E1B3 /* CanvasContainerViewTests.swift */,
 				DF0DCF11DD97B800E68436AC /* CanvasSnapshotTests.swift */,
@@ -468,6 +480,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				816E4A62FD5DF3D764374C80 /* NotebookSwitchingUITests.swift in Sources */,
 				A5CC40609B9AD77C21E0E5F5 /* BareCanvasUITests.swift in Sources */,
 				60E3A5838850A4ADDF75230D /* DrawingUITests.swift in Sources */,
 				6282E4AF4D9D4C81DBA588C4 /* EraserUITests.swift in Sources */,
@@ -480,6 +493,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BD4C5EECA01A811665E45A69 /* CanvasDrawingLifecycleTests.swift in Sources */,
+				C075EA187090EF4D880EB96E /* RecentNotebookTests.swift in Sources */,
 				C4A7CD4CD21255F1C13D8E0B /* BackgroundFlushTests.swift in Sources */,
 				9268909E990BFF4774CFA57A /* CanvasContainerViewTests.swift in Sources */,
 				4B7D4955A3CE1C1DE4D0BEB9 /* CanvasSnapshotTests.swift in Sources */,
@@ -514,6 +529,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FA5F69562B4BE5D675F5155C /* NotebookSwitcherView.swift in Sources */,
 				402052C8B168A671EBBAAC3E /* BackgroundFlushAssertion.swift in Sources */,
 				3CFEC301B1ED29B4D9CFF6ED /* BackgroundRenderer.swift in Sources */,
 				F6A26EF4A3D7C39C2ECB8579 /* BareCanvas.swift in Sources */,
@@ -763,7 +779,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Bopa.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -775,7 +791,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.7.0;
+				MARKETING_VERSION = 0.8.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.ivan.bopa;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = YES;
@@ -791,7 +807,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Bopa.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER = NO;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
@@ -803,7 +819,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.7.0;
+				MARKETING_VERSION = 0.8.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.ivan.bopa;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = YES;

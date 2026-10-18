@@ -1,5 +1,6 @@
 import NotableKit
 import PencilKit
+import SwiftUI
 import UIKit
 import XCTest
 
@@ -135,4 +136,27 @@ final class TextBoxCanvasTests: XCTestCase {
         let view = container()
         XCTAssertFalse(view.textEditor.undoManager === view.pageUndoManager)
     }
+
+    func testOpeningExistingTextAcquiresTheSameEditingGuardAsNewText() {
+        let saved = block(id: "saved", x: 100, y: 200)
+        let fresh = block(id: "fresh", x: 200, y: 300)
+        var editingIDs: [String] = []
+        let parent = EditorCanvasView(
+            pageId: "page", drawing: .constant(PKDrawing()),
+            makeTextBlock: { _ in fresh },
+            beginTextBlockEditing: { editingIDs.append($0.id) },
+            onChanged: {})
+        let coordinator = parent.makeCoordinator()
+        let view = container()
+        coordinator.container = view
+        view.setTextBlocks([saved])
+        coordinator.canvasContainer(view, didTapTextBlock: saved.id)
+        XCTAssertEqual(editingIDs, [saved.id])
+        XCTAssertEqual(view.textEditor.text, saved.text)
+        _ = view.endTextEditing()
+        coordinator.canvasContainer(view, didTapEmptyPageAt: .zero)
+        XCTAssertEqual(editingIDs, [saved.id, fresh.id])
+        XCTAssertEqual(view.textEditor.text, "")
+    }
+
 }

@@ -25,6 +25,12 @@ struct LibraryView: View {
     struct OpenNotebook: Identifiable, Hashable {
         let id: String
         var pageId: String? = nil
+
+        /// A direct notebook switch releases the old notebook's sync exclusion just as
+        /// closing does. Changing the selected page inside the same notebook does not.
+        func releasesNotebook(whenChangingTo target: OpenNotebook?) -> Bool {
+            id != target?.id
+        }
     }
 
     /// Open on a wide screen, closed when there is only room for one column.
@@ -37,7 +43,7 @@ struct LibraryView: View {
             if sidebarVisible {
                 LibrarySidebar(selection: $selection, isPresentingModal: $sidebarIsPresentingModal,
                                selectDestination: selectDestination,
-                               closeSidebar: { showsSidebar = false })
+                               closeSidebar: { showsSidebar = false }, openNotebook: open)
                     .frame(width: horizontalSizeClass == .compact ? nil : 300)
                     .accessibilityIdentifier("library.sidebar")
                     .overlay(alignment: .trailing) {
@@ -70,10 +76,10 @@ struct LibraryView: View {
         // EditorView's onDisappear has just flushed, so the next run reconciles it for real.
         .onChange(of: openNotebook) { previous, target in
             coordinator.openNotebookId = target?.id
-            // Closing lifts the exclusion, so sync straight away rather than leaving whatever the
+            // Closing or switching lifts the old exclusion, so sync rather than leaving what the
             // BOOX changed sitting until the next poll. Waiting for the edit-driven push would
             // only cover the case where you actually drew something.
-            if previous != nil, target == nil {
+            if previous?.releasesNotebook(whenChangingTo: target) == true {
                 // Through the host, not the coordinator: it is the one thing that knows which
                 // backend is selected, so this cannot run a WebDAV sync under CouchDB.
                 Task { await backendHost.syncIfAutomatic() }
@@ -82,7 +88,12 @@ struct LibraryView: View {
         // No navigation stack around it: the editor draws its own docked top bar, and a
         // system bar over it would be a second row of chrome saying the same things.
         .fullScreenCover(item: $openNotebook) { target in
-            EditorView(notebookId: target.id, initialPageId: target.pageId, onClose: { openNotebook = nil })
+            EditorView(notebookId: target.id, initialPageId: target.pageId,
+                       onClose: { openNotebook = nil },
+                       onSwitchNotebook: { openTarget(OpenNotebook(id: $0)) })
+                // A new notebook needs its own model, canvas and undo stack even though the
+                // full-screen presentation stays open throughout the switch.
+                .id(target.id)
                 .environmentObject(store)
         }
         // Presented here rather than inside the grid, alongside the editor it stands in for:

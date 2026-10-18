@@ -104,6 +104,34 @@ final class EditorPageModelTests: XCTestCase {
         return data
     }
 
+    func testNavigationWaitsForActiveToolAndAFailedSwitchKeepsTheCurrentPage() throws {
+        let first = pageIds[0]
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: first))
+        var closed = false
+        model.requestClose = { closed = true }
+        model.liveState.isDrawing = true
+        XCTAssertFalse(model.open(pageId: second.id))
+        XCTAssertFalse(model.close())
+        XCTAssertFalse(model.prepareToLeave())
+        XCTAssertFalse(closed)
+        XCTAssertEqual(model.pageId, first)
+
+        model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "final", second: 1)])
+        model.scheduleSave()
+        model.liveState.isDrawing = false
+        let heal = try breakTheStore()
+        XCTAssertFalse(model.prepareToLeave(), "a failed notebook switch must retain unsaved ink")
+        XCTAssertEqual(model.pageId, first)
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+        XCTAssertTrue(model.dirty)
+        try heal.write(to: manifestURL)
+        XCTAssertTrue(model.prepareToLeave())
+        XCTAssertEqual(try store.loadPage(notebookId: notebookId, pageId: first).strokes.count, 1)
+        XCTAssertFalse(closed, "preparing a switch must not dismiss the presentation")
+    }
+
     // MARK: The baseline advances only after a save lands
 
     /// An erasure must survive a failed flush. The baseline (`canvasStrokeIDs`) used to advance
@@ -716,7 +744,7 @@ final class EditorPageModelTests: XCTestCase {
 
         XCTAssertFalse(closed)
         XCTAssertTrue(store.notebooks.isEmpty)
-        // PencilKit delivers the finished stroke before the lift's idle callback.
+        // Supply a synthetic drawing before tool-up; this does not model late force updates.
         model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "last-stroke", second: 1)])
         model.scheduleSave()
         model.liveState.isDrawing = false

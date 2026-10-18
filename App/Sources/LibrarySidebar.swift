@@ -90,6 +90,7 @@ struct LibrarySidebar: View {
     @Binding var isPresentingModal: Bool
     let selectDestination: (LibrarySelection) -> Void
     let closeSidebar: () -> Void
+    var openNotebook: (String) -> Void = { _ in }
 
     /// What the user has explicitly shut. Everything else is open — see `flattened`.
     @State private var collapsed: Set<String> = []
@@ -106,6 +107,25 @@ struct LibrarySidebar: View {
             ScrollView {
                 VStack(spacing: 0) {
                     rootRow
+
+                    if !store.recentNotebooks.isEmpty {
+                        SectionHeading("Recently opened")
+                            .padding(.horizontal, 20)
+                            .padding(.top, 18)
+                            .padding(.bottom, 4)
+                        ForEach(store.recentNotebooks, id: \.notebookId) { notebook in
+                            Button { openNotebook(notebook.notebookId) } label: {
+                                Label(notebook.title, systemImage: "doc.text")
+                                    .font(Modernist.font(14, .medium))
+                                    .lineLimit(2)
+                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 20)
+                            .accessibilityIdentifier("sidebar.recent.\(notebook.notebookId)")
+                        }
+                    }
 
                     let tree = LibraryNode.tree(from: store)
                     if !tree.isEmpty {

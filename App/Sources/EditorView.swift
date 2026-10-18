@@ -14,6 +14,7 @@ struct EditorView: View {
     /// Dismisses the editor. The chrome is drawn here rather than in a navigation bar, so
     /// the presenter hands the close action down instead of contributing a toolbar item.
     var onClose: (() -> Void)?
+    var onSwitchNotebook: ((String) -> Void)?
 
     @StateObject private var toolSelection = ToolSelection()
     /// Everything about the open page — what is loaded, what the canvas holds, when it is
@@ -21,6 +22,8 @@ struct EditorView: View {
     @StateObject private var model = EditorPageModel()
     @State private var actionError: LibraryActionError?
     @State private var showingPageOverview = false
+    @State private var showingNotebookSwitcher = false
+    @State private var notebookAfterSwitching: String?
     @StateObject private var undoController = CanvasUndoController()
     @State private var viewport = CanvasViewportController()
 
@@ -64,9 +67,10 @@ struct EditorView: View {
                 if model.pageId == nil { model.openInitialPage(preferredPageId: initialPageId) }
             }
             .focusedSceneValue(\.editorMenuActions,
-                showingPageOverview || model.saveError != nil || actionError != nil ? nil : EditorMenuActions(
+                showingPageOverview || showingNotebookSwitcher || model.saveError != nil || actionError != nil ? nil : EditorMenuActions(
                     pages: showPages,
-                    close: { model.close() }))
+                    close: closeNotebook,
+                    switchNotebook: showNotebookSwitcher))
             // Leaving the text tool ends the session. Watched here rather than in the canvas's
             // update pass so the model is written outside the render.
             .onChange(of: toolSelection.kind) { _, kind in
@@ -83,7 +87,10 @@ struct EditorView: View {
             // here too — otherwise switching apps or locking the iPad within two seconds of the
             // last stroke loses it.
             // Returning to the app retries a flush that failed while leaving it.
-            .onChange(of: scenePhase) { _, _ in model.saveNow() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { commitOpenTextBox() }
+                model.saveNow()
+            }
             .alert(
                 "Couldn’t save this page", isPresented: .constant(model.saveError != nil),
                 presenting: model.saveError
@@ -101,6 +108,18 @@ struct EditorView: View {
                         currentPageId: model.pageId,
                         openPage: { model.open(pageId: $0) })
                         .environmentObject(store)
+                }
+            }
+            .sheet(isPresented: $showingNotebookSwitcher, onDismiss: {
+                if let target = notebookAfterSwitching {
+                    notebookAfterSwitching = nil
+                    onSwitchNotebook?(target)
+                }
+            }) {
+                NotebookSwitcherView(currentNotebookID: notebookId) { target in
+                    guard model.prepareToLeave() else { return }
+                    notebookAfterSwitching = target
+                    showingNotebookSwitcher = false
                 }
             }
     }
@@ -133,7 +152,7 @@ struct EditorView: View {
     private var topBar: some View {
         HStack(spacing: 8) {
             Button {
-                model.close()
+                closeNotebook()
             } label: {
                 Image(systemName: "chevron.backward")
                     .font(.system(size: 17, weight: .semibold))
@@ -142,10 +161,22 @@ struct EditorView: View {
             .accessibilityLabel("Library")
             .accessibilityIdentifier("editor.close")
 
-            Text(manifest?.title ?? "Notebook")
-                .font(Modernist.font(15, .bold))
+            Button(action: showNotebookSwitcher) {
+                HStack(spacing: 4) {
+                    Text(manifest?.title ?? "Notebook")
+                        .font(Modernist.font(15, .bold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
+                }
                 .foregroundStyle(Modernist.ink)
-                .lineLimit(1)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(onSwitchNotebook == nil)
+            .accessibilityLabel("Switch notebook")
+            .accessibilityValue(manifest?.title ?? "Notebook")
+            .accessibilityIdentifier("editor.notebooks")
 
             Spacer(minLength: 8)
 
@@ -238,8 +269,26 @@ struct EditorView: View {
         showingPageOverview = true
     }
 
+    private func closeNotebook() {
+        commitOpenTextBox()
+        model.close()
+    }
+
+    private func showNotebookSwitcher() {
+        guard onSwitchNotebook != nil else { return }
+        commitOpenTextBox()
+        guard model.prepareToLeave() else { return }
+        showingNotebookSwitcher = true
+    }
+
     private var optionsMenu: some View {
         Menu {
+            Button(action: showNotebookSwitcher) {
+                Label("Switch notebook…", systemImage: "rectangle.on.rectangle")
+            }
+            .keyboardShortcut("k", modifiers: .command)
+            .disabled(onSwitchNotebook == nil || model.editingBlockID != nil)
+            Divider()
             Menu {
                 Picker("Paper", selection: paperBinding) {
                     ForEach(NativeTemplate.builtIn, id: \.name) { template in
@@ -325,11 +374,8 @@ struct EditorView: View {
                     appendPage: appendPageWithoutLeaving,
                     fileInkBelowTheSeam: model.fileInkBelowTheSeam,
                     fileInkAboveTheTop: model.fileInkAboveTheTop,
-                    makeTextBlock: { point in
-                        guard let block = model.newTextBlock(at: point) else { return nil }
-                        model.beginEditing(block)
-                        return block
-                    },
+                    makeTextBlock: model.newTextBlock,
+                    beginTextBlockEditing: model.beginEditing,
                     commitTextBlock: { model.commitEditing($0, text: $1) },
                     moveTextBlock: { model.moveTextBlock(id: $0, to: $1) },
                     resizeTextBlock: { model.resizeTextBlock(id: $0, width: $1) },
@@ -467,7 +513,9 @@ struct EditorView: View {
 final class CanvasLiveState {
     /// Current scroll offset in unzoomed page space, read at save time.
     var pageY: CGFloat = 0
-    /// Whether a stroke is being drawn. Reloading the canvas while one is in flight cancels it.
+    /// Whether a tool sequence is active. Reloading the canvas mid-gesture cancels it.
+    /// This retains the established tool-up boundary; it does not claim to track delayed
+    /// physical Pencil pressure updates.
     var isDrawing = false
 }
 
@@ -597,6 +645,8 @@ struct EditorCanvasView: UIViewRepresentable {
     /// Asked to put a new box where the user tapped; answered with the box to type into, or
     /// nil if there is no page to put one on.
     var makeTextBlock: (CGPoint) -> CouchBlock? = { _ in nil }
+    /// Both new boxes and existing paragraphs acquire the same editing/navigation guard.
+    var beginTextBlockEditing: (CouchBlock) -> Void = { _ in }
     /// Typing finished: the box, and what was in it. An empty one is a delete.
     var commitTextBlock: (CouchBlock, String) -> Void = { _, _ in }
     var moveTextBlock: (String, CGPoint) -> Void = { _, _ in }
@@ -893,11 +943,13 @@ struct EditorCanvasView: UIViewRepresentable {
             _ container: CanvasContainerView, didTapEmptyPageAt point: CGPoint
         ) {
             guard let block = parent.makeTextBlock(point) else { return }
+            parent.beginTextBlockEditing(block)
             container.beginTextEditing(block, source: "")
         }
 
         func canvasContainer(_ container: CanvasContainerView, didTapTextBlock id: String) {
             guard let block = container.textBlocks.first(where: { $0.id == id }) else { return }
+            parent.beginTextBlockEditing(block)
             // The source, not the rendered text: while a box is open it *is* markdown, and a
             // heading whose hashes vanished the moment it was tapped could never be unmade.
             container.beginTextEditing(block, source: block.text ?? "")
@@ -969,6 +1021,9 @@ struct EditorCanvasView: UIViewRepresentable {
         /// "previous tool" something to compare against before any tool change.
         func seed(_ tool: PKTool) {
             currentTool = tool
+            // Seeding also consumes the text-tool revision; apply its gesture mode before
+            // later updates skip that revision (including initial text-mode UI launches).
+            container?.isTextMode = toolSelection?.isTextTool ?? false
             appliedToolRevision = toolSelection?.revision ?? 0
         }
 
@@ -1258,34 +1313,32 @@ struct EditorCanvasView: UIViewRepresentable {
                 scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
         }
 
-        // Bracketing every stroke: the editor must not reload the canvas between these two, and
-        // wants to know the moment it may.
+        // Preserve the established tool-down/tool-up boundary. Drawing-change notifications
+        // have no session identity and cannot safely be counted as completed tool sequences.
+        // In particular, a no-op eraser/lasso need not mutate the drawing at all.
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
-            parent.liveState.isDrawing = true
             strokeCountAtToolBegin = canvasView.drawing.strokes.count
+            toolBeganWithInk = canvasView.tool is PKInkingTool
+            parent.liveState.isDrawing = true
         }
 
-        /// How many strokes the canvas held when the pencil went down. PencilKit appends what is
-        /// drawn, so everything from here on is new — which is how ink just written above the
-        /// top of the page is told apart from ink that was already there.
         private var strokeCountAtToolBegin = 0
+        private var toolBeganWithInk = false
 
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             parent.liveState.isDrawing = false
-            // At the lift, so a stroke is moved whole and only once it is finished.
             fileAnyInkAboveTheTop(canvasView)
             fileAnyInkBelowTheSeam(canvasView)
             parent.onIdle()
-            // A crossing held back while the stroke was drawn goes ahead now — the scroll may
-            // have come to rest past the seam, and there will be no further scroll tick to ask.
             commitSeamCrossingIfReached(canvasView)
         }
 
         /// Moves ink just drawn in the room above the page onto the page above — see
-        /// `EditorPageModel.fileInkAboveTheTop`. Only for a tool that inks: an eraser adds no
-        /// strokes of its own, and the pieces it leaves of a stroke it cut were not drawn here.
+        /// `EditorPageModel.fileInkAboveTheTop`. An eraser adds no strokes of its own, and
+        /// pieces it leaves of a cut stroke were not drawn here. Use the originating tool,
+        /// rather than a palette choice made while the gesture was ending.
         private func fileAnyInkAboveTheTop(_ canvasView: PKCanvasView) {
-            guard let container, container.previousSeamActive, canvasView.tool is PKInkingTool
+            guard let container, container.previousSeamActive, toolBeganWithInk
             else { return }
             let drawn = strokeCountAtToolBegin..<max(
                 canvasView.drawing.strokes.count, strokeCountAtToolBegin)

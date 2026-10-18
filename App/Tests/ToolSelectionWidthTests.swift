@@ -1,4 +1,5 @@
 import PencilKit
+import SwiftUI
 import XCTest
 
 @testable import Bopa
@@ -279,4 +280,26 @@ final class ToolSelectionWidthTests: XCTestCase {
     private func inkingWidth(_ selection: ToolSelection) -> CGFloat {
         (selection.pkTool as? PKInkingTool)?.width ?? 0
     }
+
+    func testSeedingTextSelectionEnablesTextModeBeforeRevisionIsConsumed() {
+        let selection = makeSelection()
+        selection.select(.text)
+        let parent = EditorCanvasView(
+            pageId: "page", drawing: .constant(PKDrawing()),
+            toolSelection: selection, onChanged: {})
+        let coordinator = parent.makeCoordinator()
+        let container = CanvasContainerView()
+        coordinator.container = container
+        coordinator.toolSelection = selection
+        coordinator.seed(PKInkingTool(.pen, color: .black, width: 5))
+        XCTAssertTrue(container.isTextMode)
+        XCTAssertFalse(container.canvas.drawingGestureRecognizer.isEnabled)
+        coordinator.applyToolIfNeeded()
+        XCTAssertTrue(container.isTextMode, "an unchanged revision must retain initial text mode")
+        selection.select(.pen)
+        coordinator.applyToolIfNeeded()
+        XCTAssertFalse(container.isTextMode)
+        XCTAssertTrue(container.canvas.drawingGestureRecognizer.isEnabled)
+    }
+
 }
