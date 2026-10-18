@@ -4,7 +4,8 @@ import XCTest
 
 @testable import Bopa
 
-/// Drive Apple's documented callback order: pencil-up happens before the finished drawing.
+/// Protect the established tool-gesture boundary, without treating anonymous drawing
+/// callbacks as a final-pressure completion signal. Physical Pencil timing needs device coverage.
 @MainActor
 final class CanvasDrawingLifecycleTests: XCTestCase {
     private final class DrawingBox {
@@ -27,27 +28,27 @@ final class CanvasDrawingLifecycleTests: XCTestCase {
         })
     }
 
-    func testPencilUpDoesNotPublishIdleUntilTheFinishedDrawingArrives() {
-        let box = DrawingBox()
-        let live = CanvasLiveState()
-        let parent = EditorCanvasView(
-            pageId: "page", drawing: Binding(get: { box.value }, set: { box.value = $0 }),
-            liveState: live, onChanged: {}, onIdle: { box.idleDrawings.append(box.value) })
-        let coordinator = parent.makeCoordinator()
-        let canvas = PKCanvasView()
-        coordinator.canvasViewDidBeginUsingTool(canvas)
-        coordinator.canvasViewDidEndUsingTool(canvas)
-        XCTAssertTrue(live.isDrawing, "remote reloads must still be blocked at pencil-up")
-        XCTAssertTrue(box.idleDrawings.isEmpty)
-
-        canvas.drawing = drawing(1)
-        coordinator.canvasViewDrawingDidChange(canvas)
-        XCTAssertFalse(live.isDrawing)
-        XCTAssertEqual(box.idleDrawings.map { $0.strokes.count }, [1])
-        XCTAssertEqual(box.value.strokes.count, 1)
+    func testUnchangedToolSessionsAlwaysReleaseNavigation() {
+        let tools: [PKTool] = [PKInkingTool(.pen, color: .black, width: 4),
+                               PKEraserTool(.vector), PKLassoTool()]
+        for tool in tools {
+            let box = DrawingBox()
+            let live = CanvasLiveState()
+            let parent = EditorCanvasView(
+                pageId: "page", drawing: Binding(get: { box.value }, set: { box.value = $0 }),
+                liveState: live, onChanged: {}, onIdle: { box.idleDrawings.append(box.value) })
+            let coordinator = parent.makeCoordinator()
+            let canvas = PKCanvasView()
+            canvas.tool = tool
+            coordinator.canvasViewDidBeginUsingTool(canvas)
+            XCTAssertTrue(live.isDrawing)
+            coordinator.canvasViewDidEndUsingTool(canvas)
+            XCTAssertFalse(live.isDrawing, "an unchanged gesture must not wait for a mutation")
+            XCTAssertEqual(box.idleDrawings.count, 1)
+        }
     }
 
-    func testAnEarlierStrokesFinalCallbackCannotInterruptTheNextStroke() {
+    func testLateDrawingUpdatesDoNotEndAnotherActiveToolSession() {
         let box = DrawingBox()
         let live = CanvasLiveState()
         let parent = EditorCanvasView(
@@ -57,19 +58,23 @@ final class CanvasDrawingLifecycleTests: XCTestCase {
         let canvas = PKCanvasView()
         coordinator.canvasViewDidBeginUsingTool(canvas)
         coordinator.canvasViewDidEndUsingTool(canvas)
+        XCTAssertEqual(box.idleDrawings.count, 1)
         coordinator.canvasViewDidBeginUsingTool(canvas)
         canvas.drawing = drawing(1)
         coordinator.canvasViewDrawingDidChange(canvas)
         XCTAssertTrue(live.isDrawing)
-        XCTAssertTrue(box.idleDrawings.isEmpty)
+        XCTAssertEqual(box.idleDrawings.count, 1)
         coordinator.canvasViewDidEndUsingTool(canvas)
+        XCTAssertFalse(live.isDrawing)
+        XCTAssertEqual(box.idleDrawings.count, 2)
         canvas.drawing = drawing(2)
         coordinator.canvasViewDrawingDidChange(canvas)
         XCTAssertFalse(live.isDrawing)
-        XCTAssertEqual(box.idleDrawings.map { $0.strokes.count }, [2])
+        XCTAssertEqual(box.value.strokes.count, 2)
+        XCTAssertEqual(box.idleDrawings.count, 2, "late changes must not invent another tool end")
     }
 
-    func testSelectingAnEraserAfterLiftDoesNotReclassifyPendingInk() {
+    func testSelectingAnEraserDuringInkDoesNotReclassifyTheGesture() {
         let box = DrawingBox()
         let live = CanvasLiveState()
         var filedRanges: [Range<Int>] = []
@@ -86,15 +91,15 @@ final class CanvasDrawingLifecycleTests: XCTestCase {
         let canvas = container.canvas
         canvas.tool = PKInkingTool(.pen, color: .black, width: 4)
         coordinator.canvasViewDidBeginUsingTool(canvas)
-        coordinator.canvasViewDidEndUsingTool(canvas)
         canvas.tool = PKEraserTool(.vector)
         canvas.drawing = drawing(1).transformed(using: CGAffineTransform(translationX: 0, y: -200))
         coordinator.canvasViewDrawingDidChange(canvas)
+        coordinator.canvasViewDidEndUsingTool(canvas)
         XCTAssertEqual(filedRanges, [0..<1])
         XCTAssertFalse(live.isDrawing)
     }
 
-    func testSelectingAPenAfterErasingDoesNotFileEraserFragmentsAboveTheTop() {
+    func testSelectingAPenDuringErasingDoesNotFileEraserFragmentsAboveTheTop() {
         let box = DrawingBox()
         let live = CanvasLiveState()
         var filedRanges: [Range<Int>] = []
@@ -112,16 +117,15 @@ final class CanvasDrawingLifecycleTests: XCTestCase {
         canvas.drawing = drawing(1)
         canvas.tool = PKEraserTool(.bitmap)
         coordinator.canvasViewDidBeginUsingTool(canvas)
-        coordinator.canvasViewDidEndUsingTool(canvas)
         canvas.tool = PKInkingTool(.pen, color: .black, width: 4)
         canvas.drawing = drawing(2)
         coordinator.canvasViewDrawingDidChange(canvas)
+        coordinator.canvasViewDidEndUsingTool(canvas)
         XCTAssertTrue(filedRanges.isEmpty)
         XCTAssertFalse(live.isDrawing)
     }
 
-
-    func testMixedToolSequenceIsConservativeButNextInkSequenceResetsProvenance() {
+    func testEachToolGestureResetsInkProvenance() {
         let box = DrawingBox()
         let live = CanvasLiveState()
         var filedRanges: [Range<Int>] = []
@@ -136,22 +140,19 @@ final class CanvasDrawingLifecycleTests: XCTestCase {
         container.hasPreviousPage = true
         coordinator.container = container
         let canvas = container.canvas
-        canvas.tool = PKInkingTool(.pen, color: .black, width: 4)
-        coordinator.canvasViewDidBeginUsingTool(canvas)
-        coordinator.canvasViewDidEndUsingTool(canvas)
         canvas.tool = PKEraserTool(.bitmap)
         coordinator.canvasViewDidBeginUsingTool(canvas)
-        coordinator.canvasViewDidEndUsingTool(canvas)
         canvas.drawing = drawing(2)
         coordinator.canvasViewDrawingDidChange(canvas)
+        coordinator.canvasViewDidEndUsingTool(canvas)
         XCTAssertTrue(filedRanges.isEmpty, "erasing invalidates the new-stroke suffix")
         XCTAssertFalse(live.isDrawing)
 
         canvas.tool = PKInkingTool(.pen, color: .black, width: 4)
         coordinator.canvasViewDidBeginUsingTool(canvas)
-        coordinator.canvasViewDidEndUsingTool(canvas)
         canvas.drawing = drawing(3)
         coordinator.canvasViewDrawingDidChange(canvas)
+        coordinator.canvasViewDidEndUsingTool(canvas)
         XCTAssertEqual(filedRanges, [2..<3], "a fresh inking sequence must reset provenance")
     }
 

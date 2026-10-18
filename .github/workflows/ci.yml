@@ -252,3 +252,27 @@ jobs:
           name: xcresult
           path: ${{ runner.temp }}/Bopa.xcresult
           retention-days: 7
+
+  source-package:
+    name: Verified source package
+    needs: [vectors, catalyst, notablekit, phone, app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package tested source
+        run: ./scripts/package-source.sh "$RUNNER_TEMP/bopa-source"
+      - name: Verify checksums and archive contents
+        run: |
+          cd "$RUNNER_TEMP/bopa-source"
+          sha256sum --check SHA256SUMS
+          tar -tzf ./*.tar.gz | grep '/App/project.yml$'
+          unzip -t ./*.zip
+      - name: Upload source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: bopa-source-${{ github.sha }}
+          path: ${{ runner.temp }}/bopa-source
+          if-no-files-found: error
+          retention-days: 30

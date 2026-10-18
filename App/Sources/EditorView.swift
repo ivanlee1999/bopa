@@ -382,7 +382,7 @@ struct EditorView: View {
                     currentTextBlock: { model.textBlock(id: $0) },
                     restoreTextBlock: { model.restoreTextBlock(id: $0, to: $1) },
                     onChanged: model.scheduleSave,
-                    onIdle: model.drawingDidSettle,
+                    onIdle: model.foldInRemoteInk,
                     // Unsaved ink is written as a scroll starts rather than wherever the scroll
                     // happens to be when it has to be: a crossing must save the page it leaves,
                     // and the debounced save can fire mid-flick. Either is a stall in the middle
@@ -513,8 +513,9 @@ struct EditorView: View {
 final class CanvasLiveState {
     /// Current scroll offset in unzoomed page space, read at save time.
     var pageY: CGFloat = 0
-    /// Includes the settling interval after pencil-up, until PencilKit delivers the finished
-    /// drawing. Reloading the canvas anywhere in that interval cancels or replays ink.
+    /// Whether a tool sequence is active. Reloading the canvas mid-gesture cancels it.
+    /// This retains the established tool-up boundary; it does not claim to track delayed
+    /// physical Pencil pressure updates.
     var isDrawing = false
 }
 
@@ -1312,57 +1313,32 @@ struct EditorCanvasView: UIViewRepresentable {
                 scrollView.contentOffset.y / max(scrollView.zoomScale, 0.01)
         }
 
-        // Bracketing every stroke: the editor must not reload the canvas between these two, and
-        // wants to know the moment it may.
+        // Preserve the established tool-down/tool-up boundary. Drawing-change notifications
+        // have no session identity and cannot safely be counted as completed tool sequences.
+        // In particular, a no-op eraser/lasso need not mutate the drawing at all.
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
-            // A new touch can start before the previous stroke's final pressure values arrive.
-            // Keep the earliest baseline until the whole sequence has settled.
-            if !parent.liveState.isDrawing {
-                strokeCountAtToolBegin = canvasView.drawing.strokes.count
-                strokeSequenceOnlyInks = canvasView.tool is PKInkingTool
-            } else {
-                strokeSequenceOnlyInks = strokeSequenceOnlyInks && (canvasView.tool is PKInkingTool)
-            }
-            toolIsDown = true
+            strokeCountAtToolBegin = canvasView.drawing.strokes.count
+            toolBeganWithInk = canvasView.tool is PKInkingTool
             parent.liveState.isDrawing = true
         }
 
-        /// How many strokes the canvas held when the pencil went down. PencilKit appends what is
-        /// drawn, so everything from here on is new — which is how ink just written above the
-        /// top of the page is told apart from ink that was already there.
         private var strokeCountAtToolBegin = 0
-        // A palette change after lift does not change the tool that produced pending ink.
-        // Mixed editing sequences cannot use a stroke-count suffix: erasing can remove or
-        // split earlier strokes. Leave their top-seam classification conservative.
-        private var strokeSequenceOnlyInks = false
-        private var toolIsDown = false
-        private var awaitingFinalDrawing = false
+        private var toolBeganWithInk = false
 
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-            toolIsDown = false
-            awaitingFinalDrawing = true
-            // Pencil-up precedes the final drawing change (WWDC19, Introducing PencilKit).
-            // Keep reconciliation, navigation and seam filing blocked until that callback.
-        }
-
-        private func finishDrawing(_ canvasView: PKCanvasView) {
-            awaitingFinalDrawing = false
-            // Only the final drawing contains the whole stroke and its final force values.
+            parent.liveState.isDrawing = false
             fileAnyInkAboveTheTop(canvasView)
             fileAnyInkBelowTheSeam(canvasView)
-            parent.liveState.isDrawing = false
             parent.onIdle()
-            // A crossing held back while the stroke was drawn goes ahead now — the scroll may
-            // have come to rest past the seam, and there will be no further scroll tick to ask.
             commitSeamCrossingIfReached(canvasView)
         }
 
         /// Moves ink just drawn in the room above the page onto the page above — see
-        /// `EditorPageModel.fileInkAboveTheTop`. Only for an inking-only sequence: an eraser
-        /// adds no strokes of its own, and pieces it leaves of a cut stroke were not drawn here.
-        /// Palette-only changes after lift do not alter the originating sequence's tool.
+        /// `EditorPageModel.fileInkAboveTheTop`. An eraser adds no strokes of its own, and
+        /// pieces it leaves of a cut stroke were not drawn here. Use the originating tool,
+        /// rather than a palette choice made while the gesture was ending.
         private func fileAnyInkAboveTheTop(_ canvasView: PKCanvasView) {
-            guard let container, container.previousSeamActive, strokeSequenceOnlyInks
+            guard let container, container.previousSeamActive, toolBeganWithInk
             else { return }
             let drawn = strokeCountAtToolBegin..<max(
                 canvasView.drawing.strokes.count, strokeCountAtToolBegin)
@@ -1405,9 +1381,6 @@ struct EditorCanvasView: UIViewRepresentable {
             canvasView.accessibilityValue = "strokes:\(drawing.strokes.count)"
             parent.onChanged()
             container?.growContent(toCover: drawing.bounds)
-            if awaitingFinalDrawing && !toolIsDown {
-                finishDrawing(canvasView)
-            }
         }
     }
 }

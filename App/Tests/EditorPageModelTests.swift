@@ -104,7 +104,7 @@ final class EditorPageModelTests: XCTestCase {
         return data
     }
 
-    func testNavigationWaitsForSettledInkAndAFailedSwitchKeepsTheCurrentPage() throws {
+    func testNavigationWaitsForActiveToolAndAFailedSwitchKeepsTheCurrentPage() throws {
         let first = pageIds[0]
         let second = try store.addPage(to: notebookId)
         let model = makeModel()
@@ -130,32 +130,6 @@ final class EditorPageModelTests: XCTestCase {
         XCTAssertTrue(model.prepareToLeave())
         XCTAssertEqual(try store.loadPage(notebookId: notebookId, pageId: first).strokes.count, 1)
         XCTAssertFalse(closed, "preparing a switch must not dismiss the presentation")
-    }
-
-    func testABackgroundFlushWaitsForTheFinishedStrokeAndThenSavesImmediately() throws {
-        let first = pageIds[0]
-        let model = makeModel()
-        XCTAssertTrue(model.open(pageId: first))
-        model.liveState.isDrawing = true
-        let provisional = try makeStroke(id: "settling", second: 1)
-        model.drawing = PencilKitBridge.drawing(from: [provisional])
-        model.scheduleSave()
-        XCTAssertFalse(model.saveNow())
-        XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: first).strokes.isEmpty)
-
-        // Same creation date, additional final point: saving the provisional DTO would make the
-        // bridge reuse it and lose the finished tail even after the drawing-change callback.
-        var finished = provisional
-        var points = try finished.decodedPoints()
-        points.append(NotableStrokePoint(x: 120, y: 160, pressure: 0.8))
-        finished.pointsData = try SBStrokeCodec.encode(points).base64EncodedString()
-        model.drawing = PencilKitBridge.drawing(from: [finished])
-        model.scheduleSave()
-        model.liveState.isDrawing = false
-        model.drawingDidSettle()
-        let written = try XCTUnwrap(store.loadPage(notebookId: notebookId, pageId: first).strokes.first)
-        XCTAssertEqual(try written.decodedPoints().count, 3)
-        XCTAssertFalse(model.dirty, "an interrupted background flush must not wait for the debounce")
     }
 
     // MARK: The baseline advances only after a save lands
@@ -770,7 +744,7 @@ final class EditorPageModelTests: XCTestCase {
 
         XCTAssertFalse(closed)
         XCTAssertTrue(store.notebooks.isEmpty)
-        // PencilKit delivers the finished stroke before the lift's idle callback.
+        // Supply a synthetic drawing before tool-up; this does not model late force updates.
         model.drawing = PencilKitBridge.drawing(from: [try makeStroke(id: "last-stroke", second: 1)])
         model.scheduleSave()
         model.liveState.isDrawing = false
