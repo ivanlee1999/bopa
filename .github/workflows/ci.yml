@@ -121,6 +121,55 @@ jobs:
       - name: Test
         run: swift test --package-path NotableKit
 
+  # The application also declares iPhone support. Run the navigation boundaries at compact
+  # width without comparing iPad snapshot baselines against a different device's metrics.
+  phone:
+    name: Navigation (iPhone simulator)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: App
+        run: xcodegen generate
+      - name: Test notebook switching at compact width
+        run: |
+          udid=$(xcrun simctl list devices available -j | jq -r '
+            [.devices | to_entries[]
+             | select(.key | contains("SimRuntime.iOS"))
+             | .value[] | select(.name | startswith("iPhone"))] | .[0].udid // empty')
+          test -n "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          xcodebuild test -project App/Bopa.xcodeproj -scheme Bopa \
+            -destination "id=$udid" -destination-timeout 120 \
+            -only-testing:BopaUITests/NotebookSwitchingUITests \
+            -resultBundlePath "$RUNNER_TEMP/BopaPhone.xcresult" CODE_SIGNING_ALLOWED=NO
+      - name: Export UI screenshots
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -d "$RUNNER_TEMP/BopaPhone.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/BopaPhone.xcresult" \
+              --output-path "$RUNNER_TEMP/phone-ui-attachments"
+          fi
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-ui-attachments
+          path: ${{ runner.temp }}/phone-ui-attachments
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-xcresult
+          path: ${{ runner.temp }}/BopaPhone.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
   app:
     name: App (iPad simulator)
     runs-on: macos-latest

@@ -59,6 +59,7 @@ final class EditorPageModel: NSObject, ObservableObject {
     private(set) var remoteInkPending = false
     private(set) var dirty = false
     private var saveTask: Task<Void, Never>?
+    private var flushWhenDrawingSettles = false
     /// What the canvas is doing right now, written by the canvas coordinator. Owned here because
     /// the save path reads the scroll offset out of it.
     let liveState = CanvasLiveState()
@@ -651,6 +652,16 @@ final class EditorPageModel: NSObject, ObservableObject {
         remoteInkPending = false  // the canvas now matches the file
     }
 
+    /// A background flush or autosave can arrive while PencilKit is still updating force data.
+    /// Do not export that provisional stroke: the bridge deliberately reuses saved DTOs for
+    /// untouched stroke identities, so an early export would freeze the unfinished geometry.
+    func drawingDidSettle() {
+        let needsFlush = flushWhenDrawingSettles
+        flushWhenDrawingSettles = false
+        foldInRemoteInk()
+        if needsFlush { saveNow() }
+    }
+
     /// Puts everything a page shows *besides* ink — its images, its paper, its sheet — onto the
     /// published state, from a copy of the file that is already known to agree with the canvas
     /// about the ink. Deliberately not a reload through `open`: replacing the drawing for a
@@ -897,6 +908,10 @@ final class EditorPageModel: NSObject, ObservableObject {
     @discardableResult
     func saveNow(persistingScroll: Bool = true) -> Bool {
         guard !savingPage else { return false }
+        guard !liveState.isDrawing else {
+            flushWhenDrawingSettles = true
+            return false
+        }
         saveTask?.cancel()
         if recoveryPending {
             guard !liveState.isDrawing else { return false }

@@ -385,7 +385,7 @@ struct EditorView: View {
                     currentTextBlock: { model.textBlock(id: $0) },
                     restoreTextBlock: { model.restoreTextBlock(id: $0, to: $1) },
                     onChanged: model.scheduleSave,
-                    onIdle: model.foldInRemoteInk,
+                    onIdle: model.drawingDidSettle,
                     // Unsaved ink is written as a scroll starts rather than wherever the scroll
                     // happens to be when it has to be: a crossing must save the page it leaves,
                     // and the debounced save can fire mid-flick. Either is a stall in the middle

@@ -96,12 +96,17 @@ final class NotebookSwitchingUITests: XCTestCase {
         screenshot("notebook-switcher-portrait")
         app.buttons["Cancel"].tap()
         waitForValue(b, on: app.buttons["editor.notebooks"])
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForValue("strokes:1", on: canvas(app))
+        screenshot("editor-landscape")
+        XCUIDevice.shared.orientation = .portrait
         XCUIDevice.shared.press(.home)
         app.activate()
         waitForValue("strokes:1", on: canvas(app))
         screenshot("editor-after-interruption")
         app.buttons["editor.close"].tap()
         let sidebar = app.descendants(matching: .any)["library.sidebar"]
+        if !sidebar.exists { app.buttons["library.toggleSidebar"].tap() }
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
         let recent = sidebar.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.recent.'"))
         XCTAssertTrue(recent.containing(.staticText, identifier: a).firstMatch.waitForExistence(timeout: 5))
@@ -109,6 +114,9 @@ final class NotebookSwitchingUITests: XCTestCase {
         screenshot("library-recent-notebooks")
         app.terminate()
         app.launch()
+        if !app.descendants(matching: .any)["library.sidebar"].exists {
+            app.buttons["library.toggleSidebar"].tap()
+        }
         let resumed = app.descendants(matching: .any)["library.sidebar"].buttons
             .matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.recent.'"))
             .containing(.staticText, identifier: a).firstMatch
