@@ -47,6 +47,22 @@ final class NotebookSwitchingUITests: XCTestCase {
     }
 
     @MainActor
+    private func assertEditorFits(_ app: XCUIApplication, landscape: Bool) {
+        let window = app.windows.firstMatch
+        let rotated = NSPredicate { _, _ in
+            let frame = window.frame
+            return landscape ? frame.width > frame.height : frame.height > frame.width
+        }
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(
+            for: rotated, evaluatedWith: window)], timeout: 8), .completed)
+        for id in ["editor.close", "editor.notebooks", "editor.pages"] {
+            let control = app.buttons[id]
+            XCTAssertTrue(control.isHittable, "\(id) must stay reachable after rotation")
+            XCTAssertTrue(window.frame.contains(control.frame), "\(id) must stay inside the window")
+        }
+    }
+
+    @MainActor
     private func screenshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
@@ -97,9 +113,11 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.buttons["Cancel"].tap()
         waitForValue(b, on: app.buttons["editor.notebooks"])
         XCUIDevice.shared.orientation = .landscapeLeft
+        assertEditorFits(app, landscape: true)
         waitForValue("strokes:1", on: canvas(app))
         screenshot("editor-landscape")
         XCUIDevice.shared.orientation = .portrait
+        assertEditorFits(app, landscape: false)
         XCUIDevice.shared.press(.home)
         app.activate()
         waitForValue("strokes:1", on: canvas(app))
@@ -161,4 +179,42 @@ final class NotebookSwitchingUITests: XCTestCase {
         XCTAssertTrue(text.waitForExistence(timeout: 5))
         XCTAssertEqual(text.value as? String, "Keep this unfinished paragraph")
     }
+
+    @MainActor
+    func testActiveTextSurvivesNotebookSwitchAndBackgroundRelaunch() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-select-text"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let suffix = UUID().uuidString.prefix(6)
+        let a = "Text source \(suffix)"
+        let b = "Text destination \(suffix)"
+        create(a, in: app)
+        create(b, in: app)
+        app.descendants(matching: .any)["library.contents"].staticTexts[a].tap()
+        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
+        let text = app.textViews.firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        text.typeText("Saved by switching")
+        switchTo(b, in: app)
+        switchTo(a, in: app)
+        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertEqual(text.value as? String, "Saved by switching")
+        // Leave this new edit active. Reopening from disk prevents a live text view from
+        // making a missing background flush look like successful persistence.
+        text.typeText(" background edit ")
+        let expected = text.value as? String
+        XCTAssertTrue(expected?.contains("background edit") == true)
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5)
+                      || app.state == .runningBackgroundSuspended)
+        app.terminate()
+        app.launch()
+        app.descendants(matching: .any)["library.contents"].staticTexts[a].tap()
+        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertEqual(text.value as? String, expected)
+    }
+
 }

@@ -81,4 +81,13 @@ final class RecentNotebookTests: XCTestCase {
         XCTAssertEqual(store.recentNotebookIDs.first, made[5].notebookId)
         XCTAssertEqual(Set(store.recentNotebookIDs).count, 12)
     }
+
+    func testDirectNotebookSwitchReleasesThePreviousSyncExclusion() {
+        let old = LibraryView.OpenNotebook(id: "old", pageId: "first")
+        XCTAssertTrue(old.releasesNotebook(whenChangingTo: .init(id: "new")))
+        XCTAssertTrue(old.releasesNotebook(whenChangingTo: nil))
+        XCTAssertFalse(old.releasesNotebook(whenChangingTo: old))
+        XCTAssertFalse(old.releasesNotebook(whenChangingTo: .init(id: "old", pageId: "second")))
+    }
+
 }

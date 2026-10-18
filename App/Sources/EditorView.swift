@@ -1019,6 +1019,9 @@ struct EditorCanvasView: UIViewRepresentable {
         /// "previous tool" something to compare against before any tool change.
         func seed(_ tool: PKTool) {
             currentTool = tool
+            // Seeding also consumes the text-tool revision; apply its gesture mode before
+            // later updates skip that revision (including initial text-mode UI launches).
+            container?.isTextMode = toolSelection?.isTextTool ?? false
             appliedToolRevision = toolSelection?.revision ?? 0
         }
 
@@ -1315,6 +1318,9 @@ struct EditorCanvasView: UIViewRepresentable {
             // Keep the earliest baseline until the whole sequence has settled.
             if !parent.liveState.isDrawing {
                 strokeCountAtToolBegin = canvasView.drawing.strokes.count
+                strokeSequenceOnlyInks = canvasView.tool is PKInkingTool
+            } else {
+                strokeSequenceOnlyInks = strokeSequenceOnlyInks && (canvasView.tool is PKInkingTool)
             }
             toolIsDown = true
             parent.liveState.isDrawing = true
@@ -1324,6 +1330,10 @@ struct EditorCanvasView: UIViewRepresentable {
         /// drawn, so everything from here on is new — which is how ink just written above the
         /// top of the page is told apart from ink that was already there.
         private var strokeCountAtToolBegin = 0
+        // A palette change after lift does not change the tool that produced pending ink.
+        // Mixed editing sequences cannot use a stroke-count suffix: erasing can remove or
+        // split earlier strokes. Leave their top-seam classification conservative.
+        private var strokeSequenceOnlyInks = false
         private var toolIsDown = false
         private var awaitingFinalDrawing = false
 
@@ -1347,10 +1357,11 @@ struct EditorCanvasView: UIViewRepresentable {
         }
 
         /// Moves ink just drawn in the room above the page onto the page above — see
-        /// `EditorPageModel.fileInkAboveTheTop`. Only for a tool that inks: an eraser adds no
-        /// strokes of its own, and the pieces it leaves of a stroke it cut were not drawn here.
+        /// `EditorPageModel.fileInkAboveTheTop`. Only for an inking-only sequence: an eraser
+        /// adds no strokes of its own, and pieces it leaves of a cut stroke were not drawn here.
+        /// Palette-only changes after lift do not alter the originating sequence's tool.
         private func fileAnyInkAboveTheTop(_ canvasView: PKCanvasView) {
-            guard let container, container.previousSeamActive, canvasView.tool is PKInkingTool
+            guard let container, container.previousSeamActive, strokeSequenceOnlyInks
             else { return }
             let drawn = strokeCountAtToolBegin..<max(
                 canvasView.drawing.strokes.count, strokeCountAtToolBegin)
