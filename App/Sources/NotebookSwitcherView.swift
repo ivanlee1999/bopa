@@ -27,10 +27,15 @@ struct NotebookSwitcherView: View {
                         ForEach(recent, id: \.notebookId) { notebook in row(notebook) }
                     }
                 }
-                Section(query.isEmpty ? "All notebooks" : "Search results") {
-                    ForEach(others, id: \.notebookId) { notebook in row(notebook) }
+                if !others.isEmpty {
+                    Section(query.isEmpty ? "All notebooks" : "Search results") {
+                        ForEach(others, id: \.notebookId) { notebook in row(notebook) }
+                    }
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Modernist.paper)
             .overlay {
                 if recent.isEmpty && others.isEmpty {
                     ContentUnavailableView.search(text: query)
@@ -51,7 +56,10 @@ struct NotebookSwitcherView: View {
     private func row(_ notebook: NotebookManifest) -> some View {
         let current = notebook.notebookId == currentNotebookID
         let conflicted = coordinator.conflict(for: notebook.notebookId) != nil
-        return Button { select(notebook.notebookId) } label: {
+        return Button {
+            guard !current && !conflicted else { return }
+            select(notebook.notebookId)
+        } label: {
             HStack(spacing: 12) {
                 Image(systemName: current ? "checkmark" : "doc.text")
                     .frame(width: 22)
@@ -71,7 +79,8 @@ struct NotebookSwitcherView: View {
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
-        .disabled(current || conflicted)
+        .disabled(conflicted)
+        .accessibilityAddTraits(current ? .isSelected : [])
         .accessibilityIdentifier("switcher.notebook.\(notebook.notebookId)")
         .accessibilityValue(current ? "Current notebook" : conflicted ? "Conflict" : "")
     }

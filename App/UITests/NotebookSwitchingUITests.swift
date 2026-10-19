@@ -64,6 +64,8 @@ final class NotebookSwitchingUITests: XCTestCase {
             for: rotated, evaluatedWith: window)], timeout: 8), .completed)
         for id in ["editor.close", "editor.notebooks", "editor.pages"] {
             let control = app.buttons[id]
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44, "\(id) needs a full touch target")
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44, "\(id) needs a full touch target")
             XCTAssertTrue(control.isHittable, "\(id) must stay reachable after rotation")
             XCTAssertTrue(window.frame.contains(control.frame), "\(id) must stay inside the window")
         }
@@ -149,6 +151,80 @@ final class NotebookSwitchingUITests: XCTestCase {
         resumed.tap()
         waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
         waitForValue("strokes:1", on: canvas(app))
+    }
+
+    @MainActor
+    func testWritingControlsStayDiscoverableAndPageActionsDoNotDuplicate() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let title = "Writing workspace \(UUID().uuidString.prefix(6))"
+        create(title, in: app)
+        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        let forward = app.buttons["editor.forwardPage"]
+        XCTAssertTrue(forward.waitForExistence(timeout: 5))
+        XCTAssertEqual(forward.label, "Add page")
+        forward.tap()
+        waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
+        app.buttons["Previous page"].tap()
+        waitForValue("Page 1 of 2", on: app.buttons["editor.pages"])
+        XCTAssertEqual(forward.label, "Next page")
+        forward.tap()
+        waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
+        app.buttons["Previous page"].tap()
+        app.buttons["editor.options"].tap()
+        app.buttons["Add page"].tap()
+        waitForValue("Page 3 of 3", on: app.buttons["editor.pages"])
+
+        for id in ["editor.tool.eraser", "editor.tool.lasso", "editor.tool.text", "editor.ink"] {
+            let button = app.buttons[id]
+            XCTAssertTrue(button.isHittable, "essential tools must not require a hidden scroll")
+            XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        }
+        if app.buttons["editor.tools"].exists {
+            app.buttons["editor.tools"].tap()
+            XCTAssertTrue(app.buttons["editor.tool.pencil"].waitForExistence(timeout: 5))
+            app.buttons["editor.tool.pencil"].tap()
+            app.buttons["editor.width.fine"].tap()
+            screenshot("compact-writing-settings")
+            app.buttons["Done"].tap()
+            XCTAssertTrue(app.buttons["editor.tools"].isHittable)
+            app.buttons["editor.tool.eraser"].tap()
+            app.buttons["editor.tools"].tap()
+            XCTAssertEqual(app.buttons["editor.tools"].value as? String, "Pencil, Fine")
+            XCTAssertFalse(app.buttons["editor.width.fine"].exists, "returning to writing is one tap")
+        }
+        assertEditorFits(app, landscape: false)
+        screenshot("calm-writing-workspace")
+    }
+
+    @MainActor
+    func testAccessibilityTextSizeKeepsNotebookAndPageControlsReachable() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool", "-UIPreferredContentSizeCategoryName",
+                               "UICTContentSizeCategoryAccessibilityXXXL"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let title = "Large text notebook \(UUID().uuidString.prefix(6))"
+        create(title, in: app)
+        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        XCTAssertTrue(app.buttons["editor.pages"].waitForExistence(timeout: 5))
+        assertEditorFits(app, landscape: false)
+        XCTAssertFalse(app.buttons["editor.notebooks"].frame.intersects(app.buttons["editor.pages"].frame))
+        screenshot("writing-accessibility-text")
+        if app.buttons["editor.tools"].exists {
+            app.buttons["editor.tools"].tap()
+            XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Done"].isHittable)
+            XCTAssertTrue(app.buttons["editor.tool.pencil"].isHittable)
+            screenshot("writing-settings-accessibility-text")
+            app.buttons["Done"].tap()
+        }
+        app.buttons["editor.forwardPage"].tap()
+        waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
+        app.buttons["editor.close"].tap()
     }
 
     @MainActor

@@ -450,6 +450,35 @@ final class PencilKitBridgeTests: XCTestCase {
             "createdAt must carry the stroke's creation date, not the save clock")
     }
 
+    /// A later snapshot can have the same identity but a different number of authored points.
+    /// This is a persistence regression, not an assertion about PencilKit callback ordering.
+    func testChangedControlPointCountReencodesWithoutChangingIdentity() throws {
+        let stroke = straightStroke(createdAt: Date(timeIntervalSince1970: 1_750_000_000))
+        let points = Array(stroke.path)
+        func snapshot(_ count: Int) -> PKDrawing {
+            PKDrawing(strokes: [PKStroke(
+                ink: stroke.ink,
+                path: PKStrokePath(controlPoints: Array(points.prefix(count)),
+                                   creationDate: stroke.path.creationDate))])
+        }
+        let first = PencilKitBridge.strokeDTOs(from: snapshot(2))
+        let original = try XCTUnwrap(first.first)
+        XCTAssertEqual(try original.decodedPoints().count, 2)
+
+        for count in [3, 1] {
+            let changed = snapshot(count)
+            let second = PencilKitBridge.strokeDTOs(from: changed, source: first)
+            let updated = try XCTUnwrap(second.first)
+            XCTAssertEqual(second.count, 1)
+            XCTAssertEqual(try updated.decodedPoints().count, count)
+            XCTAssertEqual(updated.id, original.id)
+            XCTAssertEqual(updated.createdAt, original.createdAt)
+            XCTAssertNotEqual(updated.pointsData, original.pointsData)
+            XCTAssertEqual(PencilKitBridge.strokeDTOs(from: changed, source: second), second,
+                           "an unchanged subsequent snapshot must reuse the updated DTO exactly")
+        }
+    }
+
     /// Erasing one stroke must cost exactly one id: the survivors keep theirs, and the set
     /// difference the save derives tombstones from names only the erased one.
     func testErasingOneSessionStrokeTombstonesOnlyThatId() throws {

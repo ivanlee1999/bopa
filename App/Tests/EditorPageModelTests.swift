@@ -132,6 +132,55 @@ final class EditorPageModelTests: XCTestCase {
         XCTAssertFalse(closed, "preparing a switch must not dismiss the presentation")
     }
 
+    func testLaterSnapshotWithMorePointsUpdatesTheSavedStroke() throws {
+        try checkSavingChangedPointCount(retryAfterFailure: false)
+    }
+
+    func testFailedSaveOfMorePointsCanRetryWithoutLosingTheUpdate() throws {
+        try checkSavingChangedPointCount(retryAfterFailure: true)
+    }
+
+    /// Explicit snapshots and saves isolate DTO reuse from tool and pressure callback timing.
+    private func checkSavingChangedPointCount(retryAfterFailure: Bool) throws {
+        let firstPage = pageIds[0]
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: firstPage))
+        let initial = try makeStroke(id: "growing-snapshot", second: 1)
+        model.drawing = PencilKitBridge.drawing(from: [initial])
+        model.scheduleSave()
+        XCTAssertTrue(model.saveNow())
+        let first = try XCTUnwrap(
+            store.loadPage(notebookId: notebookId, pageId: firstPage).strokes.first)
+        XCTAssertEqual(try first.decodedPoints().count, 2)
+
+        var changed = initial
+        var points = try changed.decodedPoints()
+        points.append(NotableStrokePoint(x: 120, y: 160, pressure: 0.8))
+        changed.pointsData = try SBStrokeCodec.encode(points).base64EncodedString()
+        model.drawing = PencilKitBridge.drawing(from: [changed])
+        model.scheduleSave()
+        if retryAfterFailure {
+            let heal = try breakTheStore()
+            XCTAssertFalse(model.saveNow())
+            XCTAssertTrue(model.dirty)
+            try heal.write(to: manifestURL)
+        }
+        XCTAssertTrue(model.saveNow())
+        let second = try XCTUnwrap(
+            store.loadPage(notebookId: notebookId, pageId: firstPage).strokes.first)
+        XCTAssertEqual(try second.decodedPoints().count, 3)
+        XCTAssertEqual(second.id, first.id)
+        XCTAssertEqual(second.createdAt, first.createdAt)
+        XCTAssertNotEqual(second.pointsData, first.pointsData)
+        XCTAssertFalse(model.dirty)
+
+        model.scheduleSave()
+        XCTAssertTrue(model.saveNow())
+        let third = try XCTUnwrap(
+            store.loadPage(notebookId: notebookId, pageId: firstPage).strokes.first)
+        XCTAssertEqual(third, second, "saving the unchanged updated snapshot must be stable")
+    }
+
     // MARK: The baseline advances only after a save lands
 
     /// An erasure must survive a failed flush. The baseline (`canvasStrokeIDs`) used to advance

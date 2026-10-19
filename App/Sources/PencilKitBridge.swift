@@ -120,12 +120,18 @@ enum PencilKitBridge {
             let created = wireQuantized(stroke.path.creationDate)
             var candidates = byCreation[created] ?? []
 
-            // Carry the original over only when nothing about the stroke changed:
+            // Reuse only when none of the changes checked here is present:
             // - a mask means the eraser cut into it, and reusing the original DTO there would
             //   save the rubbed-out ink straight back;
-            // - a non-identity transform means it was moved (lasso).
-            if stroke.mask == nil, stroke.transform.isIdentity, !candidates.isEmpty {
-                let original = candidates.removeFirst()
+            // - a non-identity transform means it was moved (lasso);
+            // - a different control-point count means this snapshot cannot reuse the saved path.
+            // This count check deliberately does not detect same-count geometry/pressure edits
+            // or infer when PencilKit has finished a stroke.
+            if stroke.mask == nil, stroke.transform.isIdentity,
+               let original = candidates.first,
+               let savedPoints = try? original.decodedPoints(),
+               savedPoints.count == stroke.path.count {
+                candidates.removeFirst()
                 byCreation[created] = candidates
                 return [original]
             }
