@@ -54,8 +54,12 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
             coordinator.toolSelection = selection
             container.textDelegate = coordinator
             container.textEditor.delegate = coordinator
-            viewport.attach(container)
+            viewport.attach(container) { [weak coordinator = coordinator] in
+                coordinator?.endTextEditing()
+            }
             container.setTextBlocks(model.textBlocks)
+            coordinator.loadedPageId = model.pageId
+            coordinator.loadedRevision = model.contentRevision
             coordinator.applyToolIfNeeded()
             // Explicit groups keep these tests independent of the simulator's run loop.
             container.pageUndoManager.groupsByEvent = false
@@ -74,11 +78,11 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
                 viewport: viewport,
                 makeTextBlock: model.newTextBlock,
                 beginTextBlockEditing: model.beginEditing,
-                commitTextBlock: { model.commitEditing($0, text: $1) },
+                commitTextBlock: { model.commitEditing($0, text: $1, expectedPageID: $2) },
                 moveTextBlock: { model.moveTextBlock(id: $0, to: $1) },
                 resizeTextBlock: { model.resizeTextBlock(id: $0, width: $1) },
                 currentTextBlock: { model.textBlock(id: $0) },
-                restoreTextBlock: { model.restoreTextBlock(id: $0, to: $1) },
+                restoreTextBlock: { model.restoreTextBlock(id: $0, to: $1, expectedPageID: $2) },
                 onChanged: model.scheduleSave)
         }
 
@@ -93,18 +97,22 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
         }
 
         func refreshPageState() {
-            // updateUIView refreshes the parent snapshot and visible blocks before processing
-            // a page reload. The coordinator must not mistake the old draft for this page's.
-            coordinator.parent = canvasView
+            let updated = canvasView
+            // Match updateUIView's page-identity boundary, including the discard before the
+            // new parent callbacks arrive and the page-local undo reset on reload.
+            if coordinator.loadedPageId != updated.pageId {
+                coordinator.discardTextEditingForPageChange()
+                container.pageUndoManager.removeAllActions()
+            }
+            coordinator.parent = updated
             container.setTextBlocks(model.textBlocks)
+            coordinator.loadedPageId = updated.pageId
+            coordinator.loadedRevision = updated.contentRevision
         }
 
         func finishThroughViewport() {
-            // The current EditorView.commitOpenTextBox route used by tool changes, background
-            // interruptions and navigation. Keep this helper on the shipping shared finish
-            // route when that route is refactored; the undo assertions below are the contract.
-            guard let finished = viewport.endTextEditing() else { return }
-            model.commitEditing(finished.block, text: finished.text)
+            // The same route EditorView uses for tool changes, backgrounding and navigation.
+            viewport.endTextEditing()
         }
     }
 
@@ -134,12 +142,14 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
                        "the removed page must retain ownership while its draft is still open")
         XCTAssertEqual(session.container.textEditor.text, draft)
 
-        // A late Done event must be harmless after recovery, never a commit into the new page.
+        // Finishing hands the draft back to its original page before recovery can navigate away.
         session.container.pageUndoManager.beginUndoGrouping()
         session.coordinator.endTextEditing()
         session.container.pageUndoManager.endUndoGrouping()
         XCTAssertTrue(model.saveNow())
         XCTAssertEqual(model.pageId, first, "successful recovery can now leave the removed page")
+        session.refreshPageState()
+        session.coordinator.endTextEditing()
         XCTAssertTrue(model.textBlocks.isEmpty,
                       "the landing page must not acquire the removed page's active text")
         let landing = try store.loadPage(notebookId: notebookId, pageId: first)
@@ -171,6 +181,10 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
         manager.beginUndoGrouping()
         session.selection.select(.pen)
         session.coordinator.applyToolIfNeeded()
+        session.finishThroughViewport()
+        manager.endUndoGrouping()
+        // A later disappearance/background callback must not register this session twice.
+        manager.beginUndoGrouping()
         session.finishThroughViewport()
         manager.endUndoGrouping()
         XCTAssertNil(session.container.editingTextBlock)
@@ -213,5 +227,172 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
         XCTAssertTrue(manager.canRedo)
         if manager.canRedo { manager.redo() }
         XCTAssertEqual(model.textBlock(id: block.id)?.text, "Edited paragraph")
+    }
+
+    func testSavedUndoAndRedoKeepFollowingTheRestoredParagraphIdentity() throws {
+        let pageId = try XCTUnwrap(store.manifest(id: notebookId)?.pageIds.first)
+        let model = model(opening: pageId)
+        let session = Session(model: model)
+        let draft = "A saved paragraph must survive redo after a saved deletion."
+        session.beginNewText(draft)
+        let manager = session.container.pageUndoManager
+        manager.beginUndoGrouping()
+        session.finishThroughViewport()
+        manager.endUndoGrouping()
+        XCTAssertTrue(model.saveNow())
+
+        // Saving every step makes each removal durable. A second cycle verifies that the
+        // inverse action follows the newly restored ID rather than the first tombstoned ID.
+        for _ in 0..<2 {
+            let oldID = try XCTUnwrap(model.textBlocks.first?.id)
+            XCTAssertTrue(manager.canUndo)
+            if manager.canUndo { manager.undo() }
+            XCTAssertTrue(model.textBlocks.isEmpty)
+            XCTAssertTrue(model.saveNow())
+            XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: pageId).blocks.isEmpty)
+
+            XCTAssertTrue(manager.canRedo)
+            if manager.canRedo { manager.redo() }
+            let restored = try XCTUnwrap(model.textBlocks.first)
+            XCTAssertNotEqual(restored.id, oldID)
+            XCTAssertEqual(restored.text, draft)
+            XCTAssertEqual(model.textBlocks.count, 1)
+            XCTAssertTrue(model.saveNow())
+            let saved = try store.loadPage(notebookId: notebookId, pageId: pageId)
+            XCTAssertEqual(saved.blocks.map(\.id), [restored.id])
+            XCTAssertEqual(saved.blocks.first?.text, draft)
+            XCTAssertTrue(saved.deletedBlocks.contains { $0.id == oldID })
+        }
+    }
+
+    func testExplicitLocalPageDeletionDiscardsItsDraftBeforeTheLandingPageArrives() throws {
+        let first = try XCTUnwrap(store.manifest(id: notebookId)?.pageIds.first)
+        let second = try store.addPage(to: notebookId)
+        let model = model(opening: second.id)
+        let session = Session(model: model)
+        session.beginNewText("This draft is included in the explicitly deleted page.")
+        XCTAssertNotNil(session.container.editingTextBlock)
+
+        try store.deletePage(from: notebookId, pageId: second.id)
+        XCTAssertEqual(model.pageId, first)
+        XCTAssertNil(model.editingBlockID)
+        session.refreshPageState()
+        XCTAssertNil(session.container.editingTextBlock)
+        XCTAssertTrue(session.container.textEditor.isHidden)
+
+        // Late tool-change, Done and disappearance callbacks have no session left to commit.
+        session.finishThroughViewport()
+        session.coordinator.endTextEditing()
+        XCTAssertTrue(model.saveNow())
+        XCTAssertTrue(model.textBlocks.isEmpty)
+        XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: first).blocks.isEmpty)
+        XCTAssertFalse(session.container.pageUndoManager.canUndo)
+        XCTAssertEqual(store.notebooks.count, 1,
+                       "an explicit local delete must not create a recovery notebook")
+        XCTAssertFalse(try XCTUnwrap(store.manifest(id: notebookId)).pageIds.contains(second.id))
+    }
+
+    func testLocalPageDeletionRejectsALateCommitBeforeTheCanvasRefreshes() throws {
+        let first = try XCTUnwrap(store.manifest(id: notebookId)?.pageIds.first)
+        let second = try store.addPage(to: notebookId)
+        let model = model(opening: second.id)
+        let session = Session(model: model)
+        session.beginNewText("This draft must never be committed onto the landing page.")
+
+        try store.deletePage(from: notebookId, pageId: second.id)
+        XCTAssertEqual(model.pageId, first)
+        XCTAssertEqual(session.coordinator.parent.pageId, second.id,
+                       "exercise the interval before updateUIView receives the new page")
+        XCTAssertNotNil(session.container.editingTextBlock)
+
+        let manager = session.container.pageUndoManager
+        manager.beginUndoGrouping()
+        session.finishThroughViewport()
+        manager.endUndoGrouping()
+        XCTAssertNil(session.container.editingTextBlock)
+        XCTAssertNil(model.editingBlockID)
+        XCTAssertTrue(model.textBlocks.isEmpty)
+        XCTAssertFalse(manager.canUndo, "a rejected stale commit must not register undo")
+        XCTAssertTrue(model.saveNow())
+        XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: first).blocks.isEmpty)
+        XCTAssertEqual(store.notebooks.count, 1)
+
+        session.refreshPageState()
+        session.finishThroughViewport()
+        XCTAssertTrue(model.textBlocks.isEmpty)
+    }
+
+    func testLocalPageDeletionRejectsALateUndoBeforeTheCanvasRefreshes() throws {
+        let first = try XCTUnwrap(store.manifest(id: notebookId)?.pageIds.first)
+        let second = try store.addPage(to: notebookId)
+        let model = model(opening: second.id)
+        let original = try XCTUnwrap(model.newTextBlock(at: CGPoint(x: 100, y: 200)))
+        model.beginEditing(original)
+        model.commitEditing(original, text: "The original paragraph belongs on the deleted page.")
+        XCTAssertTrue(model.saveNow())
+        let session = Session(model: model)
+        session.coordinator.canvasContainer(session.container, didTapTextBlock: original.id)
+        session.replaceDraft(with: "The edited paragraph also belongs on the deleted page.")
+        let manager = session.container.pageUndoManager
+        manager.beginUndoGrouping()
+        session.finishThroughViewport()
+        manager.endUndoGrouping()
+        XCTAssertTrue(model.saveNow())
+        XCTAssertTrue(manager.canUndo)
+
+        try store.deletePage(from: notebookId, pageId: second.id)
+        XCTAssertEqual(model.pageId, first)
+        XCTAssertEqual(session.coordinator.parent.pageId, second.id)
+        // The inverse edit would put the original paragraph onto A without its page guard.
+        if manager.canUndo { manager.undo() }
+        XCTAssertTrue(model.textBlocks.isEmpty)
+        XCTAssertFalse(manager.canRedo, "a rejected stale undo must not register redo")
+        XCTAssertTrue(model.saveNow())
+        XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: first).blocks.isEmpty)
+        session.refreshPageState()
+        XCTAssertFalse(manager.canUndo)
+    }
+
+    func testUndoTargetsTheFreshIDWhenThePeerDeletedTheParagraphBeingEdited() throws {
+        let pageId = try XCTUnwrap(store.manifest(id: notebookId)?.pageIds.first)
+        let model = model(opening: pageId)
+        let original = try XCTUnwrap(model.newTextBlock(at: CGPoint(x: 100, y: 200)))
+        model.beginEditing(original)
+        model.commitEditing(original, text: "The original paragraph")
+        XCTAssertTrue(model.saveNow())
+        let session = Session(model: model)
+        session.coordinator.canvasContainer(session.container, didTapTextBlock: original.id)
+        session.replaceDraft(with: "The local edit survives under a new ID.")
+
+        var onDisk = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        onDisk.blocks.removeAll { $0.id == original.id }
+        onDisk.deletedBlocks.append(
+            CouchTombstone(id: original.id, deletedAt: SyncClock.shared.stamp()))
+        _ = try store.savePage(onDisk)
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+        session.refreshPageState()
+        XCTAssertNotNil(session.container.editingTextBlock,
+                        "a same-page remote refresh must leave the live draft open")
+
+        let manager = session.container.pageUndoManager
+        manager.beginUndoGrouping()
+        session.finishThroughViewport()
+        manager.endUndoGrouping()
+        let restored = try XCTUnwrap(model.textBlocks.first)
+        XCTAssertNotEqual(restored.id, original.id)
+        XCTAssertEqual(restored.text, "The local edit survives under a new ID.")
+        XCTAssertTrue(manager.canUndo)
+        if manager.canUndo { manager.undo() }
+        XCTAssertTrue(model.textBlocks.isEmpty,
+                      "Undo must remove the reminted box, not target the tombstoned old ID")
+        XCTAssertTrue(manager.canRedo)
+        if manager.canRedo { manager.redo() }
+        XCTAssertEqual(model.textBlocks.map(\.id), [restored.id])
+        XCTAssertTrue(model.saveNow())
+        let saved = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        XCTAssertEqual(saved.blocks.map(\.id), [restored.id])
+        XCTAssertEqual(saved.blocks.first?.text, restored.text)
+        XCTAssertTrue(saved.deletedBlocks.contains { $0.id == original.id })
     }
 }
