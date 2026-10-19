@@ -264,6 +264,66 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
         }
     }
 
+    func testMultipleTextSessionsShareOneRestoredIdentityAcrossSavedUndoAndRedo() throws {
+        let pageId = try XCTUnwrap(store.manifest(id: notebookId)?.pageIds.first)
+        let model = model(opening: pageId)
+        let session = Session(model: model)
+        let manager = session.container.pageUndoManager
+        let originalText = "The first completed text session."
+        let editedText = "The second session edits the same paragraph."
+
+        session.beginNewText(originalText)
+        manager.beginUndoGrouping()
+        session.finishThroughViewport()
+        manager.endUndoGrouping()
+        XCTAssertTrue(model.saveNow())
+        let originalID = try XCTUnwrap(model.textBlocks.first?.id)
+
+        session.refreshPageState()
+        session.coordinator.canvasContainer(session.container, didTapTextBlock: originalID)
+        session.replaceDraft(with: editedText)
+        manager.beginUndoGrouping()
+        session.finishThroughViewport()
+        manager.endUndoGrouping()
+        XCTAssertTrue(model.saveNow())
+        XCTAssertEqual(model.textBlocks.map(\.text), [editedText])
+
+        // Distinct completed sessions retain distinct undo actions, but must keep referring
+        // to one logical paragraph after a saved deletion forces its identity to change.
+        for _ in 0..<2 {
+            let deletedID = try XCTUnwrap(model.textBlocks.first?.id)
+            XCTAssertTrue(manager.canUndo)
+            if manager.canUndo { manager.undo() }
+            XCTAssertEqual(model.textBlocks.map(\.text), [originalText])
+            XCTAssertTrue(model.saveNow())
+            XCTAssertTrue(manager.canUndo)
+            if manager.canUndo { manager.undo() }
+            XCTAssertTrue(model.textBlocks.isEmpty)
+            XCTAssertFalse(manager.canUndo, "two sessions must require exactly two undos")
+            XCTAssertTrue(model.saveNow())
+            XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: pageId).blocks.isEmpty)
+
+            XCTAssertTrue(manager.canRedo)
+            if manager.canRedo { manager.redo() }
+            let restored = try XCTUnwrap(model.textBlocks.first)
+            XCTAssertNotEqual(restored.id, deletedID)
+            XCTAssertEqual(model.textBlocks.map(\.text), [originalText])
+            XCTAssertTrue(model.saveNow())
+
+            XCTAssertTrue(manager.canRedo)
+            if manager.canRedo { manager.redo() }
+            XCTAssertEqual(model.textBlocks.map(\.id), [restored.id],
+                           "redoing the later session must edit the restored paragraph, not append another")
+            XCTAssertEqual(model.textBlocks.map(\.text), [editedText])
+            XCTAssertFalse(manager.canRedo, "two sessions must require exactly two redos")
+            XCTAssertTrue(model.saveNow())
+            let saved = try store.loadPage(notebookId: notebookId, pageId: pageId)
+            XCTAssertEqual(saved.blocks.map(\.id), [restored.id])
+            XCTAssertEqual(saved.blocks.map(\.text), [editedText])
+            XCTAssertTrue(saved.deletedBlocks.contains { $0.id == deletedID })
+        }
+    }
+
     func testExplicitLocalPageDeletionDiscardsItsDraftBeforeTheLandingPageArrives() throws {
         let first = try XCTUnwrap(store.manifest(id: notebookId)?.pageIds.first)
         let second = try store.addPage(to: notebookId)

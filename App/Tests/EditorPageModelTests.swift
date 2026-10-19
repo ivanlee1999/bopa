@@ -319,6 +319,74 @@ final class EditorPageModelTests: XCTestCase {
         XCTAssertEqual(final.strokes.count, 3)
     }
 
+    func testRemoteInkArrivalAndParagraphDeletionPreserveTheActiveDraft() throws {
+        try checkRemoteInkChangeAndParagraphDeletion(erasingInk: false)
+    }
+
+    func testRemoteInkErasureAndParagraphDeletionPreserveTheActiveDraft() throws {
+        try checkRemoteInkChangeAndParagraphDeletion(erasingInk: true)
+    }
+
+    /// The combined update must refresh paragraph tombstones even while an active draft
+    /// prevents the canvas reload needed for ink. Keep the model clean so saveNow cannot
+    /// incidentally import that metadata through a write before the fold reaches its branch.
+    private func checkRemoteInkChangeAndParagraphDeletion(erasingInk: Bool) throws {
+        let pageID = pageIds[0]
+        var initial = try store.loadPage(notebookId: notebookId, pageId: pageID)
+        let originalInk = try makeStroke(id: "original-ink", second: 1)
+        initial.strokes = [originalInk]
+        _ = try store.savePage(initial)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageID))
+        let block = try XCTUnwrap(model.newTextBlock(at: CGPoint(x: 100, y: 200)))
+        model.beginEditing(block)
+        model.commitEditing(block, text: "Original paragraph", expectedPageID: pageID)
+        XCTAssertTrue(model.saveNow())
+        let editedBlock = try XCTUnwrap(model.textBlock(id: block.id))
+        model.beginEditing(editedBlock)
+        XCTAssertFalse(model.dirty)
+        let revision = model.contentRevision
+        let canvasBefore = model.drawing.dataRepresentation()
+
+        var remote = try store.loadPage(notebookId: notebookId, pageId: pageID)
+        remote.blocks.removeAll { $0.id == block.id }
+        remote.deletedBlocks.append(CouchTombstone(id: block.id, deletedAt: SyncClock.shared.stamp()))
+        if erasingInk {
+            remote.strokes = []
+            remote.deletedStrokes.append(
+                CouchTombstone(id: originalInk.id, deletedAt: SyncClock.shared.stamp()))
+        } else {
+            remote.strokes.append(try makeStroke(id: "arrived-ink", second: 2))
+        }
+        try writePageDirectly(remote)
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertEqual(model.editingBlockID, block.id)
+        XCTAssertEqual(model.pageId, pageID)
+        XCTAssertEqual(model.contentRevision, revision, "the active draft must prevent a reload")
+        XCTAssertEqual(model.drawing.dataRepresentation(), canvasBefore)
+        XCTAssertTrue(model.remoteInkPending, "the deferred canvas reload is still owed")
+        XCTAssertTrue(model.page?.deletedBlocks.contains { $0.id == block.id } == true,
+                      "ink changes must not hide the edited paragraph's tombstone")
+
+        let draft = "Local draft survives the combined remote update"
+        let committedID = try XCTUnwrap(model.commitEditing(
+            editedBlock, text: draft, expectedPageID: pageID))
+        XCTAssertNotEqual(committedID, block.id)
+        XCTAssertTrue(model.saveNow())
+        let saved = try store.loadPage(notebookId: notebookId, pageId: pageID)
+        XCTAssertEqual(saved.blocks.map(\.id), [committedID])
+        XCTAssertEqual(saved.blocks.first?.text, draft)
+        XCTAssertTrue(saved.deletedBlocks.contains { $0.id == block.id })
+        XCTAssertEqual(Set(saved.strokes.map(\.id)), Set(remote.strokes.map(\.id)))
+
+        model.foldInRemoteInk()
+        XCTAssertFalse(model.remoteInkPending)
+        XCTAssertEqual(model.drawing.strokes.count, remote.strokes.count)
+        XCTAssertEqual(model.textBlocks.map(\.text), [draft])
+    }
+
     /// Writes straight to disk, bypassing the store — standing in for the sync engine.
     private func writePageDirectly(_ page: PageFile) throws {
         let encoder = JSONEncoder()
