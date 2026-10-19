@@ -659,6 +659,14 @@ final class EditorPageModel: NSObject, ObservableObject {
         let arrived = onDisk.strokes.contains { !canvasStrokeIDs.contains($0.id) }
         let erasedElsewhere = canvasStrokeIDs.contains { erased.contains($0) }
         if arrived || erasedElsewhere {
+            if editingBlockID != nil {
+                // The active draft prevents open() from reloading the canvas, but must still
+                // learn about paragraph tombstones in this same remote update. Otherwise its
+                // eventual commit reuses a deleted ID and the remove-wins merge drops the text.
+                // Refresh only non-ink state and leave the canvas fold pending until it is safe.
+                refreshNonInkSurfaces(from: onDisk)
+                return
+            }
             if open(pageId: pageId) { remoteInkPending = false }
             return
         }
@@ -674,8 +682,9 @@ final class EditorPageModel: NSObject, ObservableObject {
     }
 
     /// Puts everything a page shows *besides* ink — its images, its paper, its sheet — onto the
-    /// published state, from a copy of the file that is already known to agree with the canvas
-    /// about the ink. Deliberately not a reload through `open`: replacing the drawing for a
+    /// published state without changing the canvas's ink or its saved-stroke baseline.
+    /// Also safe while a text draft defers an ink reload. Deliberately not a reload through
+    /// `open`: replacing the drawing for a
     /// surface change would cancel the undo stack for strokes that never moved.
     private func refreshNonInkSurfaces(from onDisk: PageFile) {
         guard var page, let store else { return }
@@ -882,6 +891,12 @@ final class EditorPageModel: NSObject, ObservableObject {
         if let expectedPageID, expectedPageID != pageId { return nil }
         guard let page else { return nil }
         if var previous {
+            // An undo snapshot supplies content and geometry, not identity: another action
+            // may already have restored this paragraph under a fresh ID after a saved delete.
+            previous.id = id
+            if let current = page.blocks.first(where: { $0.id == id }) {
+                previous.createdAt = current.createdAt
+            }
             // Undo/redo after autosave must not revive an identity already removed on disk.
             // Return the replacement identity so the inverse undo operation follows it.
             if page.deletedBlocks.contains(where: { $0.id == previous.id }) {

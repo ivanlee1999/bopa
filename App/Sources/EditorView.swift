@@ -825,6 +825,7 @@ struct EditorCanvasView: UIViewRepresentable {
             minimumHeight: Self.minimumHeight(for: pageSize))
         // A page switch must not be undoable into the previous page's drawing.
         container.pageUndoManager.removeAllActions()
+        context.coordinator.resetTextUndoIdentities()
         undoController.refresh()
         if let crossing = context.coordinator.takePendingCrossing() {
             // Entered by scrolling across a seam. Positioned from where the scroll is *now*, not
@@ -940,6 +941,22 @@ struct EditorCanvasView: UIViewRepresentable {
 
         // MARK: - Text boxes
 
+        /// All actions for a paragraph follow its latest incarnation after a saved deletion.
+        /// Updating only the inverse action would leave earlier sessions targeting old IDs.
+        private var textUndoReplacements: [String: String] = [:]
+
+        func resetTextUndoIdentities() {
+            textUndoReplacements.removeAll()
+        }
+
+        private func currentTextUndoID(_ id: String) -> String {
+            var current = id
+            while let replacement = textUndoReplacements[current] {
+                current = replacement
+            }
+            return current
+        }
+
         /// Clears a stale UIKit session after the model has replaced its page. Deliberately
         /// does not publish or commit model state: this is called from updateUIView.
         func discardTextEditingForPageChange() {
@@ -978,9 +995,13 @@ struct EditorCanvasView: UIViewRepresentable {
             manager.registerUndo(withTarget: self) { target in
                 // UndoManager calls this on the thread that registered it, which is the main one.
                 MainActor.assumeIsolated {
-                    let undone = target.parent.currentTextBlock(id)
+                    let currentID = target.currentTextUndoID(id)
+                    let undone = target.parent.currentTextBlock(currentID)
                     guard let restoredID = target.parent.restoreTextBlock(
-                        id, previous, owningPageID) else { return }
+                        currentID, previous, owningPageID) else { return }
+                    if restoredID != currentID {
+                        target.textUndoReplacements[currentID] = restoredID
+                    }
                     // Registering from inside an undo is what makes it redoable, and the same
                     // call serves both directions for ever after.
                     target.registerTextUndo(id: restoredID, previous: undone, name: name)
