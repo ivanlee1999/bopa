@@ -54,6 +54,13 @@ final class NotebookSwitchingUITests: XCTestCase {
         search.typeText(title)
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'switcher.notebook.'"))
             .containing(.staticText, identifier: title).firstMatch
+        assertNotebookRowReady(row, in: app)
+        row.tap()
+        waitForValue(title, on: app.buttons["editor.notebooks"])
+    }
+
+    @MainActor
+    private func assertNotebookRowReady(_ row: XCUIElement, in app: XCUIApplication) {
         XCTAssertTrue(row.waitForExistence(timeout: 8))
         let window = app.windows.firstMatch
         // Each property can perform a fresh accessibility query. Keep the bounded geometry
@@ -65,8 +72,6 @@ final class NotebookSwitchingUITests: XCTestCase {
             return !rowFrame.isEmpty && windowFrame.contains(rowFrame)
         }, evaluatedWith: row)], timeout: 8), .completed)
         XCTAssertTrue(row.isHittable, "the visible notebook result must be tappable")
-        row.tap()
-        waitForValue(title, on: app.buttons["editor.notebooks"])
     }
 
     @MainActor
@@ -136,10 +141,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.buttons["editor.notebooks"].tap()
         let alternate = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'switcher.notebook.'"))
             .containing(.staticText, identifier: a).firstMatch
-        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate { _, _ in
-            alternate.exists && alternate.isHittable && !alternate.frame.isEmpty
-                && app.windows.firstMatch.frame.contains(alternate.frame)
-        }, evaluatedWith: alternate)], timeout: 8), .completed)
+        assertNotebookRowReady(alternate, in: app)
         screenshot("notebook-switcher-portrait")
         app.buttons["Cancel"].tap()
         waitForValue(b, on: app.buttons["editor.notebooks"])
