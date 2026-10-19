@@ -101,6 +101,25 @@ final class NotebookSwitchingUITests: XCTestCase {
     }
 
     @MainActor
+    private func recordInitialDrawingViewport(_ name: String, in app: XCUIApplication) -> CGFloat {
+        let windowFrame = app.windows.firstMatch.frame
+        let canvasFrame = canvas(app).frame
+        // Relative height checks cannot detect an input strip already present at first focus.
+        // Keep absolute geometry and pixels for same-device baseline/fix comparison, without
+        // baking device-specific safe-area or toolbar dimensions into the assertions.
+        let geometry = XCTAttachment(string: """
+            window: \(windowFrame)
+            canvas: \(canvasFrame)
+            canvas bottom to window bottom: \(windowFrame.maxY - canvasFrame.maxY)
+            """)
+        geometry.name = "\(name)-initial-viewport-geometry"
+        geometry.lifetime = .keepAlways
+        add(geometry)
+        screenshot("\(name)-initial-viewport")
+        return canvasFrame.height
+    }
+
+    @MainActor
     private func waitForAbsence(_ element: XCUIElement) {
         XCTAssertEqual(XCTWaiter().wait(for: [expectation(
             for: NSPredicate(format: "exists == false"), evaluatedWith: element)], timeout: 5), .completed)
@@ -210,7 +229,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         let title = "Options baseline \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
-        let originalHeight = canvas(app).frame.height
+        let originalHeight = recordInitialDrawingViewport("options", in: app)
         assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
         XCTAssertTrue(app.buttons["editor.options"].waitForExistence(timeout: 5))
         app.buttons["editor.options"].tap()
@@ -238,7 +257,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         let title = "Text keyboard \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
-        let originalHeight = canvas(app).frame.height
+        let originalHeight = recordInitialDrawingViewport("text", in: app)
         assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
 
         app.buttons["editor.tool.text"].tap()
