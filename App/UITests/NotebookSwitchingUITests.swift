@@ -160,6 +160,21 @@ final class NotebookSwitchingUITests: XCTestCase {
     }
 
     @MainActor
+    func testOptionsOpensBeforeAnyPageTurns() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let title = "Options baseline \(UUID().uuidString.prefix(6))"
+        create(title, in: app)
+        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        XCTAssertTrue(app.buttons["editor.options"].waitForExistence(timeout: 5))
+        app.buttons["editor.options"].tap()
+        XCTAssertTrue(app.buttons["editor.addPageMenu"].waitForExistence(timeout: 5))
+        screenshot("options-before-page-turns")
+    }
+
+    @MainActor
     func testWritingControlsStayDiscoverableAndPageActionsDoNotDuplicate() {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]

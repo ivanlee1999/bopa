@@ -276,3 +276,47 @@ jobs:
           path: ${{ runner.temp }}/bopa-source
           if-no-files-found: error
           retention-days: 30
+
+  options-diagnostic:
+    name: Options presentation diagnostic (iPad)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          (cd App && xcodegen generate)
+      - name: Reproduce Options on a fresh simulator with stack samples
+        run: |
+          udid=$(xcrun simctl list devices available -j | jq -r '
+            [.devices | to_entries[] | select(.key | contains("SimRuntime.iOS"))
+             | .value[] | select(.name | startswith("iPad"))] | .[0].udid // empty')
+          test -n "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          out="$RUNNER_TEMP/options-diagnostic"
+          mkdir -p "$out"
+          xcrun simctl spawn "$udid" log stream --level info --style compact \
+            --predicate 'process == "Bopa"' > "$out/app.log" 2>&1 &
+          log_pid=$!
+          (
+            while sleep 20; do
+              for pid in $(pgrep -x Bopa || true); do
+                sample "$pid" 1 -file "$out/stack-$(date +%s)-$pid.txt" >/dev/null 2>&1 || true
+              done
+            done
+          ) &
+          sample_pid=$!
+          trap 'kill "$log_pid" "$sample_pid" 2>/dev/null || true' EXIT
+          xcodebuild test -project App/Bopa.xcodeproj -scheme Bopa \
+            -destination "id=$udid" -destination-timeout 120 \
+            -only-testing:BopaUITests/NotebookSwitchingUITests/testOptionsOpensBeforeAnyPageTurns \
+            -only-testing:BopaUITests/NotebookSwitchingUITests/testWritingControlsStayDiscoverableAndPageActionsDoNotDuplicate \
+            -resultBundlePath "$out/Options.xcresult" CODE_SIGNING_ALLOWED=NO
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: options-presentation-diagnostic
+          path: ${{ runner.temp }}/options-diagnostic
+          retention-days: 3
