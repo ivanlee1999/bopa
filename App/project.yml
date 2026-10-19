@@ -57,7 +57,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: dev.ivan.bopa
         MARKETING_VERSION: 0.8.1
-        CURRENT_PROJECT_VERSION: 8
+        CURRENT_PROJECT_VERSION: 9
         TARGETED_DEVICE_FAMILY: "1,2"
         # The Mac build. Catalyst rather than a native AppKit target because there is no AppKit
         # `PKCanvasView` — macOS PencilKit gives you the model and no canvas view — so a native

@@ -1,4 +1,4 @@
-# Bopa 0.8.1 (build 8)
+# Bopa 0.8.1 (build 9)
 
 ## Changes
 
@@ -8,9 +8,15 @@
   reach. Return to the previous writing tool in one tap; tap the selected tool for
   settings. Large-text settings use a full-width sheet with a pinned close button.
 - Notebook switcher uses a quiet monochrome list and clearly marks the current notebook.
-- Preserve later stroke snapshots when their control-point count has changed instead
-  of reusing an earlier same-identity saved path. Coverage includes repeated saves,
-  failed-save retry and stable stroke IDs.
+- Preserve changed stroke snapshots, including saved lasso undo, restored erasures and
+  same-count geometry/width/ink changes. Content matching preserves untouched imported
+  wire data and reserves unchanged timestamp siblings before edits claim their identities.
+- Keep active typing on its originating page during remote deletion, then recover text
+  and handwriting into a separate notebook. Explicit local deletion discards the draft;
+  late finish/undo callbacks cannot write it onto another page. Recovery retries preserve
+  deletions without resurrecting the removed source.
+- Keep whole-paragraph undo when finishing text through a tool change or navigation.
+  Undo/redo follows fresh block IDs across saved deletions and remote tombstones.
 - Fix an iPad Options-menu freeze: undo availability checkpoint notifications were
   republishing unchanged state and repeatedly rebuilding the native menu. Refresh now
   guards reentry and publishes only changes, with undo/redo and manager-switch tests.
@@ -23,14 +29,18 @@ with persisted ink/text, page creation, undo isolation, rotation, background rel
 visible compact controls, Options and accessibility-size layouts. Simulator screenshots
 are reviewed; this does not establish every split-view size or VoiceOver behavior.
 
-The preceding code revision passed 499 app tests (9 CouchDB-dependent skips), 374 kit
-tests (12 server/scenario-dependent skips), 16 iPad UI tests and 7 iPhone UI tests.
-Release version metadata is checked by the release revision's separate CI run. A green
-run does not mean the skipped CouchDB/interop/scenario integration tests passed.
+The regression-only baseline reproduced 17 failing data-safety tests before the fixes,
+including text persisted onto an unrelated landing page and saved undo retaining moved
+ink coordinates. Release version metadata is checked by the release revision's own CI.
+CouchDB-dependent app tests and server/scenario-dependent kit tests self-skip without
+their external test environment. A green run does not mean those skipped tests passed.
 
-Stroke snapshot reuse now checks point count, but does not detect same-count changes
-to pressure or geometry. The existing tool-down/tool-up lifecycle and save timing are
-unchanged. Final Apple Pencil force updates can arrive after pencil-up; the pre-existing
+Content matching detects saved geometry/width changes without assuming when PencilKit
+has finished a stroke. Completely ambiguous multiple edited/reordered strokes sharing
+a creation timestamp still lack a general identity solution. The wire exporter does
+not promise to retain every PencilKit-only force/appearance field. The existing
+tool-down/tool-up lifecycle and save timing are unchanged. Final Apple Pencil force
+updates can arrive after pencil-up; the pre-existing
 final-pressure/save race remains unresolved and requires physical-device validation.
 See [Introducing PencilKit (WWDC 2019)](https://developer.apple.com/videos/play/wwdc2019/221/).
 Test rapid strokes, immediate page/notebook changes, backgrounding, undo and remote

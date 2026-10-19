@@ -184,9 +184,8 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
         session.finishThroughViewport()
         manager.endUndoGrouping()
         // A later disappearance/background callback must not register this session twice.
-        manager.beginUndoGrouping()
+        // Do not manufacture an empty undo group around a callback that must be a no-op.
         session.finishThroughViewport()
-        manager.endUndoGrouping()
         XCTAssertNil(session.container.editingTextBlock)
         XCTAssertEqual(model.textBlocks.map(\.text), [draft])
         XCTAssertTrue(manager.canUndo, "choosing Pen must register the same text edit as Done")
@@ -306,9 +305,8 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
         XCTAssertNotNil(session.container.editingTextBlock)
 
         let manager = session.container.pageUndoManager
-        manager.beginUndoGrouping()
+        // Rejection must register nothing, so the test must not add its own empty group.
         session.finishThroughViewport()
-        manager.endUndoGrouping()
         XCTAssertNil(session.container.editingTextBlock)
         XCTAssertNil(model.editingBlockID)
         XCTAssertTrue(model.textBlocks.isEmpty)
