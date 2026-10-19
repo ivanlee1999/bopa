@@ -46,9 +46,18 @@ final class NotebookSwitchingUITests: XCTestCase {
     @MainActor
     private func switchTo(_ title: String, in app: XCUIApplication) {
         app.buttons["editor.notebooks"].tap()
+        // The suite intentionally retains notebooks across launches. An unopened target can
+        // sit below Recent and behind the search bar; existence alone does not make it tappable.
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText(title)
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'switcher.notebook.'"))
             .containing(.staticText, identifier: title).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate { _, _ in
+            row.exists && row.isHittable && !row.frame.isEmpty
+                && app.windows.firstMatch.frame.contains(row.frame)
+        }, evaluatedWith: row)], timeout: 8), .completed)
         row.tap()
         waitForValue(title, on: app.buttons["editor.notebooks"])
     }
@@ -64,6 +73,8 @@ final class NotebookSwitchingUITests: XCTestCase {
             for: rotated, evaluatedWith: window)], timeout: 8), .completed)
         for id in ["editor.close", "editor.notebooks", "editor.pages"] {
             let control = app.buttons[id]
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44, "\(id) needs a full touch target")
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44, "\(id) needs a full touch target")
             XCTAssertTrue(control.isHittable, "\(id) must stay reachable after rotation")
             XCTAssertTrue(window.frame.contains(control.frame), "\(id) must stay inside the window")
         }
@@ -116,6 +127,12 @@ final class NotebookSwitchingUITests: XCTestCase {
             waitForValue("strokes:1", on: canvas(app))
         }
         app.buttons["editor.notebooks"].tap()
+        let alternate = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'switcher.notebook.'"))
+            .containing(.staticText, identifier: a).firstMatch
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate { _, _ in
+            alternate.exists && alternate.isHittable && !alternate.frame.isEmpty
+                && app.windows.firstMatch.frame.contains(alternate.frame)
+        }, evaluatedWith: alternate)], timeout: 8), .completed)
         screenshot("notebook-switcher-portrait")
         app.buttons["Cancel"].tap()
         waitForValue(b, on: app.buttons["editor.notebooks"])
@@ -149,6 +166,107 @@ final class NotebookSwitchingUITests: XCTestCase {
         resumed.tap()
         waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
         waitForValue("strokes:1", on: canvas(app))
+    }
+
+    @MainActor
+    func testOptionsOpensBeforeAnyPageTurns() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let title = "Options baseline \(UUID().uuidString.prefix(6))"
+        create(title, in: app)
+        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        XCTAssertTrue(app.buttons["editor.options"].waitForExistence(timeout: 5))
+        app.buttons["editor.options"].tap()
+        XCTAssertTrue(app.buttons["editor.addPageMenu"].waitForExistence(timeout: 5))
+        screenshot("options-before-page-turns")
+    }
+
+    @MainActor
+    func testWritingControlsStayDiscoverableAndPageActionsDoNotDuplicate() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let title = "Writing workspace \(UUID().uuidString.prefix(6))"
+        create(title, in: app)
+        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        let forward = app.buttons["editor.forwardPage"]
+        XCTAssertTrue(forward.waitForExistence(timeout: 5))
+        XCTAssertEqual(forward.label, "Add page")
+        forward.tap()
+        waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
+        app.buttons["Previous page"].tap()
+        waitForValue("Page 1 of 2", on: app.buttons["editor.pages"])
+        XCTAssertEqual(forward.label, "Next page")
+        forward.tap()
+        waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
+        app.buttons["Previous page"].tap()
+        waitForValue("Page 1 of 2", on: app.buttons["editor.pages"])
+        app.buttons["editor.options"].tap()
+        let menuAdd = app.buttons["editor.addPageMenu"]
+        XCTAssertTrue(menuAdd.waitForExistence(timeout: 5))
+        // UIKit's menu accessibility can expose a visible row but no computed hit point.
+        // Tap the observed row's center, then verify the actual page-creation result.
+        XCTAssertGreaterThan(menuAdd.frame.width, 0)
+        XCTAssertGreaterThan(menuAdd.frame.height, 0)
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(menuAdd.frame))
+        menuAdd.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        waitForValue("Page 3 of 3", on: app.buttons["editor.pages"])
+
+        for id in ["editor.tool.eraser", "editor.tool.lasso", "editor.tool.text", "editor.ink"] {
+            let button = app.buttons[id]
+            XCTAssertTrue(button.isHittable, "essential tools must not require a hidden scroll")
+            XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        }
+        if app.buttons["editor.tools"].exists {
+            app.buttons["editor.tools"].tap()
+            XCTAssertTrue(app.buttons["editor.tool.pencil"].waitForExistence(timeout: 5))
+            app.buttons["editor.tool.pencil"].tap()
+            app.buttons["editor.width.fine"].tap()
+            screenshot("compact-writing-settings")
+            app.buttons["Done"].tap()
+            XCTAssertTrue(app.buttons["editor.tools"].isHittable)
+            app.buttons["editor.tool.eraser"].tap()
+            app.buttons["editor.tools"].tap()
+            XCTAssertEqual(app.buttons["editor.tools"].value as? String, "Pencil, Fine")
+            XCTAssertFalse(app.buttons["editor.width.fine"].exists, "returning to writing is one tap")
+        }
+        assertEditorFits(app, landscape: false)
+        screenshot("calm-writing-workspace")
+    }
+
+    @MainActor
+    func testAccessibilityTextSizeKeepsNotebookAndPageControlsReachable() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool", "-UIPreferredContentSizeCategoryName",
+                               "UICTContentSizeCategoryAccessibilityXXXL"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let title = "Large text notebook \(UUID().uuidString.prefix(6))"
+        create(title, in: app)
+        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        XCTAssertTrue(app.buttons["editor.pages"].waitForExistence(timeout: 5))
+        assertEditorFits(app, landscape: false)
+        XCTAssertFalse(app.buttons["editor.notebooks"].frame.intersects(app.buttons["editor.pages"].frame))
+        screenshot("writing-accessibility-text")
+        if app.buttons["editor.tools"].exists {
+            app.buttons["editor.tools"].tap()
+            XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Done"].isHittable)
+            XCTAssertTrue(app.buttons["editor.tool.pencil"].isHittable)
+            let widths = app.buttons["editor.width.fine"]
+            if !widths.isHittable { app.scrollViews["editor.strokeSettings"].swipeUp() }
+            XCTAssertTrue(widths.isHittable)
+            widths.tap()
+            screenshot("writing-settings-accessibility-text")
+            app.buttons["Done"].tap()
+        }
+        app.buttons["editor.forwardPage"].tap()
+        waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
+        app.buttons["editor.close"].tap()
     }
 
     @MainActor

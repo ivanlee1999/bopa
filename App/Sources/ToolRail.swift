@@ -285,11 +285,14 @@ final class ToolSelection: ObservableObject {
 /// moving overlay costs a full-screen refresh — but a rail that stays put is the better
 /// bargain on glass too: it is always in the same place under your hand.
 struct ToolRail: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject var selection: ToolSelection
     @ObservedObject var undo: CanvasUndoController
     /// `false` lays the rail out along the bottom, the one-handed variant.
     var vertical = true
     @State private var showingInk = false
+    @State private var showingTools = false
+    @State private var lastWritingTool: ToolSelection.Kind = .pen
 
     private var hit: CGFloat { vertical ? Modernist.hit : Modernist.hitCompact }
 
@@ -300,8 +303,10 @@ struct ToolRail: View {
                     ScrollView(.vertical) {
                         VStack(spacing: 0) {
                             tools
-                            ModernistRule().frame(width: hit)
-                            widthPicker
+                            if selection.kind.hasWidth {
+                                ModernistRule().frame(width: hit)
+                                widthPicker
+                            }
                         }
                     }
                     .scrollBounceBehavior(.basedOnSize)
@@ -320,16 +325,11 @@ struct ToolRail: View {
                 }
             } else {
                 HStack(spacing: 0) {
-                    // The tools and widths scroll; undo/redo and ink stay within reach even
-                    // on an iPhone, where the full row is wider than the screen.
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 0) {
-                            tools
-                            widthPicker
-                        }
-                    }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .scrollIndicators(.hidden)
+                    compactToolChooser
+                    toolButton(.eraser)
+                    toolButton(.lasso)
+                    toolButton(.text)
+                    Spacer(minLength: 0)
                     history
                     inkMenu
                 }
@@ -344,6 +344,9 @@ struct ToolRail: View {
             }
         }
         .background(Modernist.rail)
+        .onChange(of: selection.kind, initial: true) { _, kind in
+            if kind.takesInk { lastWritingTool = kind }
+        }
     }
 
     // MARK: Groups
@@ -354,17 +357,83 @@ struct ToolRail: View {
             ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
         layout {
             ForEach(ToolSelection.Kind.allCases) { kind in
-                Button {
-                    selection.select(kind)
-                } label: {
-                    Image(systemName: kind.symbolName)
-                        .font(.system(size: 20, weight: .medium))
-                }
-                .buttonStyle(RailButtonStyle(selected: selection.kind == kind, size: hit))
-                .accessibilityLabel(kind.label)
-                .accessibilityAddTraits(selection.kind == kind ? .isSelected : [])
-                .accessibilityIdentifier("editor.tool.\(kind.rawValue)")
+                toolButton(kind)
             }
+        }
+    }
+
+    private func toolButton(_ kind: ToolSelection.Kind) -> some View {
+        Button {
+            if !vertical && kind == .eraser && selection.kind == .eraser {
+                showingTools = true
+            } else {
+                selection.select(kind)
+            }
+        } label: {
+            Image(systemName: kind.symbolName)
+                .font(.system(size: 20, weight: .medium))
+        }
+        .buttonStyle(RailButtonStyle(selected: selection.kind == kind, size: hit))
+        .accessibilityLabel(kind.label)
+        .accessibilityAddTraits(selection.kind == kind ? .isSelected : [])
+        .accessibilityIdentifier("editor.tool.\(kind.rawValue)")
+    }
+
+    /// Keep every essential compact action visible. Tool variants and stroke settings have
+    /// an explicit entrance rather than disappearing off the edge of an unmarked scroll row.
+    private var compactToolChooser: some View {
+        Button {
+            if selection.kind.takesInk { showingTools = true }
+            else { selection.select(lastWritingTool) }
+        } label: {
+            VStack(spacing: 0) {
+                Image(systemName: lastWritingTool.symbolName)
+                    .font(.system(size: 19, weight: .medium))
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+            }
+        }
+        .buttonStyle(RailButtonStyle(selected: selection.kind.takesInk, size: hit))
+        .accessibilityLabel(selection.kind.takesInk ? "Writing tools and stroke settings" : lastWritingTool.label)
+        .accessibilityHint("Tap the selected writing tool or eraser again for stroke settings")
+        .accessibilityValue(selection.kind.label + (selection.kind.hasWidth ? ", " + selection.width.label : ""))
+        .accessibilityIdentifier("editor.tools")
+        .popover(isPresented: $showingTools) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    Text("Writing tools").font(.headline)
+                    Spacer(minLength: 8)
+                    Button { showingTools = false } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Done")
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 4) {
+                            ForEach(ToolSelection.Kind.allCases.filter { $0.takesInk }) { kind in
+                                toolButton(kind)
+                            }
+                        }
+                        Text(selection.kind.label).font(.subheadline)
+                        if selection.kind.hasWidth {
+                            Divider()
+                            Text("Stroke width · \(selection.width.label)").font(.subheadline)
+                            widthPicker
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityIdentifier("editor.strokeSettings")
+            }
+            .padding(16)
+            .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : 272)
+            .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil,
+                   maxHeight: dynamicTypeSize.isAccessibilitySize ? nil : 420)
+            .background(Modernist.paper)
+            .tint(Modernist.ink)
+            .presentationCompactAdaptation(dynamicTypeSize.isAccessibilitySize ? .sheet : .popover)
         }
     }
 
@@ -408,37 +477,39 @@ struct ToolRail: View {
     private var widthPicker: some View {
         let layout = vertical
             ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
-        layout {
-            ForEach(ToolSelection.Width.allCases) { width in
-                Button {
-                    selection.select(width: width)
-                } label: {
-                    // The selected cell is an ink fill, so the dot has to invert with it or
-                    // the one step you chose is the one you cannot see.
-                    Circle()
-                        .fill(selection.width == width ? Modernist.paper : Modernist.ink)
-                        .frame(width: width.dotSize, height: width.dotSize)
+        VStack(spacing: 4) {
+            layout {
+                ForEach(ToolSelection.Width.allCases) { width in
+                    Button {
+                        selection.select(width: width)
+                    } label: {
+                        Circle()
+                            .fill(selection.width == width ? Modernist.paper : Modernist.ink)
+                            .frame(width: width.dotSize, height: width.dotSize)
+                    }
+                    .buttonStyle(RailButtonStyle(selected: selection.width == width, size: hit))
+                    .disabled(!selection.kind.hasWidth)
+                    .accessibilityLabel(width.label)
+                    .accessibilityAddTraits(
+                        selection.kind.hasWidth && selection.width == width ? .isSelected : [])
+                    .accessibilityIdentifier("editor.width.\(width.rawValue)")
                 }
-                .buttonStyle(RailButtonStyle(selected: selection.width == width, size: hit))
-                .disabled(!selection.kind.hasWidth)
-                .accessibilityLabel(width.label)
-                .accessibilityAddTraits(
-                    selection.kind.hasWidth && selection.width == width ? .isSelected : [])
-                .accessibilityIdentifier("editor.width.\(width.rawValue)")
             }
             if selection.kind == .eraser {
-                ForEach(ToolSelection.EraserMode.allCases) { mode in
-                    Button {
-                        selection.select(eraserMode: mode)
-                    } label: {
-                        Image(systemName: mode == .pixel ? "eraser.line.dashed" : "scribble")
-                            .font(.system(size: 17, weight: .medium))
+                layout {
+                    ForEach(ToolSelection.EraserMode.allCases) { mode in
+                        Button {
+                            selection.select(eraserMode: mode)
+                        } label: {
+                            Image(systemName: mode == .pixel ? "eraser.line.dashed" : "scribble")
+                                .font(.system(size: 17, weight: .medium))
+                        }
+                        .buttonStyle(
+                            RailButtonStyle(selected: selection.eraserMode == mode, size: hit))
+                        .accessibilityLabel(mode.label)
+                        .accessibilityAddTraits(selection.eraserMode == mode ? .isSelected : [])
+                        .accessibilityIdentifier("editor.eraserMode.\(mode.rawValue)")
                     }
-                    .buttonStyle(
-                        RailButtonStyle(selected: selection.eraserMode == mode, size: hit))
-                    .accessibilityLabel(mode.label)
-                    .accessibilityAddTraits(selection.eraserMode == mode ? .isSelected : [])
-                    .accessibilityIdentifier("editor.eraserMode.\(mode.rawValue)")
                 }
             }
         }

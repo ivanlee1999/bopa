@@ -9,6 +9,7 @@ struct EditorView: View {
     @EnvironmentObject private var handwriting: HandwritingSettings
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let notebookId: String
     var initialPageId: String?
     /// Dismisses the editor. The chrome is drawn here rather than in a navigation bar, so
@@ -150,43 +151,57 @@ struct EditorView: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 8) {
-            Button {
-                closeNotebook()
-            } label: {
-                Image(systemName: "chevron.backward")
-                    .font(.system(size: 17, weight: .semibold))
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                notebookIdentity
+                Spacer(minLength: 4)
+                if !dynamicTypeSize.isAccessibilitySize, let manifest { pageControls(manifest) }
+                optionsMenu
             }
-            .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
-            .accessibilityLabel("Library")
-            .accessibilityIdentifier("editor.close")
-
-            Button(action: showNotebookSwitcher) {
-                HStack(spacing: 4) {
-                    Text(manifest?.title ?? "Notebook")
-                        .font(Modernist.font(15, .bold))
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
+            .frame(minHeight: Modernist.hit)
+            if dynamicTypeSize.isAccessibilitySize, let manifest {
+                HStack {
+                    Spacer()
+                    pageControls(manifest)
+                    Spacer()
                 }
-                .foregroundStyle(Modernist.ink)
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+                .frame(minHeight: Modernist.hit)
             }
-            .buttonStyle(.plain)
-            .disabled(onSwitchNotebook == nil)
-            .accessibilityLabel("Switch notebook")
-            .accessibilityValue(manifest?.title ?? "Notebook")
-            .accessibilityIdentifier("editor.notebooks")
-
-            Spacer(minLength: 8)
-
-            if let manifest { pageControls(manifest) }
-            optionsMenu
         }
         .padding(.horizontal, 8)
-        .frame(height: Modernist.hit)
         .background(Modernist.rail)
         .overlay(alignment: .bottom) { ModernistRule() }
+    }
+
+    @ViewBuilder
+    private var notebookIdentity: some View {
+        Button {
+            closeNotebook()
+        } label: {
+            Image(systemName: "chevron.backward")
+                .font(.system(size: 17, weight: .semibold))
+        }
+        .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
+        .accessibilityLabel("Library")
+        .accessibilityIdentifier("editor.close")
+
+        Button(action: showNotebookSwitcher) {
+            HStack(spacing: 4) {
+                Text(manifest?.title ?? "Notebook")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
+            }
+            .foregroundStyle(Modernist.ink)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(onSwitchNotebook == nil)
+        .accessibilityLabel("Switch notebook")
+        .accessibilityValue(manifest?.title ?? "Notebook")
+        .accessibilityIdentifier("editor.notebooks")
+
     }
 
     private func pageControls(_ manifest: NotebookManifest) -> some View {
@@ -210,7 +225,7 @@ struct EditorView: View {
             // pages cannot be crossed with the two chevrons either side of it.
             Button(action: showPages) {
                 Text("\(pageIndex + 1) / \(manifest.pageIds.count)")
-                    .font(Modernist.font(11, .medium).monospacedDigit())
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(Modernist.neutral700)
                     .padding(.horizontal, 6)
                     .frame(minWidth: Modernist.hitCompact, minHeight: Modernist.hitCompact)
@@ -231,7 +246,8 @@ struct EditorView: View {
                     openPage(at: pageIndex + 1)
                 }
             } label: {
-                Image(systemName: "chevron.right").font(.system(size: 15, weight: .semibold))
+                Image(systemName: pageIndex >= manifest.pageIds.count - 1 ? "plus" : "chevron.right")
+                    .font(.system(size: 15, weight: .semibold))
             }
             .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
             // The keyboard's page turns. On the Mac they are the only way to move between pages
@@ -241,17 +257,10 @@ struct EditorView: View {
             .keyboardShortcut("]", modifiers: .command)
             .disabled(model.editingBlockID != nil)
             .accessibilityLabel(
-                pageIndex >= manifest.pageIds.count - 1 ? "New page" : "Next page")
+                pageIndex >= manifest.pageIds.count - 1 ? "Add page" : "Next page")
+            .accessibilityIdentifier("editor.forwardPage")
 
-            Button {
-                addPage()
-            } label: {
-                Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
-            }
-            .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
-            .keyboardShortcut("n", modifiers: [.command, .shift])
-            .disabled(model.editingBlockID != nil)
-            .accessibilityLabel("Add page")
+
         }
     }
 
@@ -283,6 +292,13 @@ struct EditorView: View {
 
     private var optionsMenu: some View {
         Menu {
+            Button(action: addPage) {
+                Label("Add page", systemImage: "plus")
+            }
+            .accessibilityIdentifier("editor.addPageMenu")
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .disabled(model.editingBlockID != nil)
+            Divider()
             Button(action: showNotebookSwitcher) {
                 Label("Switch notebook…", systemImage: "rectangle.on.rectangle")
             }
@@ -550,6 +566,7 @@ final class CanvasUndoController: NSObject, ObservableObject {
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     private weak var manager: UndoManager?
+    private var refreshing = false
 
     func attach(_ manager: UndoManager) {
         guard manager !== self.manager else { return }
@@ -576,8 +593,17 @@ final class CanvasUndoController: NSObject, ObservableObject {
     /// Re-reads canUndo/canRedo. Also called explicitly after removeAllActions(),
     /// which posts no notification.
     func refresh() {
-        canUndo = manager?.canUndo ?? false
-        canRedo = manager?.canRedo ?? false
+        // UIKit asks these questions while presenting menus. UndoManager may emit a
+        // checkpoint while answering them, so guard the reads as well as publication.
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+        let nextCanUndo = manager?.canUndo ?? false
+        let nextCanRedo = manager?.canRedo ?? false
+        // Publishing an unchanged value rebuilds the visible menu, whose keyboard
+        // validation asks UndoManager again: an otherwise endless presentation loop.
+        if canUndo != nextCanUndo { canUndo = nextCanUndo }
+        if canRedo != nextCanRedo { canRedo = nextCanRedo }
     }
 
     @objc private func undoManagerStateDidChange(_ note: Notification) {
