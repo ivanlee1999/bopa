@@ -46,9 +46,18 @@ final class NotebookSwitchingUITests: XCTestCase {
     @MainActor
     private func switchTo(_ title: String, in app: XCUIApplication) {
         app.buttons["editor.notebooks"].tap()
+        // The suite intentionally retains notebooks across launches. An unopened target can
+        // sit below Recent and behind the search bar; existence alone does not make it tappable.
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText(title)
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'switcher.notebook.'"))
             .containing(.staticText, identifier: title).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate { _, _ in
+            row.exists && row.isHittable && !row.frame.isEmpty
+                && app.windows.firstMatch.frame.contains(row.frame)
+        }, evaluatedWith: row)], timeout: 8), .completed)
         row.tap()
         waitForValue(title, on: app.buttons["editor.notebooks"])
     }
