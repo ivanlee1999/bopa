@@ -1,3 +1,4 @@
+import Combine
 import PencilKit
 import SwiftUI
 import XCTest
@@ -11,6 +12,48 @@ final class CanvasDrawingLifecycleTests: XCTestCase {
     private final class DrawingBox {
         var value = PKDrawing()
         var idleDrawings: [PKDrawing] = []
+    }
+
+    func testUnchangedUndoCheckpointsDoNotRepublishToolbarState() {
+        let manager = UndoManager()
+        let controller = CanvasUndoController()
+        controller.attach(manager)
+        var publications = 0
+        let subscription = controller.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+        for _ in 0..<20 {
+            NotificationCenter.default.post(name: .NSUndoManagerCheckpoint, object: manager)
+            controller.refresh()
+        }
+        XCTAssertEqual(publications, 0, "menu validation must not invalidate the same menu again")
+        XCTAssertFalse(controller.canUndo)
+        XCTAssertFalse(controller.canRedo)
+    }
+
+    func testUndoStateChangesPublishAndSubsequentRefreshIsQuiet() {
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        let controller = CanvasUndoController()
+        controller.attach(manager)
+        let target = NSObject()
+        manager.beginUndoGrouping()
+        manager.registerUndo(withTarget: target) { _ in }
+        manager.endUndoGrouping()
+        controller.refresh()
+        XCTAssertTrue(controller.canUndo)
+
+        var publications = 0
+        let subscription = controller.objectWillChange.sink { publications += 1 }
+        defer { subscription.cancel() }
+        controller.refresh()
+        XCTAssertEqual(publications, 0)
+        manager.removeAllActions()
+        controller.refresh()
+        XCTAssertFalse(controller.canUndo)
+        XCTAssertFalse(controller.canRedo)
+        XCTAssertEqual(publications, 1, "the real availability change must reach the toolbar")
+        controller.refresh()
+        XCTAssertEqual(publications, 1)
     }
 
     private func drawing(_ count: Int) -> PKDrawing {

@@ -566,6 +566,7 @@ final class CanvasUndoController: NSObject, ObservableObject {
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     private weak var manager: UndoManager?
+    private var refreshing = false
 
     func attach(_ manager: UndoManager) {
         guard manager !== self.manager else { return }
@@ -592,8 +593,17 @@ final class CanvasUndoController: NSObject, ObservableObject {
     /// Re-reads canUndo/canRedo. Also called explicitly after removeAllActions(),
     /// which posts no notification.
     func refresh() {
-        canUndo = manager?.canUndo ?? false
-        canRedo = manager?.canRedo ?? false
+        // UIKit asks these questions while presenting menus. UndoManager may emit a
+        // checkpoint while answering them, so guard the reads as well as publication.
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+        let nextCanUndo = manager?.canUndo ?? false
+        let nextCanRedo = manager?.canRedo ?? false
+        // Publishing an unchanged value rebuilds the visible menu, whose keyboard
+        // validation asks UndoManager again: an otherwise endless presentation loop.
+        if canUndo != nextCanUndo { canUndo = nextCanUndo }
+        if canRedo != nextCanRedo { canRedo = nextCanRedo }
     }
 
     @objc private func undoManagerStateDidChange(_ note: Notification) {
