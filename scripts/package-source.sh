@@ -18,7 +18,7 @@ cat > "$OUT/BUILD-INFO.txt" <<INFO
 Bopa $version ($build)
 Source commit: $sha
 Source code only. No compiled app, IPA, signing identity or provisioning profile.
-See docs/release-0.8.0.md for validation scope and device-testing limitations.
+See docs/release-$version.md for validation scope and device-testing limitations.
 INFO
 cd "$OUT"
 if command -v sha256sum >/dev/null; then
