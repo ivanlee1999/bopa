@@ -118,6 +118,12 @@ final class NotebookSwitchingUITests: XCTestCase {
             waitForValue("strokes:1", on: canvas(app))
         }
         app.buttons["editor.notebooks"].tap()
+        let alternate = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'switcher.notebook.'"))
+            .containing(.staticText, identifier: a).firstMatch
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate { _, _ in
+            alternate.exists && alternate.isHittable && !alternate.frame.isEmpty
+                && app.windows.firstMatch.frame.contains(alternate.frame)
+        }, evaluatedWith: alternate)], timeout: 8), .completed)
         screenshot("notebook-switcher-portrait")
         app.buttons["Cancel"].tap()
         waitForValue(b, on: app.buttons["editor.notebooks"])
@@ -179,6 +185,8 @@ final class NotebookSwitchingUITests: XCTestCase {
         XCTAssertTrue(menuAdd.waitForExistence(timeout: 5))
         // UIKit's menu accessibility can expose a visible row but no computed hit point.
         // Tap the observed row's center, then verify the actual page-creation result.
+        XCTAssertGreaterThan(menuAdd.frame.width, 0)
+        XCTAssertGreaterThan(menuAdd.frame.height, 0)
         XCTAssertTrue(app.windows.firstMatch.frame.contains(menuAdd.frame))
         menuAdd.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         waitForValue("Page 3 of 3", on: app.buttons["editor.pages"])
