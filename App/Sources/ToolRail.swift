@@ -285,6 +285,7 @@ final class ToolSelection: ObservableObject {
 /// moving overlay costs a full-screen refresh — but a rail that stays put is the better
 /// bargain on glass too: it is always in the same place under your hand.
 struct ToolRail: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject var selection: ToolSelection
     @ObservedObject var undo: CanvasUndoController
     /// `false` lays the rail out along the bottom, the one-handed variant.
@@ -397,33 +398,42 @@ struct ToolRail: View {
         .accessibilityValue(selection.kind.label + (selection.kind.hasWidth ? ", " + selection.width.label : ""))
         .accessibilityIdentifier("editor.tools")
         .popover(isPresented: $showingTools) {
-            ScrollView {
-              VStack(alignment: .leading, spacing: 12) {
-                HStack {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
                     Text("Writing tools").font(.headline)
-                    Spacer()
-                    Button("Done") { showingTools = false }
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                HStack(spacing: 4) {
-                    ForEach(ToolSelection.Kind.allCases.filter { $0.takesInk }) { kind in
-                        toolButton(kind)
+                    Spacer(minLength: 8)
+                    Button { showingTools = false } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 44, height: 44)
                     }
+                    .accessibilityLabel("Done")
                 }
-                Text(selection.kind.label).font(.subheadline)
-                if selection.kind.hasWidth {
-                    Divider()
-                    Text("Stroke width · \(selection.width.label)").font(.subheadline)
-                    widthPicker
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 4) {
+                            ForEach(ToolSelection.Kind.allCases.filter { $0.takesInk }) { kind in
+                                toolButton(kind)
+                            }
+                        }
+                        Text(selection.kind.label).font(.subheadline)
+                        if selection.kind.hasWidth {
+                            Divider()
+                            Text("Stroke width · \(selection.width.label)").font(.subheadline)
+                            widthPicker
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .accessibilityIdentifier("editor.strokeSettings")
             }
-              .padding(16)
-            }
-            .frame(width: 272)
-            .frame(maxHeight: 420)
+            .padding(16)
+            .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : 272)
+            .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil,
+                   maxHeight: dynamicTypeSize.isAccessibilitySize ? nil : 420)
             .background(Modernist.paper)
             .tint(Modernist.ink)
-            .presentationCompactAdaptation(.popover)
+            .presentationCompactAdaptation(dynamicTypeSize.isAccessibilitySize ? .sheet : .popover)
         }
     }
 

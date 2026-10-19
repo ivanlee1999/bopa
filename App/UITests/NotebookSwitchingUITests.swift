@@ -173,8 +173,14 @@ final class NotebookSwitchingUITests: XCTestCase {
         forward.tap()
         waitForValue("Page 2 of 2", on: app.buttons["editor.pages"])
         app.buttons["Previous page"].tap()
+        waitForValue("Page 1 of 2", on: app.buttons["editor.pages"])
         app.buttons["editor.options"].tap()
-        app.buttons["Add page"].tap()
+        let menuAdd = app.buttons["editor.addPageMenu"]
+        XCTAssertTrue(menuAdd.waitForExistence(timeout: 5))
+        // UIKit's menu accessibility can expose a visible row but no computed hit point.
+        // Tap the observed row's center, then verify the actual page-creation result.
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(menuAdd.frame))
+        menuAdd.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         waitForValue("Page 3 of 3", on: app.buttons["editor.pages"])
 
         for id in ["editor.tool.eraser", "editor.tool.lasso", "editor.tool.text", "editor.ink"] {
@@ -219,6 +225,10 @@ final class NotebookSwitchingUITests: XCTestCase {
             XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
             XCTAssertTrue(app.buttons["Done"].isHittable)
             XCTAssertTrue(app.buttons["editor.tool.pencil"].isHittable)
+            let widths = app.buttons["editor.width.fine"]
+            if !widths.isHittable { app.scrollViews["editor.strokeSettings"].swipeUp() }
+            XCTAssertTrue(widths.isHittable)
+            widths.tap()
             screenshot("writing-settings-accessibility-text")
             app.buttons["Done"].tap()
         }

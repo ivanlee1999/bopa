@@ -295,6 +295,7 @@ struct EditorView: View {
             Button(action: addPage) {
                 Label("Add page", systemImage: "plus")
             }
+            .accessibilityIdentifier("editor.addPageMenu")
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(model.editingBlockID != nil)
             Divider()
