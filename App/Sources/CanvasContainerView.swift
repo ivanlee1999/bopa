@@ -8,12 +8,22 @@ struct PageImage {
     let frame: CGRect
 }
 
+/// Keep the drawing responder available for PencilKit and hardware commands without supplying
+/// a software keyboard when UIKit's native menu type-selection reloads its input views.
+/// Text boxes use their own UITextView and retain the standard keyboard.
+private final class DrawingCanvasView: PKCanvasView {
+    // Retain one empty view across reloads. A flexible height would let UIKit expand it to
+    // keyboard height, taking space away from the page even though it has no keys.
+    private let nonTextInputView = UIView(frame: .zero)
+    override var inputView: UIView? { nonTextInputView }
+}
+
 /// Hosts the PKCanvasView over the page content layer BEHIND the ink: the page background
 /// (e.g. a rendered PDF page) plus any positioned page images. The content views are
 /// siblings under the canvas, kept aligned with the canvas's scroll offset and zoom
 /// (PencilKit offers no built-in background layer).
 final class CanvasContainerView: UIView {
-    let canvas = PKCanvasView()
+    let canvas: PKCanvasView = DrawingCanvasView()
     /// The "paper": a white sheet behind everything, so the page reads as a page on a desk.
     /// Deliberately white in both appearances — ink colors are authored against white.
     ///

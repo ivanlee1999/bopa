@@ -14,6 +14,22 @@ final class CanvasDrawingLifecycleTests: XCTestCase {
         var idleDrawings: [PKDrawing] = []
     }
 
+    func testDrawingCanvasSuppressesSoftwareInputWithoutReplacingItsResponderOrUndoManager() throws {
+        let container = CanvasContainerView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let canvas = container.canvas
+        let input = try XCTUnwrap(canvas.inputView,
+                                 "the drawing responder needs an explicit non-keyboard input view")
+        XCTAssertTrue(canvas.inputView === input, "input reloads must reuse the same empty view")
+        XCTAssertEqual(input.bounds.height, 0)
+        XCTAssertFalse(input.autoresizingMask.contains(.flexibleHeight),
+                       "UIKit must not expand the empty view to the system keyboard height")
+        XCTAssertTrue(canvas.canBecomeFirstResponder,
+                      "suppressing software input must not remove the drawing responder")
+        XCTAssertTrue(canvas.undoManager === container.pageUndoManager)
+        XCTAssertNil(container.textEditor.inputView,
+                     "real text editing must retain the standard software keyboard")
+    }
+
     func testUnchangedUndoCheckpointsDoNotRepublishToolbarState() {
         let manager = UndoManager()
         let controller = CanvasUndoController()
