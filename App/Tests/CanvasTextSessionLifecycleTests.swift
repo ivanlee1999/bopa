@@ -103,6 +103,7 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
             if coordinator.loadedPageId != updated.pageId {
                 coordinator.discardTextEditingForPageChange()
                 container.pageUndoManager.removeAllActions()
+                coordinator.resetTextUndoIdentities()
             }
             coordinator.parent = updated
             container.setTextBlocks(model.textBlocks)
@@ -322,6 +323,109 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
             XCTAssertEqual(saved.blocks.map(\.text), [editedText])
             XCTAssertTrue(saved.deletedBlocks.contains { $0.id == deletedID })
         }
+    }
+
+    func testSavedDeletionUndoKeepsEarlierEditsMovesAndResizesOnOneParagraph() throws {
+        let pageId = try XCTUnwrap(store.manifest(id: notebookId)?.pageIds.first)
+        let model = model(opening: pageId)
+        let untouched = try XCTUnwrap(model.newTextBlock(at: CGPoint(x: 100, y: 500)))
+        model.beginEditing(untouched)
+        model.commitEditing(untouched, text: "This other paragraph must stay unchanged.")
+        XCTAssertTrue(model.saveNow())
+        let untouchedSnapshot = try XCTUnwrap(model.textBlock(id: untouched.id))
+        let session = Session(model: model)
+        let manager = session.container.pageUndoManager
+        func grouped(_ action: () -> Void) {
+            manager.beginUndoGrouping()
+            action()
+            manager.endUndoGrouping()
+            XCTAssertTrue(model.saveNow())
+        }
+
+        session.beginNewText("Original paragraph")
+        grouped { session.finishThroughViewport() }
+        let original = try XCTUnwrap(model.textBlocks.first { $0.id != untouched.id })
+        session.refreshPageState()
+        session.coordinator.canvasContainer(session.container, didTapTextBlock: original.id)
+        session.replaceDraft(with: "Edited paragraph")
+        grouped { session.finishThroughViewport() }
+        let edited = try XCTUnwrap(model.textBlock(id: original.id))
+        grouped {
+            session.coordinator.canvasContainer(
+                session.container, didMoveTextBlock: original.id, to: CGPoint(x: 220, y: 330))
+        }
+        let moved = try XCTUnwrap(model.textBlock(id: original.id))
+        grouped {
+            session.coordinator.canvasContainer(
+                session.container, didResizeTextBlock: original.id, to: 400)
+        }
+        let resized = try XCTUnwrap(model.textBlock(id: original.id))
+        session.refreshPageState()
+        session.coordinator.canvasContainer(session.container, didTapTextBlock: original.id)
+        grouped { session.coordinator.deleteEditingTextBlock() }
+        XCTAssertEqual(model.textBlocks.map(\.id), [untouched.id])
+
+        func assertRestored(_ expected: CouchBlock, id: String) throws {
+            XCTAssertEqual(Set(model.textBlocks.map(\.id)), Set([untouched.id, id]),
+                           "older actions must follow the same restored paragraph")
+            let actual = try XCTUnwrap(model.textBlock(id: id))
+            XCTAssertEqual(actual.text, expected.text)
+            XCTAssertEqual(actual.x, expected.x)
+            XCTAssertEqual(actual.y, expected.y)
+            XCTAssertEqual(actual.width, expected.width)
+            XCTAssertEqual(actual.height, expected.height)
+            XCTAssertEqual(model.textBlock(id: untouched.id), untouchedSnapshot)
+            XCTAssertTrue(model.saveNow())
+            let saved = try store.loadPage(notebookId: notebookId, pageId: pageId)
+            XCTAssertEqual(Set(saved.blocks.map(\.id)), Set([untouched.id, id]))
+        }
+
+        // Leave the older Resize/Move/Edit actions untouched while Delete remints twice.
+        // Those actions still capture the first ID and must follow a two-hop replacement.
+        XCTAssertTrue(manager.canUndo)
+        if manager.canUndo { manager.undo() }
+        let firstRestoredID = try XCTUnwrap(model.textBlocks.first { $0.id != untouched.id }?.id)
+        XCTAssertNotEqual(firstRestoredID, original.id)
+        try assertRestored(resized, id: firstRestoredID)
+        XCTAssertTrue(manager.canRedo)
+        if manager.canRedo { manager.redo() }
+        XCTAssertEqual(model.textBlocks.map(\.id), [untouched.id])
+        XCTAssertTrue(model.saveNow())
+
+        var restoredID: String?
+        for expected in [resized, moved, edited, original] {
+            XCTAssertTrue(manager.canUndo)
+            if manager.canUndo { manager.undo() }
+            if restoredID == nil {
+                restoredID = try XCTUnwrap(model.textBlocks.first { $0.id != untouched.id }?.id)
+                XCTAssertNotEqual(restoredID, original.id)
+                XCTAssertNotEqual(restoredID, firstRestoredID)
+            }
+            try assertRestored(expected, id: XCTUnwrap(restoredID))
+        }
+        XCTAssertTrue(manager.canUndo)
+        if manager.canUndo { manager.undo() }
+        XCTAssertFalse(manager.canUndo)
+        XCTAssertEqual(model.textBlocks.map(\.id), [untouched.id])
+        XCTAssertTrue(model.saveNow())
+
+        var redoneID: String?
+        for expected in [original, edited, moved, resized] {
+            XCTAssertTrue(manager.canRedo)
+            if manager.canRedo { manager.redo() }
+            if redoneID == nil {
+                redoneID = try XCTUnwrap(model.textBlocks.first { $0.id != untouched.id }?.id)
+                XCTAssertNotEqual(redoneID, restoredID)
+            }
+            try assertRestored(expected, id: XCTUnwrap(redoneID))
+        }
+        XCTAssertTrue(manager.canRedo)
+        if manager.canRedo { manager.redo() }
+        XCTAssertFalse(manager.canRedo)
+        XCTAssertEqual(model.textBlocks.map(\.id), [untouched.id])
+        XCTAssertTrue(model.saveNow())
+        XCTAssertEqual(try store.loadPage(notebookId: notebookId, pageId: pageId).blocks,
+                       [untouchedSnapshot])
     }
 
     func testExplicitLocalPageDeletionDiscardsItsDraftBeforeTheLandingPageArrives() throws {
