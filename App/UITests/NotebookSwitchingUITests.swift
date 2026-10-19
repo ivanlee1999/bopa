@@ -101,6 +101,48 @@ final class NotebookSwitchingUITests: XCTestCase {
     }
 
     @MainActor
+    private func recordInitialDrawingViewport(_ name: String, in app: XCUIApplication) -> CGFloat {
+        let windowFrame = app.windows.firstMatch.frame
+        let canvasFrame = canvas(app).frame
+        // Relative height checks cannot detect an input strip already present at first focus.
+        // Keep absolute geometry and pixels for same-device baseline/fix comparison, without
+        // baking device-specific safe-area or toolbar dimensions into the assertions.
+        let geometry = XCTAttachment(string: """
+            window: \(windowFrame)
+            canvas: \(canvasFrame)
+            canvas bottom to window bottom: \(windowFrame.maxY - canvasFrame.maxY)
+            """)
+        geometry.name = "\(name)-initial-viewport-geometry"
+        geometry.lifetime = .keepAlways
+        add(geometry)
+        screenshot("\(name)-initial-viewport")
+        return canvasFrame.height
+    }
+
+    @MainActor
+    private func waitForAbsence(_ element: XCUIElement) {
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(
+            for: NSPredicate(format: "exists == false"), evaluatedWith: element)], timeout: 5), .completed)
+    }
+
+    @MainActor
+    private func assertDrawingKeyboardHidden(_ app: XCUIApplication, canvasHeight: CGFloat) {
+        XCTAssertFalse(app.textViews["editor.textbox.input"].exists,
+                       "drawing mode must not have an active text editor")
+        XCTAssertFalse(app.keyboards.firstMatch.exists,
+                       "drawing Options must not summon a software keyboard")
+        XCTAssertEqual(canvas(app).frame.height, canvasHeight, accuracy: 1,
+                       "a hidden or empty input view must not take space away from the page")
+    }
+
+    @MainActor
+    private func dismissOptions(in app: XCUIApplication) {
+        // Outside the menu on both iPhone and iPad; the dismissal tap must not draw.
+        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.3)).tap()
+        waitForAbsence(app.buttons["editor.addPageMenu"])
+    }
+
+    @MainActor
     func testRepeatedNotebookSwitchesKeepInkPagePositionAndUndoSeparate() {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged",
@@ -180,16 +222,80 @@ final class NotebookSwitchingUITests: XCTestCase {
     @MainActor
     func testOptionsOpensBeforeAnyPageTurns() {
         let app = XCUIApplication()
-        app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]
+        app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged",
+                               "-handwriting.fingerDrawing", "true"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
         let title = "Options baseline \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        let originalHeight = recordInitialDrawingViewport("options", in: app)
+        assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
         XCTAssertTrue(app.buttons["editor.options"].waitForExistence(timeout: 5))
         app.buttons["editor.options"].tap()
         XCTAssertTrue(app.buttons["editor.addPageMenu"].waitForExistence(timeout: 5))
         screenshot("options-before-page-turns")
+        assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
+
+        dismissOptions(in: app)
+        waitForValue("strokes:0", on: canvas(app))
+        draw(in: app)
+        waitForValue("strokes:1", on: canvas(app))
+        XCTAssertTrue(app.buttons["editor.undo"].isEnabled)
+        app.buttons["editor.undo"].tap()
+        waitForValue("strokes:0", on: canvas(app))
+        XCTAssertTrue(app.buttons["editor.redo"].isEnabled)
+        assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
+    }
+
+    @MainActor
+    func testRealTextKeyboardWorksBeforeAndAfterDrawingOptions() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        let title = "Text keyboard \(UUID().uuidString.prefix(6))"
+        create(title, in: app)
+        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        let originalHeight = recordInitialDrawingViewport("text", in: app)
+        assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
+
+        app.buttons["editor.tool.text"].tap()
+        let point = canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
+        point.tap()
+        let text = app.textViews["editor.textbox.input"]
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let paragraph = "Real text still needs its keyboard."
+        text.typeText(paragraph)
+        waitForValue(paragraph, on: text)
+        app.buttons["editor.textbox.done"].tap()
+        waitForAbsence(text)
+        waitForAbsence(app.keyboards.firstMatch)
+
+        // The compact chooser returns from Text to the last writing tool in one tap.
+        if app.buttons["editor.tools"].exists { app.buttons["editor.tools"].tap() }
+        else { app.buttons["editor.tool.pen"].tap() }
+        assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
+        app.buttons["editor.options"].tap()
+        XCTAssertTrue(app.buttons["editor.addPageMenu"].waitForExistence(timeout: 5))
+        assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
+        dismissOptions(in: app)
+
+        app.buttons["editor.tool.text"].tap()
+        // Reopen inside the saved box, allowing for rounded page coordinates.
+        canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
+            .withOffset(CGVector(dx: 4, dy: 4)).tap()
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        waitForValue(paragraph, on: text)
+        text.typeText(" Edited after Options.")
+        XCTAssertTrue((text.value as? String)?.contains("Edited after Options.") == true)
+        screenshot("text-keyboard-after-options")
+        app.buttons["editor.textbox.done"].tap()
+        waitForAbsence(text)
+        waitForAbsence(app.keyboards.firstMatch)
+        assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
     }
 
     @MainActor
