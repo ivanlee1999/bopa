@@ -268,8 +268,7 @@ struct EditorView: View {
     /// open is a text view floating over a page it no longer belongs to, and its typing would be
     /// committed onto whatever page arrived next.
     private func commitOpenTextBox() {
-        guard let finished = viewport.endTextEditing() else { return }
-        model.commitEditing(finished.block, text: finished.text)
+        viewport.endTextEditing()
     }
 
     private func showPages() {
@@ -392,11 +391,11 @@ struct EditorView: View {
                     fileInkAboveTheTop: model.fileInkAboveTheTop,
                     makeTextBlock: model.newTextBlock,
                     beginTextBlockEditing: model.beginEditing,
-                    commitTextBlock: { model.commitEditing($0, text: $1) },
+                    commitTextBlock: { model.commitEditing($0, text: $1, expectedPageID: $2) },
                     moveTextBlock: { model.moveTextBlock(id: $0, to: $1) },
                     resizeTextBlock: { model.resizeTextBlock(id: $0, width: $1) },
                     currentTextBlock: { model.textBlock(id: $0) },
-                    restoreTextBlock: { model.restoreTextBlock(id: $0, to: $1) },
+                    restoreTextBlock: { model.restoreTextBlock(id: $0, to: $1, expectedPageID: $2) },
                     onChanged: model.scheduleSave,
                     onIdle: model.foldInRemoteInk,
                     // Unsaved ink is written as a scroll starts rather than wherever the scroll
@@ -541,20 +540,21 @@ final class CanvasLiveState {
 @MainActor
 final class CanvasViewportController {
     private weak var container: CanvasContainerView?
+    private var finishTextEditing: (() -> Void)?
 
-    func attach(_ container: CanvasContainerView) {
+    func attach(_ container: CanvasContainerView, endTextEditing: @escaping () -> Void) {
         self.container = container
+        finishTextEditing = endTextEditing
     }
 
     func fitToWidth() { container?.fitToWidth() }
 
-    /// Closes any open text box and hands back what was typed, for the caller to commit.
+    /// Finishes through the coordinator, which commits the text and registers its undo entry.
     ///
-    /// Here rather than on the coordinator because the callers are SwiftUI actions — a rail tap,
-    /// a page turn, the view going away — and the coordinator is not reachable from them. It also
-    /// keeps the model write out of `updateUIView`, where publishing a change mid-render is
-    /// exactly the thing SwiftUI complains about.
-    func endTextEditing() -> (block: CouchBlock, text: String)? { container?.endTextEditing() }
+    /// SwiftUI actions cannot reach the coordinator directly. Sharing its finish route means a
+    /// tool change or background interruption has the same whole-paragraph undo as Done, and
+    /// keeps model writes outside `updateUIView`. Repeated calls are harmless once the box closes.
+    func endTextEditing() { finishTextEditing?() }
 }
 
 /// Bridges the canvas's NSUndoManager to SwiftUI button state. PencilKit registers
@@ -673,15 +673,17 @@ struct EditorCanvasView: UIViewRepresentable {
     var makeTextBlock: (CGPoint) -> CouchBlock? = { _ in nil }
     /// Both new boxes and existing paragraphs acquire the same editing/navigation guard.
     var beginTextBlockEditing: (CouchBlock) -> Void = { _ in }
-    /// Typing finished: the box, and what was in it. An empty one is a delete.
-    var commitTextBlock: (CouchBlock, String) -> Void = { _, _ in }
+    /// Typing finished: the box, its text and the originating page ID. Returns the written/
+    /// deleted ID, which can differ when a peer deletion requires a fresh block identity.
+    var commitTextBlock: (CouchBlock, String, String) -> String? = { _, _, _ in nil }
     var moveTextBlock: (String, CGPoint) -> Void = { _, _ in }
     var resizeTextBlock: (String, CGFloat) -> Void = { _, _ in }
     /// The box with this id as the page holds it now — read at undo time, so the redo step is
     /// built from what is actually there rather than from a guess made before the edit landed.
     var currentTextBlock: (String) -> CouchBlock? = { _ in nil }
-    /// Puts a box back the way it was, or removes it if it was not there.
-    var restoreTextBlock: (String, CouchBlock?) -> Void = { _, _ in }
+    /// Puts a box back the way it was, or removes it if it was not there. The returned ID lets
+    /// the inverse undo follow a restored box that needed a fresh identity after autosave.
+    var restoreTextBlock: (String, CouchBlock?, String) -> String? = { _, _, _ in nil }
     var onChanged: () -> Void
     /// The pencil lifted. The editor uses it to retry work it would not do mid-stroke.
     var onIdle: () -> Void = {}
@@ -726,7 +728,9 @@ struct EditorCanvasView: UIViewRepresentable {
         canvas.maximumZoomScale = 3
 
         undoController.attach(container.pageUndoManager)
-        viewport.attach(container)
+        viewport.attach(container) { [weak coordinator = context.coordinator] in
+            coordinator?.endTextEditing()
+        }
 
         // Seed the canvas from the rail: the rail is the only tool UI, so whatever it shows
         // is what the canvas must be holding from the first stroke on.
@@ -767,6 +771,12 @@ struct EditorCanvasView: UIViewRepresentable {
     }
 
     func updateUIView(_ container: CanvasContainerView, context: Context) {
+        if context.coordinator.loadedPageId != pageId {
+            // An explicit local delete can replace the model's page without asking the old
+            // text view to finish. Its draft was deleted with that page; never commit it into
+            // the new parent's callbacks. Remote deletion retains the page until recovery.
+            context.coordinator.discardTextEditingForPageChange()
+        }
         // Before anything reads it: the coordinator's copy is what every delegate callback sees.
         context.coordinator.parent = self
         let canvas = container.canvas
@@ -930,6 +940,12 @@ struct EditorCanvasView: UIViewRepresentable {
 
         // MARK: - Text boxes
 
+        /// Clears a stale UIKit session after the model has replaced its page. Deliberately
+        /// does not publish or commit model state: this is called from updateUIView.
+        func discardTextEditingForPageChange() {
+            _ = container?.endTextEditing()
+        }
+
         /// Commits whatever box is open, if any. Safe to call when none is.
         ///
         /// Every route out of a text box runs through here — a tap elsewhere, a tool change, a
@@ -937,11 +953,18 @@ struct EditorCanvasView: UIViewRepresentable {
         /// it no longer belongs to.
         func endTextEditing() {
             guard let container, let finished = container.endTextEditing() else { return }
+            // The model can navigate synchronously before updateUIView replaces this parent.
+            // Bind a late callback to the page that owned the session, not the model's new page.
+            guard let owningPageID = parent.pageId else { return }
             let previous = parent.currentTextBlock(finished.block.id)
-            parent.commitTextBlock(finished.block, finished.text)
+            guard let committedID = parent.commitTextBlock(
+                finished.block, finished.text, owningPageID) else { return }
+            // A reminted box is new content. Undo must remove that fresh ID, not resurrect the
+            // old paragraph that the peer explicitly deleted.
+            let undoPrevious = committedID == finished.block.id ? previous : nil
             registerTextUndo(
-                id: finished.block.id, previous: previous,
-                name: previous == nil ? "Text" : "Edit Text")
+                id: committedID, previous: undoPrevious,
+                name: undoPrevious == nil ? "Text" : "Edit Text")
         }
 
         /// Puts one whole edit on the page's undo stack.
@@ -951,15 +974,16 @@ struct EditorCanvasView: UIViewRepresentable {
         /// reach for afterwards is the paragraph, the move, the deletion — the same granularity a
         /// stroke has.
         private func registerTextUndo(id: String, previous: CouchBlock?, name: String) {
-            guard let manager = container?.pageUndoManager else { return }
+            guard let manager = container?.pageUndoManager, let owningPageID = parent.pageId else { return }
             manager.registerUndo(withTarget: self) { target in
                 // UndoManager calls this on the thread that registered it, which is the main one.
                 MainActor.assumeIsolated {
                     let undone = target.parent.currentTextBlock(id)
-                    target.parent.restoreTextBlock(id, previous)
+                    guard let restoredID = target.parent.restoreTextBlock(
+                        id, previous, owningPageID) else { return }
                     // Registering from inside an undo is what makes it redoable, and the same
                     // call serves both directions for ever after.
-                    target.registerTextUndo(id: id, previous: undone, name: name)
+                    target.registerTextUndo(id: restoredID, previous: undone, name: name)
                 }
             }
             manager.setActionName(name)

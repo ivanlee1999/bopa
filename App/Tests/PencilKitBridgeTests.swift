@@ -426,6 +426,192 @@ final class PencilKitBridgeTests: XCTestCase {
         XCTAssertEqual(resaved[0].id, original.id)
     }
 
+    /// Saving a move must not make that position permanent. Undo restores the original path
+    /// and identity transform, with the same point count as the moved DTO already on disk.
+    func testRestoringTheOriginalSnapshotAfterASavedMovePersistsTheUndo() throws {
+        let original = straightStroke(createdAt: Date(timeIntervalSince1970: 1_750_000_000))
+        let originalDrawing = PKDrawing(strokes: [original])
+        let initial = PencilKitBridge.strokeDTOs(from: originalDrawing)
+        var moved = original
+        moved.transform = CGAffineTransform(translationX: 25, y: 40)
+        let movedDTOs = PencilKitBridge.strokeDTOs(
+            from: PKDrawing(strokes: [moved]), source: initial)
+        XCTAssertEqual(try movedDTOs[0].decodedPoints().first?.x, 25)
+
+        let restored = PencilKitBridge.strokeDTOs(from: originalDrawing, source: movedDTOs)
+        XCTAssertEqual(restored.count, 1)
+        XCTAssertEqual(restored[0].id, initial[0].id)
+        XCTAssertEqual(restored[0].createdAt, initial[0].createdAt)
+        XCTAssertEqual(try restored[0].decodedPoints(), try initial[0].decodedPoints())
+        XCTAssertNotEqual(restored[0].pointsData, movedDTOs[0].pointsData)
+        XCTAssertEqual(PencilKitBridge.strokeDTOs(from: originalDrawing, source: restored), restored)
+    }
+
+    /// A small trim can leave the same number of samples. Clearing its mask must restore the
+    /// endpoint, rather than treating the old trimmed DTO as the unchanged original stroke.
+    func testRestoringASameCountTrimPersistsTheUnerasedEndpoint() throws {
+        let original = straightStroke(createdAt: Date(timeIntervalSince1970: 1_750_000_000))
+        let drawing = PKDrawing(strokes: [original])
+        let initial = PencilKitBridge.strokeDTOs(from: drawing)
+        let trimmed = PKStroke(
+            ink: original.ink, path: original.path, transform: .identity,
+            mask: mask(keepingX: -10...95))
+        let trimmedDTOs = PencilKitBridge.strokeDTOs(
+            from: PKDrawing(strokes: [trimmed]), source: initial)
+        let trimmedPoints = try trimmedDTOs[0].decodedPoints()
+        XCTAssertEqual(trimmedPoints.count, original.path.count)
+        XCTAssertEqual(trimmedPoints.last?.x ?? 0, 95, accuracy: 0.03)
+
+        let restored = PencilKitBridge.strokeDTOs(from: drawing, source: trimmedDTOs)
+        XCTAssertEqual(restored.map(\.id), initial.map(\.id))
+        XCTAssertEqual(try restored[0].decodedPoints().last?.x ?? 0, 100, accuracy: 0.03)
+        XCTAssertEqual(PencilKitBridge.strokeDTOs(from: drawing, source: restored), restored)
+    }
+
+    func testSameCountGeometryAndWidthSnapshotsUpdateTheSavedStroke() throws {
+        let created = Date(timeIntervalSince1970: 1_750_000_000)
+        func snapshot(middleX: CGFloat, middleWidth: CGFloat) -> PKDrawing {
+            let points = [CGFloat(0), middleX, CGFloat(20)].enumerated().map { entry in
+                let (index, x) = entry
+                let width: CGFloat = index == 1 ? middleWidth : 6
+                return PKStrokePoint(
+                    location: CGPoint(x: x, y: 100), timeOffset: Double(index) * 0.01,
+                    size: CGSize(width: width, height: width), opacity: 1, force: 1,
+                    azimuth: 0, altitude: .pi / 2)
+            }
+            return PKDrawing(strokes: [PKStroke(
+                ink: PKInk(.pen, color: .black),
+                path: PKStrokePath(controlPoints: points, creationDate: created))])
+        }
+        let initial = PencilKitBridge.strokeDTOs(from: snapshot(middleX: 10, middleWidth: 2))
+        for (x, width) in [(CGFloat(15), CGFloat(2)), (CGFloat(10), CGFloat(4))] {
+            let drawing = snapshot(middleX: x, middleWidth: width)
+            let updated = PencilKitBridge.strokeDTOs(from: drawing, source: initial)
+            let points = try updated[0].decodedPoints()
+            XCTAssertEqual(points.count, 3)
+            XCTAssertEqual(points[1].x, Float(x), accuracy: 0.01)
+            XCTAssertEqual(points[1].pressure ?? 0, Float((width / 6 - 0.3) / 0.7),
+                           accuracy: 0.0001)
+            XCTAssertEqual(updated[0].id, initial[0].id)
+            XCTAssertEqual(updated[0].createdAt, initial[0].createdAt)
+            XCTAssertNotEqual(updated[0].pointsData, initial[0].pointsData)
+            XCTAssertEqual(PencilKitBridge.strokeDTOs(from: drawing, source: updated), updated)
+        }
+    }
+
+    func testChangingInkWithTheSamePathUpdatesTheSavedStroke() throws {
+        let original = straightStroke(createdAt: Date(timeIntervalSince1970: 1_750_000_000))
+        let initial = PencilKitBridge.strokeDTOs(from: PKDrawing(strokes: [original]))
+        let changed = PKStroke(ink: PKInk(.marker, color: .red), path: original.path)
+        let drawing = PKDrawing(strokes: [changed])
+        let updated = PencilKitBridge.strokeDTOs(from: drawing, source: initial)
+        XCTAssertEqual(updated[0].id, initial[0].id)
+        XCTAssertEqual(updated[0].pen, NotablePen.marker.rawValue)
+        XCTAssertEqual(updated[0].color, UIColor.red.argb)
+        XCTAssertEqual(PencilKitBridge.strokeDTOs(from: drawing, source: updated), updated)
+    }
+
+    /// The baseline is PencilKit's imported representation. Comparing raw wire fields would
+    /// mistake mapped pen names, a pressure peak below 1, and the minimum-width clamp for edits.
+    func testContentMatchingPreservesImportedPenAndWidthFidelity() throws {
+        for pen in NotablePen.allCases {
+            for size in [Float(0.2), Float(4)] {
+                let original = try makeNotableStroke(pen: pen, size: size)
+                let drawing = PencilKitBridge.drawing(from: [original])
+                let saved = PencilKitBridge.strokeDTOs(from: drawing, source: [original])
+                XCTAssertEqual(saved, [original], "\(pen), width \(size) changed on import/save")
+                XCTAssertEqual(PencilKitBridge.strokeDTOs(from: drawing, source: saved), saved)
+            }
+        }
+    }
+
+    func testContentMatchingPreservesAbsentImportedChannels() throws {
+        var original = try makeNotableStroke(pen: .dashed)
+        original.pointsData = try SBStrokeCodec.encode([
+            NotableStrokePoint(x: 10, y: 20), NotableStrokePoint(x: 30, y: 40),
+        ]).base64EncodedString()
+        let drawing = PencilKitBridge.drawing(from: [original])
+        XCTAssertEqual(PencilKitBridge.strokeDTOs(from: drawing, source: [original]), [original])
+    }
+
+    /// Eraser pieces retain their parent's date. If the first piece disappears, the surviving
+    /// later piece must keep its own DTO; bucket order alone would restore the erased geometry.
+    func testSameDateSurvivorsMatchTheirOwnContentBeforeClaimingAnId() throws {
+        let stamp = NotableDate.format(Date(timeIntervalSince1970: 1_750_000_000))
+        var first = try makeNotableStroke()
+        var second = try makeNotableStroke()
+        first.createdAt = stamp
+        second.createdAt = stamp
+        var secondPoints = try second.decodedPoints()
+        for index in secondPoints.indices { secondPoints[index].x += 300 }
+        second.pointsData = try SBStrokeCodec.encode(secondPoints).base64EncodedString()
+        second.left += 300
+        second.right += 300
+
+        for survivors in [[second], [second, first]] {
+            let drawing = PencilKitBridge.drawing(from: survivors)
+            let saved = PencilKitBridge.strokeDTOs(from: drawing, source: [first, second])
+            XCTAssertEqual(saved, survivors)
+        }
+    }
+
+    /// Matching each stroke just before exporting it is too late: edited B comes first here,
+    /// but A's exact source match must be reserved before B falls back to an unused identity.
+    func testEditedSameDateStrokeCannotClaimAnUnchangedSiblingsIdentity() throws {
+        let created = Date(timeIntervalSince1970: 1_750_000_000)
+        let first = straightStroke(createdAt: created)
+        let second = straightStroke(
+            transform: CGAffineTransform(translationX: 200, y: 0), createdAt: created)
+        let source = PencilKitBridge.strokeDTOs(from: PKDrawing(strokes: [first, second]))
+        let unchanged = try XCTUnwrap(PencilKitBridge.stroke(from: source[0]))
+        var moved = try XCTUnwrap(PencilKitBridge.stroke(from: source[1]))
+        moved.transform = CGAffineTransform(translationX: 25, y: 40)
+
+        var rewritten = source[1]
+        var expectedPoints = try rewritten.decodedPoints()
+        for index in expectedPoints.indices {
+            expectedPoints[index].x += 25
+            expectedPoints[index].y += 40
+        }
+        rewritten.pointsData = try SBStrokeCodec.encode(expectedPoints).base64EncodedString()
+        let rewrittenStroke = try XCTUnwrap(PencilKitBridge.stroke(from: rewritten))
+
+        for edited in [moved, rewrittenStroke] {
+            let drawing = PKDrawing(strokes: [edited, unchanged])
+            let saved = PencilKitBridge.strokeDTOs(from: drawing, source: source)
+            XCTAssertEqual(saved.count, 2)
+            XCTAssertEqual(saved[0].id, source[1].id)
+            XCTAssertEqual(try saved[0].decodedPoints(), expectedPoints)
+            XCTAssertEqual(saved[1], source[0], "an earlier edit consumed the unchanged sibling")
+        }
+    }
+
+    /// Reserving an unchanged sibling also keeps a masked stroke's anchor and derived piece
+    /// identities stable, both on its first split and while the mask remains on the canvas.
+    func testSameDateSplitKeepsItsIdsWithAnUnchangedSiblingReserved() throws {
+        let created = Date(timeIntervalSince1970: 1_750_000_000)
+        let sibling = straightStroke(
+            transform: CGAffineTransform(translationX: 200, y: 0), createdAt: created)
+        let original = straightStroke(createdAt: created)
+        let source = PencilKitBridge.strokeDTOs(from: PKDrawing(strokes: [sibling, original]))
+        let unchanged = try XCTUnwrap(PencilKitBridge.stroke(from: source[0]))
+        let holes = mask(keepingX: -10...22)
+        holes.append(mask(keepingX: 68...128))
+        let split = PKStroke(ink: original.ink, path: original.path,
+                             transform: .identity, mask: holes)
+        let drawing = PKDrawing(strokes: [split, unchanged])
+
+        let first = PencilKitBridge.strokeDTOs(from: drawing, source: source)
+        XCTAssertEqual(first.count, 3)
+        XCTAssertEqual(first[0].id, source[1].id)
+        XCTAssertEqual(first[2], source[0])
+        XCTAssertEqual(Set(first.map(\.id)).count, 3)
+        let second = PencilKitBridge.strokeDTOs(from: drawing, source: first)
+        XCTAssertEqual(second.map(\.id), first.map(\.id))
+        XCTAssertEqual(second.map(\.pointsData), first.map(\.pointsData))
+        XCTAssertEqual(second[2], source[0])
+    }
+
     // MARK: Identity for strokes drawn this session
 
     /// The save debounce puts the export clock seconds after the pen lifts, so a stroke drawn
@@ -448,6 +634,35 @@ final class PencilKitBridgeTests: XCTestCase {
         XCTAssertEqual(
             stamped.timeIntervalSince(drawn.path.creationDate), 0, accuracy: 0.002,
             "createdAt must carry the stroke's creation date, not the save clock")
+    }
+
+    /// A raw live stroke contains more precision and channels than its DTO. Reconstruction is
+    /// not an exact snapshot, but repeated export of the same live ink must still reuse bytes.
+    func testFractionalLiveStrokeRemainsByteIdenticalAcrossSaves() throws {
+        let points = (0..<3).map { index in
+            let width = CGFloat([2.345678, 3.987654, 1.234567][index])
+            return PKStrokePoint(
+                location: CGPoint(x: 10.003 + CGFloat(index) * 11.1234, y: 100.007),
+                timeOffset: 0.123456 + Double(index) * 0.013789,
+                size: CGSize(width: width, height: width + 0.123),
+                opacity: 0.8, force: 0.4567, azimuth: 0.3456, altitude: 0.9876)
+        }
+        let live = PKStroke(
+            ink: PKInk(.pen, color: .black),
+            path: PKStrokePath(controlPoints: points,
+                               creationDate: Date(timeIntervalSince1970: 1_750_000_000.123456)))
+        let drawing = PKDrawing(strokes: [live])
+        var first = PencilKitBridge.strokeDTOs(from: drawing)
+        // Re-encoding must fail this assertion even when saves happen in the same millisecond.
+        first[0].updatedAt = "2020-01-01T00:00:00.000Z"
+        let reconstructed = try XCTUnwrap(PencilKitBridge.stroke(from: first[0]))
+        XCTAssertNotEqual(Array(reconstructed.path)[0].timeOffset, points[0].timeOffset,
+                          "this fixture must exercise the live serialized-content match")
+        var current = first
+        for _ in 0..<3 {
+            current = PencilKitBridge.strokeDTOs(from: drawing, source: current)
+            XCTAssertEqual(current, first)
+        }
     }
 
     /// A later snapshot can have the same identity but a different number of authored points.

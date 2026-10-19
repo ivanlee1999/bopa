@@ -75,6 +75,7 @@ final class EditorPageModel: NSObject, ObservableObject {
     private var recoveryPending = false
     private var recoveryNotebook: NotebookManifest?
     private var recoveryStrokes: [StrokeDTO]?
+    private var recoveryBlockIDs: [String: String] = [:]
     private var recoveringMissingPage = false
     private var savingPage = false
     private enum StoreChangeDuringSave { case local, remote }
@@ -178,10 +179,18 @@ final class EditorPageModel: NSObject, ObservableObject {
             return true
         }
 
-        if remoteChange, dirty || liveState.isDrawing { recoveryPending = true }
+        if remoteChange, dirty || liveState.isDrawing || editingBlockID != nil { recoveryPending = true }
         if recoveryPending {
-            guard !liveState.isDrawing else { return false }
+            // A text view owns an uncommitted draft. Keep its original page alive until Done,
+            // a tool change or leaving the editor hands the draft back; never land underneath it.
+            guard !liveState.isDrawing, editingBlockID == nil else { return false }
             guard recoverUnsavedHandwriting() else { return false }
+        }
+
+        if !remoteChange {
+            // Explicit local deletion means discard this page, including its open draft.
+            // The canvas drops its text session on the ensuing identity change.
+            editingBlockID = nil
         }
 
         // Tombstoned under the editor. Drop the pending work rather than flushing it — the
@@ -211,11 +220,11 @@ final class EditorPageModel: NSObject, ObservableObject {
     }
 
     /// Saves what the live canvas still holds under fresh notebook/page/stroke IDs. The copy
-    /// is explicitly handwriting: deleted PDF/image files and other attachments may no longer
-    /// exist, so it preserves ink coordinates, sheet size, and native paper without dangling
-    /// references or claiming to recover those assets.
+    /// includes self-contained handwriting and text. Deleted PDF/image files and other
+    /// attachments may no longer exist, so it preserves ink coordinates, text, sheet size and
+    /// native paper without dangling references or claiming to recover those assets.
     private func recoverUnsavedHandwriting() -> Bool {
-        guard let store, let source = page else { return false }
+        guard let store, let source = page, editingBlockID == nil else { return false }
         recoveringMissingPage = true
         defer { recoveringMissingPage = false }
         saveTask?.cancel()
@@ -230,7 +239,7 @@ final class EditorPageModel: NSObject, ObservableObject {
                     template = .blank
                 }
                 recoveryNotebook = try store.createNotebook(
-                    title: "Recovered handwriting — \(lastKnownNotebookTitle)",
+                    title: "\(source.blocks.isEmpty ? "Recovered handwriting" : "Recovered edits") — \(lastKnownNotebookTitle)",
                     template: template, pageSize: source.pageSize)
             }
             guard let destination = recoveryNotebook, let destinationPage = destination.pageIds.first
@@ -253,11 +262,25 @@ final class EditorPageModel: NSObject, ObservableObject {
             }
             recoveryStrokes = strokes
             recovered.strokes = strokes
-            _ = try store.savePage(recovered)
+            // Text is self-contained just like ink. Recover it under fresh identities so the
+            // removed source's tombstones cannot suppress it; keep IDs stable across retries.
+            let recoveryOwnedBlockIDs = Set(recoveryBlockIDs.values)
+            let erasedRecoveryIDs = Set(recovered.deletedBlocks.map(\.id))
+            recovered.blocks = source.blocks.filter { $0.kind == "md" }.map { block in
+                var copy = block
+                let previousID = recoveryBlockIDs[block.id]
+                let id = previousID.flatMap { erasedRecoveryIDs.contains($0) ? nil : $0 }
+                    ?? UUID().uuidString.lowercased()
+                recoveryBlockIDs[block.id] = id
+                copy.id = id
+                return copy
+            }
+            _ = try store.savePage(recovered, baselineBlockIDs: recoveryOwnedBlockIDs)
             dirty = false
             recoveryPending = false
             recoveryNotebook = nil
             recoveryStrokes = nil
+            recoveryBlockIDs = [:]
             saveError = nil
             return true
         } catch {
@@ -289,8 +312,8 @@ final class EditorPageModel: NSObject, ObservableObject {
     ///   either way.
     @discardableResult
     func open(pageId newPageId: String, persistingScroll: Bool = true) -> Bool {
-        // Do not replace a page while its tool gesture is still active.
-        guard !liveState.isDrawing else { return false }
+        // Do not replace a page while a tool gesture or an uncommitted text draft owns it.
+        guard !liveState.isDrawing, editingBlockID == nil else { return false }
         // Every route off the current page runs through here, so this is where its debounced
         // work is flushed. The navigator panel's jump used to be the one switch that never did:
         // anything drawn inside the 2s re-arming window was silently lost, along with the
@@ -619,7 +642,7 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// read at all costs a file read, not a spin.
     func foldInRemoteInk() {
         if recoveryPending {
-            if !liveState.isDrawing { saveNow() }
+            if !liveState.isDrawing, editingBlockID == nil { saveNow() }
             return
         }
         guard remoteInkPending, !liveState.isDrawing, let pageId, let store else { return }
@@ -771,12 +794,20 @@ final class EditorPageModel: NSObject, ObservableObject {
     ///
     /// An empty box is deleted rather than stored: a box with nothing in it is invisible, so
     /// leaving one behind would litter the page with things only a stray tap can find.
-    func commitEditing(_ block: CouchBlock, text: String) {
+    @discardableResult
+    func commitEditing(_ block: CouchBlock, text: String, expectedPageID: String? = nil) -> String? {
+        // A UIKit finish callback can arrive after a local deletion changed the model, but
+        // before SwiftUI delivered the new page to the coordinator. Reject that stale owner.
+        if let expectedPageID, expectedPageID != pageId { return nil }
         editingBlockID = nil
-        guard page != nil else { return }
+        // Even an empty, never-saved box must release a deferred remote-removal recovery.
+        // Defer through the normal save task so the coordinator can finish its undo bookkeeping.
+        defer { if recoveryPending { scheduleSave() } }
+        guard page != nil else { return nil }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            let existed = page?.blocks.contains(where: { $0.id == block.id }) == true
             deleteTextBlock(id: block.id)
-            return
+            return existed ? block.id : nil
         }
         var updated = block
         updated.text = text
@@ -791,11 +822,13 @@ final class EditorPageModel: NSObject, ObservableObject {
             updated.createdAt = SyncClock.shared.stamp()
         }
         upsert(updated)
+        return updated.id
     }
 
     /// Abandons the session without writing. A box that was never committed simply never existed.
     func cancelEditing() {
         editingBlockID = nil
+        if recoveryPending { scheduleSave() }
     }
 
     func moveTextBlock(id: String, to point: CGPoint) {
@@ -844,11 +877,22 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// editing an old one, moving, resizing, deleting — is "this block used to look like this".
     /// The restored copy is stamped fresh rather than carrying its old clock: undoing is a new
     /// edit, and one wearing a stale timestamp would lose to the very change it is undoing.
-    func restoreTextBlock(id: String, to previous: CouchBlock?) {
-        if let previous {
+    @discardableResult
+    func restoreTextBlock(id: String, to previous: CouchBlock?, expectedPageID: String? = nil) -> String? {
+        if let expectedPageID, expectedPageID != pageId { return nil }
+        guard let page else { return nil }
+        if var previous {
+            // Undo/redo after autosave must not revive an identity already removed on disk.
+            // Return the replacement identity so the inverse undo operation follows it.
+            if page.deletedBlocks.contains(where: { $0.id == previous.id }) {
+                previous.id = UUID().uuidString.lowercased()
+                previous.createdAt = SyncClock.shared.stamp()
+            }
             upsert(previous)
+            return previous.id
         } else {
             deleteTextBlock(id: id)
+            return id
         }
     }
 
@@ -898,7 +942,9 @@ final class EditorPageModel: NSObject, ObservableObject {
         guard !savingPage else { return false }
         saveTask?.cancel()
         if recoveryPending {
-            guard !liveState.isDrawing else { return false }
+            // A text view owns an uncommitted draft. Keep its original page alive until Done,
+            // a tool change or leaving the editor hands the draft back; never land underneath it.
+            guard !liveState.isDrawing, editingBlockID == nil else { return false }
             guard recoverUnsavedHandwriting() else { return false }
             // The retry finished: leave the removed page normally instead of keeping an
             // editor open over a notebook that can never accept another save.

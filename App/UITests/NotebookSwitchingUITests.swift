@@ -54,12 +54,24 @@ final class NotebookSwitchingUITests: XCTestCase {
         search.typeText(title)
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'switcher.notebook.'"))
             .containing(.staticText, identifier: title).firstMatch
-        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate { _, _ in
-            row.exists && row.isHittable && !row.frame.isEmpty
-                && app.windows.firstMatch.frame.contains(row.frame)
-        }, evaluatedWith: row)], timeout: 8), .completed)
+        assertNotebookRowReady(row, in: app)
         row.tap()
         waitForValue(title, on: app.buttons["editor.notebooks"])
+    }
+
+    @MainActor
+    private func assertNotebookRowReady(_ row: XCUIElement, in app: XCUIApplication) {
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        let window = app.windows.firstMatch
+        // Each property can perform a fresh accessibility query. Keep the bounded geometry
+        // wait small, and check hittability separately so its orientation query cannot exhaust
+        // the same deadline after a visible row has already been found.
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate { _, _ in
+            let rowFrame = row.frame
+            let windowFrame = window.frame
+            return !rowFrame.isEmpty && windowFrame.contains(rowFrame)
+        }, evaluatedWith: row)], timeout: 8), .completed)
+        XCTAssertTrue(row.isHittable, "the visible notebook result must be tappable")
     }
 
     @MainActor
@@ -129,10 +141,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.buttons["editor.notebooks"].tap()
         let alternate = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'switcher.notebook.'"))
             .containing(.staticText, identifier: a).firstMatch
-        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate { _, _ in
-            alternate.exists && alternate.isHittable && !alternate.frame.isEmpty
-                && app.windows.firstMatch.frame.contains(alternate.frame)
-        }, evaluatedWith: alternate)], timeout: 8), .completed)
+        assertNotebookRowReady(alternate, in: app)
         screenshot("notebook-switcher-portrait")
         app.buttons["Cancel"].tap()
         waitForValue(b, on: app.buttons["editor.notebooks"])

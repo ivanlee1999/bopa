@@ -181,6 +181,50 @@ final class EditorPageModelTests: XCTestCase {
         XCTAssertEqual(third, second, "saving the unchanged updated snapshot must be stable")
     }
 
+    func testSavingUndoOfLassoMoveRestoresOriginalCoordinates() throws {
+        try checkSavingUndoOfLassoMove(retryAfterFailure: false)
+    }
+
+    func testFailedSaveOfLassoUndoRetriesWithoutRestoringTheMovedSnapshot() throws {
+        try checkSavingUndoOfLassoMove(retryAfterFailure: true)
+    }
+
+    private func checkSavingUndoOfLassoMove(retryAfterFailure: Bool) throws {
+        let pageID = pageIds[0]
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageID))
+        let original = try makeStroke(id: "lasso-undo", second: 1)
+        let imported = try XCTUnwrap(PencilKitBridge.stroke(from: original))
+        model.drawing = PKDrawing(strokes: [imported])
+        model.scheduleSave()
+        XCTAssertTrue(model.saveNow())
+        var moved = imported
+        moved.transform = CGAffineTransform(translationX: 25, y: 40)
+        model.drawing = PKDrawing(strokes: [moved])
+        model.scheduleSave()
+        XCTAssertTrue(model.saveNow())
+        let movedDTO = try XCTUnwrap(model.page?.strokes.first)
+        model.drawing = PKDrawing(strokes: [imported])
+        model.scheduleSave()
+        if retryAfterFailure {
+            let heal = try breakTheStore()
+            XCTAssertFalse(model.saveNow())
+            XCTAssertTrue(model.dirty)
+            try heal.write(to: manifestURL)
+        }
+        XCTAssertTrue(model.saveNow())
+        let saved = try store.loadPage(notebookId: notebookId, pageId: pageID)
+        let restored = try XCTUnwrap(saved.strokes.first)
+        XCTAssertEqual(restored.id, movedDTO.id)
+        XCTAssertNotEqual(restored.pointsData, movedDTO.pointsData)
+        XCTAssertEqual(try restored.decodedPoints().map(\.x), try original.decodedPoints().map(\.x))
+        XCTAssertEqual(try restored.decodedPoints().map(\.y), try original.decodedPoints().map(\.y))
+        XCTAssertTrue(saved.deletedStrokes.isEmpty)
+        model.scheduleSave()
+        XCTAssertTrue(model.saveNow())
+        XCTAssertEqual(model.page?.strokes.first, restored)
+    }
+
     // MARK: The baseline advances only after a save lands
 
     /// An erasure must survive a failed flush. The baseline (`canvasStrokeIDs`) used to advance
@@ -594,6 +638,90 @@ final class EditorPageModelTests: XCTestCase {
         XCTAssertNil(model.saveError)
     }
 
+    func testRemotePageDeletionKeepsAnActiveTextDraftOnItsOriginUntilRecovery() throws {
+        let landing = pageIds[0]
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: second.id))
+        let block = try XCTUnwrap(model.newTextBlock(at: CGPoint(x: 40, y: 60)))
+        model.beginEditing(block)
+        var manifest = try XCTUnwrap(store.manifest(id: notebookId))
+        manifest.pageIds.removeAll { $0 == second.id }
+        manifest.deletedPageIds.append(CouchTombstone(
+            id: second.id, deletedAt: NotableDate.format(Date())))
+        try writeManifestDirectly(manifest)
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+
+        XCTAssertEqual(model.pageId, second.id, "the draft must retain its owning page")
+        XCTAssertFalse(model.saveNow(), "recovery must wait until the text view hands back its draft")
+        model.commitEditing(block, text: "Draft from the removed page")
+        XCTAssertTrue(model.saveNow())
+        XCTAssertEqual(model.pageId, landing)
+        XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: landing).blocks.isEmpty)
+        let recovery = try XCTUnwrap(store.notebooks.first { $0.notebookId != notebookId })
+        let saved = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertEqual(saved.blocks.map(\.text), ["Draft from the removed page"])
+        XCTAssertNotEqual(saved.blocks.first?.id, block.id)
+        XCTAssertFalse(model.dirty)
+    }
+
+    func testRemoteNotebookDeletionWaitsForDraftAndRecoversBeforeClosing() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        let block = try XCTUnwrap(model.newTextBlock(at: CGPoint(x: 40, y: 60)))
+        model.beginEditing(block)
+        var closed = false
+        model.requestClose = { closed = true }
+        try FileManager.default.removeItem(at: store.notebookDirURL(notebookId))
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+        XCTAssertFalse(closed)
+        XCTAssertFalse(model.saveNow())
+        model.commitEditing(block, text: "Keep this unsaved paragraph")
+        XCTAssertTrue(model.saveNow())
+        XCTAssertTrue(closed)
+        let recovery = try XCTUnwrap(store.notebooks.first)
+        let saved = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertEqual(saved.blocks.map(\.text), ["Keep this unsaved paragraph"])
+        XCTAssertNotEqual(saved.blocks.first?.id, block.id)
+        XCTAssertNil(store.manifest(id: notebookId))
+    }
+
+    func testEmptyDraftCompletionReleasesDeferredRemoteRemoval() async throws {
+        try await checkEmptyDraftRemoteRemoval(cancel: false)
+    }
+
+    func testDraftCancellationReleasesDeferredRemoteRemoval() async throws {
+        try await checkEmptyDraftRemoteRemoval(cancel: true)
+    }
+
+    private func checkEmptyDraftRemoteRemoval(cancel: Bool) async throws {
+        let landing = pageIds[0]
+        let second = try store.addPage(to: notebookId)
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: second.id))
+        let block = try XCTUnwrap(model.newTextBlock(at: CGPoint(x: 40, y: 60)))
+        model.beginEditing(block)
+        var manifest = try XCTUnwrap(store.manifest(id: notebookId))
+        manifest.pageIds.removeAll { $0 == second.id }
+        manifest.deletedPageIds.append(CouchTombstone(
+            id: second.id, deletedAt: NotableDate.format(Date())))
+        try writeManifestDirectly(manifest)
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+        XCTAssertEqual(model.pageId, second.id)
+        if cancel { model.cancelEditing() } else { model.commitEditing(block, text: "   ") }
+        // The normal two-second save debounce must release recovery without another tap.
+        try await Task.sleep(for: .seconds(3))
+        XCTAssertEqual(model.pageId, landing)
+        XCTAssertNil(model.saveError)
+        XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: landing).blocks.isEmpty)
+    }
+
     func testRemotePageDeletionRecoversUnsavedHandwritingWithoutResurrectingThePage() throws {
         let second = try store.addPage(to: notebookId)
         let model = makeModel()
@@ -732,6 +860,40 @@ final class EditorPageModelTests: XCTestCase {
         let recovered = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
         XCTAssertEqual(recovered.strokes.count, 1)
         XCTAssertEqual(store.manifest(id: notebookId)?.deletedPageIds.map(\.id), [firstId])
+    }
+
+    func testPartialRecoveryWriteDoesNotResurrectTextRemovedBeforeRetry() throws {
+        let model = makeModel()
+        XCTAssertTrue(model.open(pageId: pageIds[0]))
+        let block = try XCTUnwrap(model.newTextBlock(at: CGPoint(x: 40, y: 60)))
+        model.beginEditing(block)
+        model.commitEditing(block, text: "Remove me before retry")
+        var recoveryManifestURL: URL?
+        var recoveryManifestData: Data?
+        store.didChangeDocuments = { documents in
+            guard recoveryManifestURL == nil,
+                  let recovery = self.store.notebooks.first(where: { $0.notebookId != self.notebookId }),
+                  let pageID = recovery.pageIds.first,
+                  documents.contains("page:\(pageID)") else { return }
+            let url = self.store.notebookDirURL(recovery.notebookId).appendingPathComponent("manifest.json")
+            recoveryManifestURL = url
+            recoveryManifestData = try? Data(contentsOf: url)
+            try? FileManager.default.removeItem(at: url)
+        }
+        try FileManager.default.removeItem(at: store.notebookDirURL(notebookId))
+        store.refresh()
+        NotificationCenter.default.post(
+            name: NotebookStore.didApplyRemoteChangesNotification, object: nil)
+        XCTAssertNotNil(model.saveError)
+        XCTAssertTrue(model.dirty)
+        store.didChangeDocuments = nil
+        model.deleteTextBlock(id: block.id)
+        try XCTUnwrap(recoveryManifestData).write(to: XCTUnwrap(recoveryManifestURL))
+        XCTAssertTrue(model.saveNow())
+        let recovery = try XCTUnwrap(store.notebooks.first)
+        let saved = try store.loadPage(notebookId: recovery.notebookId, pageId: recovery.pageIds[0])
+        XCTAssertTrue(saved.blocks.isEmpty, "the retry must tombstone the partially written paragraph")
+        XCTAssertEqual(saved.deletedBlocks.count, 1)
     }
 
     func testFailedRemoteDeletionRecoveryRetainsInkAndRetriesTheSameCopy() throws {

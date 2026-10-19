@@ -116,25 +116,48 @@ enum PencilKitBridge {
             byCreation[wireQuantized(created), default: []].append(dto)
         }
 
-        return drawing.strokes.flatMap { stroke -> [StrokeDTO] in
-            let created = wireQuantized(stroke.path.creationDate)
-            var candidates = byCreation[created] ?? []
+        let strokes = drawing.strokes
+        let creationDates = strokes.map { wireQuantized($0.path.creationDate) }
+        var reused: [Int: StrokeDTO] = [:]
+        var exports: [Int: [StrokeDTO]] = [:]
 
-            // Reuse only when none of the changes checked here is present:
-            // - a mask means the eraser cut into it, and reusing the original DTO there would
-            //   save the rubbed-out ink straight back;
-            // - a non-identity transform means it was moved (lasso);
-            // - a different control-point count means this snapshot cannot reuse the saved path.
-            // This count check deliberately does not detect same-count geometry/pressure edits
-            // or infer when PencilKit has finished a stroke.
-            if stroke.mask == nil, stroke.transform.isIdentity,
-               let original = candidates.first,
-               let savedPoints = try? original.decodedPoints(),
-               savedPoints.count == stroke.path.count {
-                candidates.removeFirst()
+        // Reserve every exact match before an edited stroke claims a remaining id. Otherwise
+        // an earlier edited sibling can consume the source needed by a later unchanged one.
+        // These are snapshot comparisons, without drawing conclusions about tool timing.
+        for (strokeIndex, stroke) in strokes.enumerated() {
+            guard stroke.mask == nil, stroke.transform.isIdentity else { continue }
+            let created = creationDates[strokeIndex]
+            var candidates = byCreation[created] ?? []
+            guard !candidates.isEmpty else { continue }
+
+            // Point count alone cannot establish that the content is unchanged: undoing a
+            // saved lasso move restores an identity transform and the old path, with exactly
+            // the same count. An unchanged import keeps its original wire bytes, including pen
+            // names and pressure/channel details that PencilKit cannot round-trip. Search the
+            // whole bucket because eraser pieces share their parent's creation date.
+            if let index = candidates.firstIndex(where: { matchesImported(stroke, source: $0) }) {
+                reused[strokeIndex] = candidates.remove(at: index)
                 byCreation[created] = candidates
-                return [original]
+                continue
             }
+
+            // A live stroke need not equal its reconstruction: its first export quantizes
+            // coordinates/tilt/time and normalizes widths. Its serialized content is still
+            // exactly the same on later saves. Export once and retain it if this is an edit.
+            let pieces = dtos(from: stroke)
+            exports[strokeIndex] = pieces
+            if pieces.count == 1,
+               let index = candidates.firstIndex(where: { sameContent(pieces[0], $0) }) {
+                reused[strokeIndex] = candidates.remove(at: index)
+                byCreation[created] = candidates
+            }
+        }
+
+        return strokes.enumerated().flatMap { entry -> [StrokeDTO] in
+            let (strokeIndex, stroke) = entry
+            if let original = reused[strokeIndex] { return [original] }
+            let created = creationDates[strokeIndex]
+            let candidates = byCreation[created] ?? []
 
             // The geometry really did change, so it goes through `dtos(from:)`, which also
             // expands a part-erased stroke into its surviving pieces. The *identity* survives
@@ -143,7 +166,7 @@ enum PencilKitBridge {
             // a remote erase of that id still lands — and pieces beyond the sources derive stable
             // ids from the first claimed one, so a still-masked stroke exports the same ids on
             // every save instead of churning tombstones until the page is next reloaded.
-            var pieces = dtos(from: stroke)
+            var pieces = exports[strokeIndex] ?? dtos(from: stroke)
             guard let anchor = candidates.first else { return pieces }
             let claimed = candidates.prefix(pieces.count)
             byCreation[created] = Array(candidates.dropFirst(claimed.count))
@@ -154,6 +177,35 @@ enum PencilKitBridge {
             }
             return pieces
         }
+    }
+
+    /// Compare the actual imported representation, not raw DTO fields: import intentionally
+    /// supplies missing channels, clamps minimum width and maps several Notable pens to one ink.
+    private static func matchesImported(_ stroke: PKStroke, source: StrokeDTO) -> Bool {
+        guard let imported = Self.stroke(from: source),
+              stroke.ink.inkType == imported.ink.inkType,
+              stroke.ink.color.isEqual(imported.ink.color),
+              stroke.path.count == imported.path.count else { return false }
+        return zip(stroke.path, imported.path).allSatisfy { pair in
+            let (current, original) = pair
+            return current.location == original.location
+                && current.timeOffset == original.timeOffset
+                && current.size == original.size
+                && current.opacity == original.opacity
+                && current.force == original.force
+                && current.azimuth == original.azimuth
+                && current.altitude == original.altitude
+        }
+    }
+
+    /// Identity and clocks are not content. Every other wire field must match before carrying
+    /// over a saved live stroke; doing so keeps its original updatedAt on an unchanged save.
+    private static func sameContent(_ exported: StrokeDTO, _ source: StrokeDTO) -> Bool {
+        var comparable = exported
+        comparable.id = source.id
+        comparable.createdAt = source.createdAt
+        comparable.updatedAt = source.updatedAt
+        return comparable == source
     }
 
     /// A `Date` rounded through the wire format's timestamp precision (milliseconds), by the
