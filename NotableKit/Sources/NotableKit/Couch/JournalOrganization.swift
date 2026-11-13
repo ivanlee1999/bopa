@@ -61,8 +61,8 @@ public struct JournalOrganization: Codable, Equatable, Sendable {
     }
 
     public func validate() throws {
-        guard type == "journal", schema == 1, !notebookId.isEmpty,
-              !notebookId.contains("/"), createdAt >= 0, createdAt <= journalMaxCounter else {
+        guard type == "journal", schema == 1, journalIdentifier(notebookId),
+              createdAt >= 0, createdAt <= journalMaxCounter else {
             throw JournalOrganizationError.invalidRecord
         }
         if let date {
@@ -71,9 +71,9 @@ public struct JournalOrganization: Codable, Equatable, Sendable {
         }
         for (key, topic) in topics {
             let clean = topic.name.unicodeScalars.split { [9, 10, 11, 12, 13, 32].contains($0.value) }
-                .map(String.init).joined(separator: " ")
-            guard !key.isEmpty, clean == topic.name, journalFold(topic.name) == key,
-                  topic.counter >= 0, topic.counter <= journalMaxCounter, !topic.writer.isEmpty else {
+                .map(String.init).joined(separator: " ").precomposedStringWithCanonicalMapping
+            guard !key.isEmpty, journalEqual(clean, topic.name), journalEqual(journalFold(topic.name), key),
+                  topic.counter >= 0, topic.counter <= journalMaxCounter, journalIdentifier(topic.writer) else {
                 throw JournalOrganizationError.invalidRecord
             }
         }
@@ -103,6 +103,11 @@ public enum JournalOrganizationError: Error, LocalizedError {
 
 private let journalMaxCounter: Int64 = 9_007_199_254_740_991
 private func journalLess(_ a: String, _ b: String) -> Bool { a.utf8.lexicographicallyPrecedes(b.utf8) }
+private func journalEqual(_ a: String, _ b: String) -> Bool { a.utf8.elementsEqual(b.utf8) }
+private func journalIdentifier(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0)
+        || (97...122).contains($0) || [45, 46, 95].contains($0) }
+}
 private var journalDateParser: DateFormatter {
     let format = DateFormatter()
     format.locale = Locale(identifier: "en_US_POSIX")
@@ -116,7 +121,8 @@ public func journalTopicName(_ value: String) -> String {
     let whitespace: Set<UInt32> = [9, 10, 11, 12, 13, 32]
     var value = value.unicodeScalars.split { whitespace.contains($0.value) }.map(String.init).joined(separator: " ")
     if value.hasPrefix("#") { value.removeFirst() }
-    return value.unicodeScalars.split { whitespace.contains($0.value) }.map(String.init).joined(separator: " ")
+    return value.unicodeScalars.split { whitespace.contains($0.value) }.map(String.init)
+        .joined(separator: " ").precomposedStringWithCanonicalMapping
 }
 
 public func journalTopicKey(_ value: String) -> String {
@@ -126,7 +132,7 @@ public func journalTopicKey(_ value: String) -> String {
 private func journalFold(_ value: String) -> String {
     String(String.UnicodeScalarView(value.unicodeScalars.map {
         (65...90).contains($0.value) ? UnicodeScalar($0.value + 32)! : $0
-    }))
+    })).precomposedStringWithCanonicalMapping
 }
 
 public func mergeJournalOrganization(_ a: JournalOrganization, _ b: JournalOrganization) throws -> JournalOrganization {
@@ -143,7 +149,7 @@ public func mergeJournalOrganization(_ a: JournalOrganization, _ b: JournalOrgan
         guard let current = merged.topics[key] else { merged.topics[key] = incoming; continue }
         let incomingWins: Bool
         if current.counter != incoming.counter { incomingWins = current.counter < incoming.counter }
-        else if current.writer != incoming.writer { incomingWins = journalLess(current.writer, incoming.writer) }
+        else if !journalEqual(current.writer, incoming.writer) { incomingWins = journalLess(current.writer, incoming.writer) }
         else if current.present != incoming.present { incomingWins = !incoming.present }
         else { incomingWins = journalLess(current.name, incoming.name) }
         if incomingWins { merged.topics[key] = incoming }
@@ -166,7 +172,7 @@ public final class JournalOrganizationStore: @unchecked Sendable {
         url = rootURL.appendingPathComponent(".bopa-organization.json")
         if FileManager.default.fileExists(atPath: url.path) {
             state = try JSONDecoder().decode(State.self, from: Data(contentsOf: url))
-            guard state.counter >= 0, state.counter <= journalMaxCounter, !state.writer.isEmpty else {
+            guard state.counter >= 0, state.counter <= journalMaxCounter, journalIdentifier(state.writer) else {
                 throw JournalOrganizationError.invalidRecord
             }
             for (id, entry) in state.entries {
@@ -231,15 +237,20 @@ public actor JournalOrganizationSync {
     private let client: CouchDBClient
     private let store: JournalOrganizationStore
     private var running: Task<Void, Error>?
+    private nonisolated let lifetime = JournalSyncLifetime()
 
     public init(client: CouchDBClient, store: JournalOrganizationStore) {
         self.client = client; self.store = store
     }
 
+    public nonisolated func retire() { lifetime.retire() }
+
     public func sync() async throws {
+        try lifetime.check()
         if let running { try await running.value; return }
         let task = Task { try await self.performSync() }
         running = task
+        lifetime.register(task)
         do {
             try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
             running = nil
@@ -248,6 +259,7 @@ public actor JournalOrganizationSync {
     }
 
     private func performSync() async throws {
+        try lifetime.check()
         let response = try await client.transport.send(HTTPRequest(method: "GET", path: "/\(client.database)/_all_docs",
             query: [HTTPQueryItem("include_docs", "true"), HTTPQueryItem("startkey", "\"journal:\""),
                     HTTPQueryItem("endkey", "\"journal:\u{fff0}\"")]))
@@ -261,23 +273,45 @@ public actor JournalOrganizationSync {
             guard let doc = row.doc, row.id == doc.documentID else { throw JournalOrganizationError.invalidRecord }
             try doc.validate()
         }
-        for row in rows { _ = try store.merge(row.doc!) }
-        for id in store.entries().keys.sorted() {
+        try lifetime.withActive { for row in rows { _ = try store.merge(row.doc!) } }
+        for id in try lifetime.withActive({ store.entries().keys.sorted() }) {
             for attempt in 0..<4 {
                 try Task.checkCancellation()
+                try lifetime.check()
                 let remote = try await client.get("journal:\(id)", as: JournalOrganization.self)
                 if remote?.deleted == true { throw JournalOrganizationError.deletedRecord }
-                if let remote {
-                    guard remote.body.documentID == "journal:\(id)" else { throw JournalOrganizationError.invalidRecord }
-                    _ = try store.merge(remote.body)
+                let current = try lifetime.withActive {
+                    if let remote {
+                        guard remote.body.documentID == "journal:\(id)" else { throw JournalOrganizationError.invalidRecord }
+                        _ = try store.merge(remote.body)
+                    }
+                    guard let current = store.entries()[id] else { throw JournalOrganizationError.missingRecord }
+                    return current
                 }
-                guard let current = store.entries()[id] else { throw JournalOrganizationError.missingRecord }
                 if remote?.body == current { break }
+                try lifetime.check()
                 do { try await client.put(current.documentID, rev: remote?.rev, body: current); break }
                 catch CouchError.conflict {
                     if attempt == 3 { throw JournalOrganizationError.conflict }
                 }
             }
+        }
+    }
+}
+
+private final class JournalSyncLifetime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = true
+    private var task: Task<Void, Error>?
+    func retire() { lock.withLock { active = false; task?.cancel() } }
+    func register(_ task: Task<Void, Error>) {
+        lock.withLock { if active { self.task = task } else { task.cancel() } }
+    }
+    func check() throws { try withActive {} }
+    func withActive<T>(_ body: () throws -> T) throws -> T {
+        try lock.withLock {
+            guard active else { throw CancellationError() }
+            return try body()
         }
     }
 }

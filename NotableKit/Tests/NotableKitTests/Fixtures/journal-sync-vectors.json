@@ -19,6 +19,11 @@
       "input": "  \t ",
       "name": "",
       "key": ""
+    },
+    {
+      "input": "é",
+      "name": "é",
+      "key": "é"
     }
   ],
   "merges": [

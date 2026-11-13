@@ -22,6 +22,7 @@ final class SyncBackendHost: ObservableObject {
     private var coordinator: SyncCoordinator?
     private var engine: CouchSyncEngine?
     private var couchStore: FileCouchStore?
+    private var organizationSync: JournalOrganizationSync?
 
     /// Asks the system to hold the process open for the final flush. Injected so the lifecycle is
     /// testable; see `BackgroundFlushAssertion`.
@@ -77,6 +78,8 @@ final class SyncBackendHost: ObservableObject {
         guard let store else { return }
         couch?.stop()
         couch = nil
+        organizationSync?.retire()
+        organizationSync = nil
         // Retired *before* the replacement exists, and synchronously: `stop()` cancels the
         // controller's own pumps, but a flush can be in flight from anywhere (`syncNow`, the
         // background flush) and cancellation is cooperative — the old engine could otherwise
@@ -142,6 +145,7 @@ final class SyncBackendHost: ObservableObject {
         couchStore = stack.store
         engine = stack.engine
         couch = stack.controller
+        organizationSync = stack.organization
 
         // A local deletion, recorded durably so the tombstone is pushed even if it happened
         // offline or the app dies before the next sync. Synchronous and ahead of the change

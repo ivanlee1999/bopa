@@ -63,6 +63,55 @@ final class JournalOrganizationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), corrupt)
     }
 
+    func testCanonicalUnicodeAndPortableIdentifiersAreValidated() throws {
+        let store = try JournalOrganizationStore(rootURL: root())
+        try store.setTopic(notebookID: "note", name: "e\u{301}", present: true, createdAt: 0)
+        XCTAssertEqual(store.entries()["note"]?.topics.keys.first?.utf8.map { $0 }, Array("é".utf8))
+        let decomposed = JournalTopic(name: "e\u{301}", present: true, counter: 1, writer: "writer")
+        XCTAssertThrowsError(try JournalOrganization(notebookId: "note", date: nil, createdAt: 0,
+            topics: ["e\u{301}": decomposed]).validate())
+        XCTAssertThrowsError(try JournalOrganization(notebookId: "café", date: nil, createdAt: 0).validate())
+        XCTAssertThrowsError(try JournalOrganization(notebookId: "note", date: nil, createdAt: 0,
+            topics: ["topic": JournalTopic(name: "Topic", present: true, counter: 1, writer: "café")]).validate())
+    }
+
+    func testRetiringWhileInkWaitsPreventsStartingOrganizationRequests() async throws {
+        let store = try JournalOrganizationStore(rootURL: root()), server = JournalServer()
+        try store.setTopic(notebookID: "note", name: "Product", present: true, createdAt: 0)
+        let sync = JournalOrganizationSync(client: CouchDBClient(transport: server, database: "notes_organization"), store: store)
+        let inkStarted = JournalGate(), inkFinished = JournalGate()
+        let flush = Task {
+            await inkStarted.open()
+            await inkFinished.wait()
+            try await sync.sync()
+        }
+        await inkStarted.wait()
+        sync.retire()
+        await inkFinished.open()
+        do { try await flush.value; XCTFail("Expected retired session") } catch is CancellationError { }
+        let requests = await server.requestCount()
+        XCTAssertEqual(requests, 0)
+        XCTAssertEqual(store.entries()["note"]?.visibleTopics, ["Product"])
+    }
+
+    func testRetiredSnapshotCannotApplyAfterNetworkReturns() async throws {
+        let store = try JournalOrganizationStore(rootURL: root()), server = JournalServer()
+        let incoming = JournalOrganization(notebookId: "remote", date: "2026-11-11", createdAt: 0)
+        let item = try JSONSerialization.jsonObject(with: JSONEncoder().encode(incoming))
+        await server.setSnapshot(try JSONSerialization.data(withJSONObject: ["rows": [["id": incoming.documentID, "doc": item]]]))
+        let arrived = JournalGate(), release = JournalGate()
+        await server.holdSnapshot(arrived: arrived, release: release)
+        let sync = JournalOrganizationSync(client: CouchDBClient(transport: server, database: "notes_organization"), store: store)
+        let pending = Task { try await sync.sync() }
+        await arrived.wait()
+        sync.retire()
+        await release.open()
+        do { try await pending.value; XCTFail("Expected retired session") } catch is CancellationError { }
+        XCTAssertTrue(store.entries().isEmpty)
+        let requests = await server.requestCount()
+        XCTAssertEqual(requests, 1)
+    }
+
     func testSyncRetriesConflictsAndPreservesEditsMadeDuringRequest() async throws {
         let store = try JournalOrganizationStore(rootURL: root())
         try store.capture(notebookID: "note", at: Date(timeIntervalSince1970: 1_794_427_200))
@@ -157,12 +206,18 @@ private actor JournalServer: HTTPTransport {
     private var fail = false
     private var beforeConflict: (@Sendable () throws -> Void)?
     private var snapshot: Data?
+    private var requests = 0
+    private var snapshotGates: (JournalGate, JournalGate)?
     func setFailure(_ value: Bool) { fail = value }
     func setBeforeConflict(_ block: @escaping @Sendable () throws -> Void) { beforeConflict = block }
     func setSnapshot(_ data: Data) { snapshot = data }
     func entry() -> JournalOrganization? { doc }
+    func requestCount() -> Int { requests }
+    func holdSnapshot(arrived: JournalGate, release: JournalGate) { snapshotGates = (arrived, release) }
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        requests += 1
         if request.path.hasSuffix("_all_docs") {
+            if let (arrived, release) = snapshotGates { await arrived.open(); await release.wait() }
             if let snapshot { return HTTPResponse(status: 200, body: snapshot) }
             let rows: [[String: Any]] = try doc.map { entry in
                 [["id": entry.documentID, "doc": try object(entry)]]
@@ -185,5 +240,19 @@ private actor JournalServer: HTTPTransport {
         var value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(entry)) as! [String: Any]
         value["_id"] = entry.documentID; value["_rev"] = "\(revision)-r"
         return value
+    }
+}
+
+private actor JournalGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func open() {
+        opened = true
+        let pending = waiters; waiters = []
+        for waiter in pending { waiter.resume() }
     }
 }

@@ -159,7 +159,8 @@ enum CouchSyncStack {
         onOrganizationChange: @escaping @Sendable () -> Void = {},
         onChange: @escaping @Sendable () -> Void,
         onState: (@Sendable (CouchSyncState) -> Void)? = nil
-    ) -> (store: FileCouchStore, engine: CouchSyncEngine, controller: CouchSyncController)? {
+    ) -> (store: FileCouchStore, engine: CouchSyncEngine, controller: CouchSyncController,
+          organization: JournalOrganizationSync?)? {
         guard let client = settings.makeClient() else { return nil }
 
         let store = FileCouchStore(rootURL: rootURL, deviceID: settings.deviceID)
@@ -227,7 +228,7 @@ enum CouchSyncStack {
             pending: { await engine.pendingCount },
             approveDeletions: { await engine.approveHeldDeletions($0) },
             discardDeletions: { await engine.discardHeldDeletions($0) })
-        return (store, engine, controller)
+        return (store, engine, controller, journal)
     }
 
     /// A missing or unreadable state file is not an error: every document re-pushes and the feed
