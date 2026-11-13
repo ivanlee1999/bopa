@@ -1,0 +1,350 @@
+{
+  "normalization": [
+    {
+      "input": " \t#Product  Design\r\n",
+      "name": "Product Design",
+      "key": "product design"
+    },
+    {
+      "input": "#ÉCOLE",
+      "name": "ÉCOLE",
+      "key": "École"
+    },
+    {
+      "input": "##Idea",
+      "name": "#Idea",
+      "key": "#idea"
+    },
+    {
+      "input": "  \t ",
+      "name": "",
+      "key": ""
+    }
+  ],
+  "merges": [
+    {
+      "name": "independent additions survive",
+      "left": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      },
+      "right": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "alex": {
+            "name": "Alex",
+            "present": true,
+            "counter": 1,
+            "writer": "b"
+          }
+        }
+      },
+      "expected": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "alex": {
+            "name": "Alex",
+            "present": true,
+            "counter": 1,
+            "writer": "b"
+          },
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      }
+    },
+    {
+      "name": "removal beats stale addition",
+      "left": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      },
+      "right": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": false,
+            "counter": 2,
+            "writer": "b"
+          }
+        }
+      },
+      "expected": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": false,
+            "counter": 2,
+            "writer": "b"
+          }
+        }
+      }
+    },
+    {
+      "name": "observed readd wins",
+      "left": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": false,
+            "counter": 2,
+            "writer": "b"
+          }
+        }
+      },
+      "right": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 3,
+            "writer": "a"
+          }
+        }
+      },
+      "expected": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 3,
+            "writer": "a"
+          }
+        }
+      }
+    },
+    {
+      "name": "equal stamp removal wins",
+      "left": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      },
+      "right": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "PRODUCT",
+            "present": false,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      },
+      "expected": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "PRODUCT",
+            "present": false,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      }
+    },
+    {
+      "name": "capture survives tagging ordinary note",
+      "left": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      },
+      "right": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": null,
+        "createdAt": 1,
+        "topics": {
+          "alex": {
+            "name": "Alex",
+            "present": true,
+            "counter": 1,
+            "writer": "b"
+          }
+        }
+      },
+      "expected": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200000,
+        "topics": {
+          "alex": {
+            "name": "Alex",
+            "present": true,
+            "counter": 1,
+            "writer": "b"
+          },
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      }
+    },
+    {
+      "name": "capture tuple remains paired",
+      "left": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-12",
+        "createdAt": 1794427200000,
+        "topics": {
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      },
+      "right": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-11",
+        "createdAt": 1794427200001,
+        "topics": {
+          "alex": {
+            "name": "Alex",
+            "present": true,
+            "counter": 1,
+            "writer": "b"
+          }
+        }
+      },
+      "expected": {
+        "_id": "journal:note",
+        "type": "journal",
+        "schema": 1,
+        "notebookId": "note",
+        "date": "2026-11-12",
+        "createdAt": 1794427200000,
+        "topics": {
+          "alex": {
+            "name": "Alex",
+            "present": true,
+            "counter": 1,
+            "writer": "b"
+          },
+          "product": {
+            "name": "Product",
+            "present": true,
+            "counter": 1,
+            "writer": "a"
+          }
+        }
+      }
+    }
+  ]
+}

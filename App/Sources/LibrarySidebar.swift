@@ -6,6 +6,8 @@ import SwiftUI
 /// There is deliberately no "server" node: a synced WebDAV folder is not a place of its own, it is
 /// where these folders and notes came from. Its contents appear below like any other.
 enum LibrarySelection: Hashable {
+    case today
+    case topics
     case root
     case folder(String)
 
@@ -106,6 +108,8 @@ struct LibrarySidebar: View {
             masthead
             ScrollView {
                 VStack(spacing: 0) {
+                    journalRow("Today", systemImage: "calendar", destination: .today)
+                    journalRow("Topics", systemImage: "number", destination: .topics)
                     rootRow
 
                     if !store.recentNotebooks.isEmpty {
@@ -190,6 +194,16 @@ struct LibrarySidebar: View {
     }
 
     // MARK: Rows
+
+    private func journalRow(_ title: String, systemImage: String, destination: LibrarySelection) -> some View {
+        Button { selectDestination(destination) } label: {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                .padding(.horizontal, 20)
+                .foregroundStyle(selection == destination ? Modernist.paper : Modernist.ink)
+                .background(selection == destination ? Modernist.ink : .clear)
+        }.buttonStyle(.plain)
+    }
 
     private var rootRow: some View {
         let selected = selection == .root

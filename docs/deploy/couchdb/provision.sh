@@ -18,6 +18,7 @@ set -a; . ./.env; set +a
 # unknown document type in `notes` would be conflict-copied into junk notebooks by both apps.
 # scribe defaults to the same name (SCRIBE_TEXT_DB), and its -check refuses to start without it.
 COUCHDB_TEXT_DATABASE="${COUCHDB_TEXT_DATABASE:-notes_text}"
+COUCHDB_ORGANIZATION_DATABASE="${COUCHDB_DATABASE}_organization"
 
 admin=(--user "${COUCHDB_ADMIN_USER}:${COUCHDB_ADMIN_PASSWORD}")
 
@@ -42,6 +43,7 @@ call PUT /_replicator   || true
 echo "== application databases =="
 call PUT "/${COUCHDB_DATABASE}"
 call PUT "/${COUCHDB_TEXT_DATABASE}"
+call PUT "/${COUCHDB_ORGANIZATION_DATABASE}"
 
 echo "== sync account =="
 call PUT "/_users/org.couchdb.user:${COUCHDB_SYNC_USER}" \
@@ -52,6 +54,7 @@ echo "== restrict both databases to that account =="
 security="{\"admins\":{\"names\":[],\"roles\":[]},\"members\":{\"names\":[\"${COUCHDB_SYNC_USER}\"],\"roles\":[]}}"
 call PUT "/${COUCHDB_DATABASE}/_security"      "$security"
 call PUT "/${COUCHDB_TEXT_DATABASE}/_security" "$security"
+call PUT "/${COUCHDB_ORGANIZATION_DATABASE}/_security" "$security"
 
 echo
 echo "== verifying as the sync user =="
@@ -63,6 +66,8 @@ curl -fsS "${sync[@]}"  "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null && echo 
 # start, with nothing on either device to explain why no page is ever searchable.
 curl -fsS "${sync[@]}"  "${COUCHDB_URL}/${COUCHDB_TEXT_DATABASE}" >/dev/null \
   && echo "sync user can read ${COUCHDB_TEXT_DATABASE}"
+curl -fsS "${sync[@]}" "${COUCHDB_URL}/${COUCHDB_ORGANIZATION_DATABASE}" >/dev/null \
+  && echo "sync user can read ${COUCHDB_ORGANIZATION_DATABASE}"
 
 # Anonymous access must fail: this is the check that catches require_valid_user not applying.
 if curl -fsS "${COUCHDB_URL}/${COUCHDB_DATABASE}" >/dev/null 2>&1; then

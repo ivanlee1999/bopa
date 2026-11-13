@@ -154,7 +154,10 @@ enum CouchSyncStack {
     ///   is what makes those badges right on launch, before anything has synced this session.
     @MainActor
     static func make(
-        settings: CouchSettings = .load(), rootURL: URL, onChange: @escaping @Sendable () -> Void,
+        settings: CouchSettings = .load(), rootURL: URL,
+        organization: JournalOrganizationStore? = nil,
+        onOrganizationChange: @escaping @Sendable () -> Void = {},
+        onChange: @escaping @Sendable () -> Void,
         onState: (@Sendable (CouchSyncState) -> Void)? = nil
     ) -> (store: FileCouchStore, engine: CouchSyncEngine, controller: CouchSyncController)? {
         guard let client = settings.makeClient() else { return nil }
@@ -197,7 +200,34 @@ enum CouchSyncStack {
                 save(state, to: stateURL)
                 onState?(state)
             })
-        return (store, engine, CouchSyncController(engine: engine))
+        let journal = organization.map {
+            JournalOrganizationSync(client: CouchDBClient(transport: client.transport,
+                database: settings.database + "_organization"), store: $0)
+        }
+        let controller = CouchSyncController(
+            flush: {
+                var report = await engine.flush()
+                if let journal {
+                    do { try await journal.sync(); onOrganizationChange() }
+                    catch {
+                        report.failures["journal"] = error.localizedDescription
+                        report.stillDirty.append("journal")
+                        let retriable = (error as? JournalOrganizationError)?.isRetriable
+                            ?? (error as? CouchError)?.isRetriable ?? true
+                        report.hasRetriableFailure = report.hasRetriableFailure || retriable
+                    }
+                }
+                return report
+            },
+            pull: { longpoll in
+                let report = try await engine.pull(longpoll: longpoll)
+                if let journal { try await journal.sync(); onOrganizationChange() }
+                return report
+            },
+            pending: { await engine.pendingCount },
+            approveDeletions: { await engine.approveHeldDeletions($0) },
+            discardDeletions: { await engine.discardHeldDeletions($0) })
+        return (store, engine, controller)
     }
 
     /// A missing or unreadable state file is not an error: every document re-pushes and the feed

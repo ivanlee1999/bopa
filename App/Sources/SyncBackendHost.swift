@@ -104,6 +104,10 @@ final class SyncBackendHost: ObservableObject {
         store.deviceID = settings.deviceID
         guard let stack = CouchSyncStack.make(
             settings: settings, rootURL: store.rootURL,
+            organization: store.organization,
+            onOrganizationChange: { [weak store] in
+                Task { @MainActor in store?.refreshJournal() }
+            },
             onChange: { [weak store] in
                 // The engine applies changes off the main actor; the library has to be told on it.
                 // The editor too: unlike the WebDAV run, this can rewrite the page someone is
@@ -256,6 +260,7 @@ final class SyncBackendHost: ObservableObject {
     /// A local edit. WebDAV needs telling; CouchDB already heard through `didChangeDocuments`,
     /// which knows *which* documents changed and is therefore the better signal.
     func noteEdited() {
+        if backend == .couchdb { couch?.noteEdited(); return }
         guard backend == .webdav, let store, let coordinator else { return }
         coordinator.noteEdited(store: store)
     }

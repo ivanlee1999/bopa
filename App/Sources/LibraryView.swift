@@ -12,7 +12,7 @@ struct LibraryView: View {
     @EnvironmentObject private var coordinator: SyncCoordinator
     @EnvironmentObject private var backendHost: SyncBackendHost
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var selection: LibrarySelection? = .root
+    @State private var selection: LibrarySelection? = .today
     @State private var showsSidebar: Bool?
     @State private var openNotebook: OpenNotebook?
     @State private var resolvingConflict: NotebookConflict?
@@ -53,6 +53,10 @@ struct LibraryView: View {
                     }
             }
             if horizontalSizeClass != .compact || !sidebarVisible {
+                if selection == .today || selection == .topics {
+                    JournalLibraryView(topics: selection == .topics,
+                        toggleSidebar: { showsSidebar = !sidebarVisible }, openNotebook: open)
+                } else {
                 FolderContentsView(
                     folderId: selection?.folderId,
                     selection: $selection,
@@ -62,6 +66,7 @@ struct LibraryView: View {
                     toggleSidebar: { showsSidebar = !sidebarVisible },
                     openNotebook: open,
                     showPages: showPages)
+                }
             }
         }
         .background(Modernist.paper)

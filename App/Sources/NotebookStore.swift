@@ -23,6 +23,9 @@ final class NotebookStore: ObservableObject {
     @Published private(set) var folders: [FolderDTO] = []
     /// Device-local reading history, separate from edit dates and sync clocks.
     @Published private(set) var recentNotebookIDs: [String] = []
+    @Published private(set) var journalEntries: [String: JournalOrganization] = [:]
+    @Published private(set) var journalError: String?
+    private(set) var organization: JournalOrganizationStore?
     /// What the WebDAV server held at the end of the last sync; nil until this library has
     /// synced at least once. Read-only here — only the sync engine writes it.
     @Published private(set) var remoteIndex: RemoteIndex?
@@ -55,6 +58,8 @@ final class NotebookStore: ObservableObject {
                 .appendingPathComponent("notable", isDirectory: true)
         self.clock = clock
         self.preferences = preferences
+        do { organization = try JournalOrganizationStore(rootURL: self.rootURL) }
+        catch { journalError = error.localizedDescription }
         var seen: Set<String> = []
         recentNotebookIDs = Array((preferences.stringArray(forKey: "library.recentNotebooks") ?? [])
             .filter { seen.insert($0).inserted }.prefix(12))
@@ -104,6 +109,7 @@ final class NotebookStore: ObservableObject {
     }
 
     func refresh() {
+        journalEntries = organization?.entries() ?? [:]
         let notebooksDir = rootURL.appendingPathComponent("notebooks", isDirectory: true)
         let ids = (try? FileManager.default.contentsOfDirectory(atPath: notebooksDir.path)) ?? []
         let loaded = ids.compactMap { id -> NotebookManifest? in
@@ -150,10 +156,10 @@ final class NotebookStore: ObservableObject {
     ///   with, including the notebooks that predate the field and declare nothing at all.
     func createNotebook(
         title: String, parentFolderId: String? = nil, template: NativeTemplate = .blank,
-        pageSize: PageSize = PageSizePreset.default.size
+        pageSize: PageSize = PageSizePreset.default.size,
+        notebookId: String = UUID().uuidString.lowercased()
     ) throws -> NotebookManifest {
         let now = clock.stamp()
-        let notebookId = UUID().uuidString.lowercased()
         let pageId = UUID().uuidString.lowercased()
         let plan = TemplateApplication.plan(pageCount: 1, from: .native(template))
         let pageFields = plan.pages[0]
@@ -184,6 +190,30 @@ final class NotebookStore: ObservableObject {
             documents: [CouchDocID.notebook(notebookId), CouchDocID.page(pageId)])
         return manifest
     }
+
+    func createJournalEntry(topic: String? = nil) throws -> NotebookManifest {
+        guard let organization else { throw JournalOrganizationError.invalidRecord }
+        let id = UUID().uuidString.lowercased(), date = Date()
+        // Save the capture intent first. A failed notebook write leaves pending metadata,
+        // never a successfully created note whose journal date can be lost on an app kill.
+        try organization.capture(notebookID: id, at: date)
+        if let topic { try organization.setTopic(notebookID: id, name: topic, present: true,
+                                                createdAt: Int64(date.timeIntervalSince1970 * 1000)) }
+        let format = DateFormatter(); format.dateStyle = .medium; format.timeStyle = .short
+        return try createNotebook(title: format.string(from: date), notebookId: id)
+    }
+
+    func setJournalTopic(notebookID: String, name: String, present: Bool) throws {
+        guard let organization, let manifest = manifest(id: notebookID) else {
+            throw JournalOrganizationError.missingRecord
+        }
+        try organization.setTopic(notebookID: notebookID, name: name, present: present,
+            createdAt: Int64((NotableDate.parse(manifest.createdAt) ?? Date()).timeIntervalSince1970 * 1000))
+        journalEntries = organization.entries()
+        NotificationCenter.default.post(name: Self.didChangeLocallyNotification, object: nil)
+    }
+
+    func refreshJournal() { journalEntries = organization?.entries() ?? [:] }
 
     func manifest(id: String) -> NotebookManifest? {
         notebooks.first { $0.notebookId == id }

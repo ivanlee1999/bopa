@@ -22,7 +22,8 @@ let package = Package(
             dependencies: [
                 "NotableKit",
                 .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
-            ]
+            ],
+            resources: [.copy("Fixtures/journal-sync-vectors.json")]
         ),
     ]
 )
