@@ -8,6 +8,7 @@ final class LibraryUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-editor.prefersTyping", "YES"]
+        XCUIDevice.shared.orientation = .portrait
         app.launch()
         let write = app.buttons["Write"]
         XCTAssertTrue(write.waitForExistence(timeout: 8))
@@ -16,6 +17,14 @@ final class LibraryUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         let source = "A flowing thought \(Int.random(in: 10000...99999))\n\nA second paragraph"
         input.tap(); input.typeText(source)
+        for id in ["editor.notebooks", "editor.inputSurface", "editor.tags", "editor.pages"] {
+            let control = app.buttons[id]
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44)
+            XCTAssertTrue(app.windows.firstMatch.frame.contains(control.frame), "\(id) must fit the phone header")
+            XCTAssertTrue(control.isHittable)
+        }
+        XCTAssertTrue(app.buttons["New thought"].firstMatch.isHittable)
+        capture("flow-typing-portrait", app: app)
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertEqual(input.value as? String, source)
         capture("flow-typing-wide-workspace", app: app)
@@ -23,6 +32,7 @@ final class LibraryUITests: XCTestCase {
         // Leave immediately, before the debounce; lifecycle flushing must keep both paragraphs.
         XCUIDevice.shared.press(.home)
         app.terminate(); app.launch()
+        if !app.descendants(matching: .any)["library.sidebar"].exists { app.buttons["Browse"].tap() }
         let recent = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.recent.'")).firstMatch
         XCTAssertTrue(recent.waitForExistence(timeout: 8)); recent.tap()
         XCTAssertTrue(input.waitForExistence(timeout: 8))

@@ -934,7 +934,9 @@ final class EditorPageModel: NSObject, ObservableObject {
     private func upsert(_ block: CouchBlock) {
         guard var page else { return }
         var stamped = block
-        stamped.updatedAt = SyncClock.shared.stamp()
+        let current = page.blocks.first { $0.id == block.id }?.updatedAt ?? block.updatedAt
+        let previous = CouchMerge.millis(current) > CouchMerge.millis(block.updatedAt) ? current : block.updatedAt
+        stamped.updatedAt = SyncClock.shared.stamp(after: previous)
         stamped.deviceId = deviceID
         if let index = page.blocks.firstIndex(where: { $0.id == stamped.id }) {
             page.blocks[index] = stamped

@@ -54,6 +54,22 @@ final class SyncClockTests: XCTestCase {
         XCTAssertEqual(clock.stamp(), NotableDate.format(fixed.addingTimeInterval(-7_200)))
     }
 
+    func testLocalReplacementAlwaysBeatsItsSourceWithinTheSameTick() {
+        let clock = SyncClock(defaults: scratchDefaults(), base: { fixed })
+        let first = clock.stamp()
+        let next = clock.stamp(after: first)
+        XCTAssertEqual(CouchMerge.millis(next), CouchMerge.millis(first) + 1)
+        XCTAssertGreaterThan(CouchMerge.millis(clock.stamp(after: next)), CouchMerge.millis(next))
+        XCTAssertEqual(clock.now(), fixed, "local replacement ordering does not change the clock")
+    }
+
+    func testFormattingNeverMovesBackwardAtARoundedSecondBoundary() {
+        let start = fixed.addingTimeInterval(0.9994)
+        let end = fixed.addingTimeInterval(0.9996)
+        XCTAssertEqual(CouchMerge.millis(NotableDate.format(start)), Int64(fixed.timeIntervalSince1970 * 1000) + 999)
+        XCTAssertEqual(CouchMerge.millis(NotableDate.format(end)), Int64(fixed.timeIntervalSince1970 * 1000) + 1000)
+    }
+
     func testAClockThatHasBeenPutRightStopsBeingCorrected() {
         let clock = SyncClock(defaults: scratchDefaults(), base: { fixed })
 

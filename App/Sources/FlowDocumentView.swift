@@ -171,6 +171,7 @@ struct FlowDocumentView: View {
     var newThought: (() -> Void)?
     @EnvironmentObject private var store: NotebookStore
     @State private var showingVersions = false
+    @State private var keyboardShown = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -227,12 +228,16 @@ struct FlowDocumentView: View {
                 Spacer()
                 Button { controller.finish(); newThought?() } label: { Label("New thought", systemImage: "plus") }
                     .disabled(newThought == nil).frame(minHeight: 44)
-            }.padding(.horizontal, 16).background(Modernist.rail)
+            }.padding(.horizontal, 16)
+                .padding(.bottom, keyboardShown && !Platform.isMac ? 44 : 0)
+                .background(Modernist.rail)
             if !model.versions.isEmpty {
                 Button("Recovered versions (\(model.versions.count))") { controller.finish(); showingVersions = true }
                     .font(.caption).padding(8)
             }
         }.background(Modernist.canvas)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardShown = true }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
             .sheet(isPresented: $showingVersions) {
                 NavigationStack {
                     List(model.versions, id: \.id) { version in

@@ -8,6 +8,8 @@
 #   ui     BopaUITests only (~2.5 min — touch synthesis is slow by nature)
 #   mac    build the Mac Catalyst app (no tests: the snapshots are iPad-metric)
 #   full   everything; same coverage CI runs on every push/PR
+# TEST_DEVICE_ID selects an available simulator; TEST_ONLY narrows the ui tier to
+# an Xcode test identifier, e.g. BopaUITests/LibraryUITests/testFlowTypingSurvivesRelaunchAndStartsAnotherThought.
 #
 # RECORD=1 re-records the snapshot reference images instead of comparing
 # (after an intentional visual change). Eyeball the diff before committing.
@@ -37,11 +39,13 @@ run_xcode() { # extra xcodebuild args, e.g. -only-testing:BopaTests
   cd "$ROOT/App"
   command -v xcodegen >/dev/null && xcodegen generate >/dev/null
 
-  local udid
-  udid=$(xcrun simctl list devices available -j | jq -r '
+  local udid="${TEST_DEVICE_ID:-}"
+  if [ -z "$udid" ]; then
+    udid=$(xcrun simctl list devices available -j | jq -r '
     [.devices | to_entries[]
      | select(.key | contains("SimRuntime.iOS"))
      | .value[] | select(.name | startswith("iPad"))] | .[0].udid // empty')
+  fi
   if [ -z "$udid" ]; then
     echo "No iPad simulator available:" >&2
     xcrun simctl list devices available >&2
@@ -75,7 +79,7 @@ run_mac() {
 case "$TIER" in
   kit)   run_kit ;;
   app)   run_xcode -only-testing:BopaTests ;;
-  ui)    run_xcode -only-testing:BopaUITests ;;
+  ui)    run_xcode "-only-testing:${TEST_ONLY:-BopaUITests}" ;;
   mac)   run_mac ;;
   quick) run_kit; run_xcode -only-testing:BopaTests ;;
   full)  run_kit; run_xcode; run_mac ;;

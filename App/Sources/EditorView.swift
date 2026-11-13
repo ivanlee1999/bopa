@@ -250,19 +250,21 @@ struct EditorView: View {
 
     private func pageControls(_ manifest: NotebookManifest) -> some View {
         HStack(spacing: 2) {
-            Button {
-                openPage(at: pageIndex - 1)
-            } label: {
-                Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
+            if !isCompact {
+                Button {
+                    openPage(at: pageIndex - 1)
+                } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold))
+                }
+                .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
+                .disabled(pageIndex == 0)
+                .keyboardShortcut("[", modifiers: .command)
+                // A bracket typed into a text box is a bracket, not a page turn. On the Mac the
+                // shortcut fires even while a text view holds the keyboard, so it is taken away for
+                // as long as one does.
+                .disabled(model.editingBlockID != nil)
+                .accessibilityLabel("Previous page")
             }
-            .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
-            .disabled(pageIndex == 0)
-            .keyboardShortcut("[", modifiers: .command)
-            // A bracket typed into a text box is a bracket, not a page turn. On the Mac the
-            // shortcut fires even while a text view holds the keyboard, so it is taken away for
-            // as long as one does.
-            .disabled(model.editingBlockID != nil)
-            .accessibilityLabel("Previous page")
 
             // The count is the way into the overview, not a label beside it: it is already the
             // thing you look at to ask "where am I in this notebook", and a notebook of forty
@@ -283,27 +285,28 @@ struct EditorView: View {
             // Never disabled: on the last page it makes the next one. A page ends at its sheet
             // now, so "keep writing" has to be one tap and not a detour through the panel — this
             // is the turn of the page that carrying on down the canvas used to be.
-            Button {
-                if pageIndex >= manifest.pageIds.count - 1 {
-                    addPage()
-                } else {
-                    openPage(at: pageIndex + 1)
+            if !isCompact {
+                Button {
+                    if pageIndex >= manifest.pageIds.count - 1 {
+                        addPage()
+                    } else {
+                        openPage(at: pageIndex + 1)
+                    }
+                } label: {
+                    Image(systemName: pageIndex >= manifest.pageIds.count - 1 ? "plus" : "chevron.right")
+                        .font(.system(size: 15, weight: .semibold))
                 }
-            } label: {
-                Image(systemName: pageIndex >= manifest.pageIds.count - 1 ? "plus" : "chevron.right")
-                    .font(.system(size: 15, weight: .semibold))
+                .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
+                // The keyboard's page turns. On the Mac they are the only way to move between pages
+                // besides these buttons: a mouse wheel has no drag phase, so scrolling past the end
+                // of a page — the touch gesture that appends and enters pages — never fires there,
+                // and relaxing that guard would let momentum walk the whole notebook.
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(model.editingBlockID != nil)
+                .accessibilityLabel(
+                    pageIndex >= manifest.pageIds.count - 1 ? "Add page" : "Next page")
+                .accessibilityIdentifier("editor.forwardPage")
             }
-            .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
-            // The keyboard's page turns. On the Mac they are the only way to move between pages
-            // besides these buttons: a mouse wheel has no drag phase, so scrolling past the end
-            // of a page — the touch gesture that appends and enters pages — never fires there,
-            // and relaxing that guard would let momentum walk the whole notebook.
-            .keyboardShortcut("]", modifiers: .command)
-            .disabled(model.editingBlockID != nil)
-            .accessibilityLabel(
-                pageIndex >= manifest.pageIds.count - 1 ? "Add page" : "Next page")
-            .accessibilityIdentifier("editor.forwardPage")
-
 
         }
     }

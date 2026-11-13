@@ -42,6 +42,23 @@ final class FlowPageModelTests: XCTestCase {
         XCTAssertEqual(store.journalEntries[notebook.notebookId], organization)
     }
 
+    func testFlowEditAndRestoreOrderingBeatExistingFutureClocks() throws {
+        _ = try seed("zulu")
+        var saved = try page()
+        saved.blocks[0].orderKey = "legacy-key"
+        saved.blocks[0].updatedAt = NotableDate.format(SyncClock.shared.now().addingTimeInterval(60))
+        _ = try store.savePage(saved)
+        let flow = model(), id = try XCTUnwrap(flow.parts.first?.id)
+        flow.update("alpha", id: id)
+        XCTAssertTrue(flow.flush())
+        XCTAssertEqual(FlowText.markdown(in: try page().blocks), "alpha")
+        let primary = try XCTUnwrap(page().blocks.first { $0.kind == "md" })
+        XCTAssertGreaterThan(CouchMerge.millis(primary.updatedAt), CouchMerge.millis(saved.blocks[0].updatedAt))
+        let version = TextVersions.recovery(CouchBlock(id: "old", kind: "md", text: "Restored", createdAt: primary.createdAt, updatedAt: primary.updatedAt, deviceId: "boox"))
+        flow.restoreVersion(version)
+        XCTAssertEqual(FlowText.markdown(in: try page().blocks), "alpha\n\nRestored")
+    }
+
     func testLocalDraftIsRecoverableBeforeCanonicalAutosaveRuns() throws {
         let first = model(), id = try XCTUnwrap(first.parts.first?.id)
         first.update("A thought kept through interruption 👋", id: id)

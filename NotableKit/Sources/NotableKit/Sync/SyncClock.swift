@@ -71,6 +71,15 @@ public final class SyncClock: @unchecked Sendable {
     /// This device's corrected clock, already in the wire format.
     public func stamp() -> String { NotableDate.format(now()) }
 
+    /// A local replacement must beat the block it edits even within one clock tick.
+    /// This does not alter incoming timestamps or the clock's server correction.
+    public func stamp(after previous: String) -> String {
+        let current = stamp()
+        let before = CouchMerge.millis(previous)
+        guard before != Int64.min, CouchMerge.millis(current) <= before else { return current }
+        return NotableDate.format(Date(timeIntervalSince1970: Double(before + 1) / 1000))
+    }
+
     /// The last measured skew, or nil when the clocks agreed — what the warning is built from.
     public var skew: ClockSkew? {
         lock.lock()

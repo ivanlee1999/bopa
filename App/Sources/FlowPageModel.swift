@@ -111,7 +111,7 @@ final class FlowPageModel: NSObject, ObservableObject {
             for index in parts.indices where dirty.contains(parts[index].id) {
                 let part = parts[index]
                 var current = try store.loadPage(notebookId: notebookID, pageId: pageID)
-                let stamp = SyncClock.shared.stamp()
+                let stamp = localStamp(in: current)
                 let pendingCollision = (part.pending ?? []).contains { planned in
                     guard !part.blocks.contains(where: { $0.id == planned.id }) else { return false }
                     if current.deletedBlocks.contains(where: { $0.id == planned.id }) { return true }
@@ -197,7 +197,7 @@ final class FlowPageModel: NSObject, ObservableObject {
             var page = try store.loadPage(notebookId: id, pageId: destination)
             if FlowText.markdown(in: page.blocks).isEmpty {
                 page.blocks = try FlowText.replacing(base: [], in: page.blocks, with: source,
-                    stamp: SyncClock.shared.stamp(), deviceID: deviceID)
+                    stamp: localStamp(in: page), deviceID: deviceID)
                 _ = try store.savePage(page)
             }
             recoveredNotebookID = id
@@ -245,7 +245,7 @@ final class FlowPageModel: NSObject, ObservableObject {
         do {
             var current = try store.loadPage(notebookId: notebookID, pageId: pageID)
             current.blocks = try FlowText.replacing(base: [], in: current.blocks,
-                with: version.text ?? "", stamp: SyncClock.shared.stamp(), deviceID: deviceID)
+                with: version.text ?? "", stamp: localStamp(in: current), deviceID: deviceID)
             _ = try store.savePage(current)
             if dirty.isEmpty { try reload() }
         } catch { self.error = error.localizedDescription }
@@ -258,6 +258,12 @@ final class FlowPageModel: NSObject, ObservableObject {
         parts = FlowText.sections(in: loaded.blocks).map { Part(id: $0.id, blocks: $0.blocks, source: $0.source) }
         if parts.last?.isMarkdown != true { parts.append(Part(id: "new-\(pageID)", blocks: [], source: "")) }
         refreshVersions()
+    }
+
+    private func localStamp(in page: PageFile) -> String {
+        let previous = FlowText.ordered(page.blocks).map(\.updatedAt)
+            .max { CouchMerge.millis($0) < CouchMerge.millis($1) } ?? page.updatedAt
+        return SyncClock.shared.stamp(after: previous)
     }
 
     private func refreshVersions() {

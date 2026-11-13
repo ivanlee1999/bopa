@@ -130,9 +130,28 @@ final class TextBoxEditingTests: XCTestCase {
         let second = try XCTUnwrap(reloadPage(model).blocks.first { $0.id == first.id })
         // The merge is whole-element last-writer-wins on `updatedAt`. An edit that forgot to
         // bump it would silently lose to the very copy it was editing.
-        XCTAssertGreaterThanOrEqual(second.updatedAt, first.updatedAt)
+        XCTAssertGreaterThan(CouchMerge.millis(second.updatedAt), CouchMerge.millis(first.updatedAt))
         XCTAssertEqual(second.createdAt, first.createdAt)
         XCTAssertEqual(second.text, "after")
+    }
+
+    func testUndoSnapshotMustBeatTheCurrentBlockEvenWhenWallTimeIsBehind() throws {
+        let initial = openedModel()
+        let first = try typeBox(initial, "alpha")
+        var saved = try reloadPage(initial)
+        let index = try XCTUnwrap(saved.blocks.firstIndex { $0.id == first.id })
+        saved.blocks[index].updatedAt = NotableDate.format(SyncClock.shared.now().addingTimeInterval(60))
+        _ = try store.savePage(saved)
+        let model = openedModel()
+        let snapshot = try XCTUnwrap(model.textBlocks.first)
+        model.commitEditing(snapshot, text: "zulu")
+        XCTAssertTrue(model.saveNow())
+        let edited = try XCTUnwrap(reloadPage(model).blocks.first { $0.id == first.id })
+        _ = model.restoreTextBlock(id: first.id, to: snapshot)
+        XCTAssertTrue(model.saveNow())
+        let restored = try XCTUnwrap(reloadPage(model).blocks.first { $0.id == first.id })
+        XCTAssertEqual(restored.text, "alpha")
+        XCTAssertGreaterThan(CouchMerge.millis(restored.updatedAt), CouchMerge.millis(edited.updatedAt))
     }
 
     func testMovingABoxKeepsItOnThePaper() throws {
