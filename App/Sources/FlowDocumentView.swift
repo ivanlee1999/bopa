@@ -19,6 +19,8 @@ final class FlowNativeTextView: UITextView {
 
     func installAccessory() {
         let bar = UIToolbar()
+        bar.isTranslucent = false
+        bar.backgroundColor = UIColor(Modernist.rail)
         let styles = UIMenu(children: [
             UIAction(title: "Heading", image: UIImage(systemName: "textformat.size")) { [weak self] _ in self?.apply(.heading) },
             UIAction(title: "Bulleted list", image: UIImage(systemName: "list.bullet")) { [weak self] _ in self?.apply(.list) },

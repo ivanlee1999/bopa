@@ -192,12 +192,12 @@ struct EditorView: View {
                 Button { setTyping(!typing) } label: {
                     Image(systemName: typing ? "pencil.tip" : "textformat")
                         .frame(width: Modernist.hitCompact, height: Modernist.hitCompact)
-                }.buttonStyle(.plain)
+                }.buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
                     .accessibilityLabel(typing ? "Draw" : "Type")
                     .accessibilityIdentifier("editor.inputSurface")
                 Button { commitOpenTextBox(); showingTags = true } label: {
                     Image(systemName: "number").frame(width: Modernist.hitCompact, height: Modernist.hitCompact)
-                }.buttonStyle(.plain).accessibilityLabel("Tags")
+                }.buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact)).accessibilityLabel("Tags")
                     .accessibilityIdentifier("editor.tags")
                 if !dynamicTypeSize.isAccessibilitySize, let manifest { pageControls(manifest) }
                 optionsMenu

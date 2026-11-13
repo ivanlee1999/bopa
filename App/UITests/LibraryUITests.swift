@@ -17,6 +17,7 @@ final class LibraryUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         let source = "A flowing thought \(Int.random(in: 10000...99999))\n\nA second paragraph"
         input.tap(); input.typeText(source)
+        capture("flow-typing-portrait", app: app)
         for id in ["editor.notebooks", "editor.inputSurface", "editor.tags", "editor.pages"] {
             let control = app.buttons[id]
             XCTAssertGreaterThanOrEqual(control.frame.width, 44)
@@ -24,7 +25,6 @@ final class LibraryUITests: XCTestCase {
             XCTAssertTrue(control.isHittable)
         }
         XCTAssertTrue(app.buttons["New thought"].firstMatch.isHittable)
-        capture("flow-typing-portrait", app: app)
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertEqual(input.value as? String, source)
         capture("flow-typing-wide-workspace", app: app)
