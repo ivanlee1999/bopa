@@ -292,7 +292,10 @@ final class NotebookStoreCouchTests: XCTestCase {
         try applyFromTheBoox(fromBoox)
 
         let written = try store.savePage(onCanvas, baselineStrokeIDs: [])
-        XCTAssertEqual(written.blocks.map(\.id), ["keep"], "the deleted block came back")
+        XCTAssertEqual(written.blocks.filter { $0.kind != TextVersions.kind }.map(\.id), ["keep"], "the deleted block came back")
+        XCTAssertTrue(written.blocks.contains {
+            $0.kind == TextVersions.kind && TextVersions.sourceID($0.id) == "gone" && $0.text == "gone"
+        }, "the removed source must remain recoverable without resurrecting the paragraph")
         XCTAssertEqual(written.deletedBlocks.map(\.id), ["gone"], "the tombstone was dropped")
     }
 

@@ -307,9 +307,9 @@ Content that is not ink: typed markdown, a placed picture, a recording, a groupi
 | field | meaning |
 |---|---|
 | `id` | merge key. Never reused — retyping a deleted paragraph mints a new id, the rule that makes remove-wins sound here as it is for a stroke. |
-| `kind` | `md` \| `image` \| `audio` \| `ink` \| `link`. Matches `[a-z][a-z0-9-]*`. An unrecognized value is **carried verbatim and rendered as a placeholder**, never dropped or coerced — this is what lets a fifth kind ship on one app before the other without §6.5 quarantining every page that uses it. |
+| `kind` | `md` \| `image` \| `audio` \| `ink` \| `link` \| `text-version`. Matches `[a-z][a-z0-9-]*`. An unrecognized value is **carried verbatim and rendered as a placeholder**, never dropped or coerced — this is what lets a new kind ship on one app before the other without §6.5 quarantining every page that uses it. |
 | `orderKey` | position in the page's flow; see below. Compared as UTF-8 bytes (§4). Empty is legal and sorts first. |
-| `text` | markdown **source**, for `kind: "md"`. Not a parsed tree, not rendered HTML, not attributed runs: those oblige two implementations to agree on a parser, which the vectors cannot pin and which a peer with a different flavour rewrites on re-encode. |
+| `text` | markdown **source**, for `kind: "md"`, or the exact retained source of a `text-version`. Not a parsed tree, not rendered HTML, not attributed runs: those oblige two implementations to agree on a parser, which the vectors cannot pin and which a peer with a different flavour rewrites on re-encode. |
 | `imageAssetId` | the `asset:<sha256>` holding the picture, for `kind: "image"`. |
 | `segments` | the recording, in playback order, for `kind: "audio"` — see §3.3.2. |
 | `strokeIds` | the `strokes[]` this block groups, for `kind: "ink"` and `kind: "link"`. The strokes **stay in `strokes[]`**; see below. |
@@ -783,16 +783,14 @@ or a newline. Every field before it is drawn from a grammar that excludes the se
 asset ids are UUID- or `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal,
 `kind` is normatively `[a-z][a-z0-9-]*`, and a link's targets are ids. With exactly one
 separator-bearing component, and it
-terminal, the map from block to key is injective and the order is genuinely total.
+terminal, distinct valid non-null values have distinct keys. When two block keys tie, compare
+an additional presence string for `startedAt`, `imageAssetId`, `targetNotebookId`,
+`targetPageId`, and `text`, in that order: `0` for absent and `1` for present. This resolves
+null versus empty text deterministically without changing any previously unequal-key winner.
 
-Two honest gaps in that claim, neither worth a wire change. An absent optional and an empty one
-render the same (`text` null versus `""`, `strokeIds` `[]` versus `[""]`), so two copies of a
-block differing *only* in that way tie, and `pick` keeps its first argument — reachable only for
-two copies with the same id from the same device in the same millisecond. And `deviceId` is
-free text that nothing validates; a device named with a `|` in it can collide two otherwise
-different keys. Both apps compute the identical string in every case, so the *outcome* still
-agrees on both sides; only the "distinct blocks never tie" guarantee is weaker than stated.
-The same two caveats apply to `strokeTiebreak` and `imageTiebreak`.
+Malformed values can still collide: `strokeIds` `[]` versus `[""]`, or an unvalidated
+`deviceId` containing `|`. Valid IDs exclude these forms. The analogous malformed-ID caveat
+also applies to `strokeTiebreak` and `imageTiebreak`.
 
 > Comparing a *decoded field's* string value, as `pen`, `pointsData` and `text` all do, is not the
 > same thing as comparing raw document text, which the note below forbids. The prohibition is on
@@ -846,6 +844,21 @@ Erasure beats drawing: a stroke present on one side and tombstoned on the other 
 absent from the result on both devices. Because stroke ids are never reused (a redraw
 mints a new id), "remove wins" cannot suppress later work. The same holds for a block, for the
 same reason: a retyped paragraph is a new block with a new id.
+
+Before the block union, retain both observed Markdown source heads as hidden `text-version`
+blocks when that id has different source values, changes kind, is tombstoned, or already has
+version history. Existing version blocks and version-id tombstones keep that history marker.
+The version id is `text-version:<source-block-id>:<lowercase SHA-256 of exact UTF-8 text>`;
+no whitespace or Unicode normalisation is applied. Copy every source field except `id` and
+`kind`, so identical-source snapshot metadata keeps the same LWW order. Apply the ordinary
+block-id tombstones after this step, including to version ids. Positioned text follows the same
+rule as flowing text, without changing its geometry.
+
+Version blocks stay outside the document's visible Markdown flow. Readers may expose them as
+previous or recovered versions, hiding a version equal to current source. Keep those equal
+snapshots in merge state: retaining only the loser, or discarding current-equal versions, makes
+the result depend on grouping when a deletion or a later same-text edit meets the page. This
+closure preserves source bytes without changing the visible LWW winner or adding wire fields.
 
 The block clause is the image clause with a different sort key, and the difference is the point.
 Strokes and images order by *when they were made*, because that decides which of two overlapping

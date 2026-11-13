@@ -249,7 +249,11 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
             if manager.canUndo { manager.undo() }
             XCTAssertTrue(model.textBlocks.isEmpty)
             XCTAssertTrue(model.saveNow())
-            XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: pageId).blocks.isEmpty)
+            let deleted = try store.loadPage(notebookId: notebookId, pageId: pageId)
+            XCTAssertTrue(deleted.blocks.filter { $0.kind != TextVersions.kind }.isEmpty)
+            XCTAssertTrue(deleted.blocks.contains {
+                $0.kind == TextVersions.kind && TextVersions.sourceID($0.id) == oldID && $0.text == draft
+            })
 
             XCTAssertTrue(manager.canRedo)
             if manager.canRedo { manager.redo() }
@@ -259,8 +263,9 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
             XCTAssertEqual(model.textBlocks.count, 1)
             XCTAssertTrue(model.saveNow())
             let saved = try store.loadPage(notebookId: notebookId, pageId: pageId)
-            XCTAssertEqual(saved.blocks.map(\.id), [restored.id])
-            XCTAssertEqual(saved.blocks.first?.text, draft)
+            let current = saved.blocks.filter { $0.kind != TextVersions.kind }
+            XCTAssertEqual(current.map(\.id), [restored.id])
+            XCTAssertEqual(current.first?.text, draft)
             XCTAssertTrue(saved.deletedBlocks.contains { $0.id == oldID })
         }
     }
@@ -302,7 +307,10 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
             XCTAssertTrue(model.textBlocks.isEmpty)
             XCTAssertFalse(manager.canUndo, "two sessions must require exactly two undos")
             XCTAssertTrue(model.saveNow())
-            XCTAssertTrue(try store.loadPage(notebookId: notebookId, pageId: pageId).blocks.isEmpty)
+            let deleted = try store.loadPage(notebookId: notebookId, pageId: pageId)
+            XCTAssertTrue(deleted.blocks.filter { $0.kind != TextVersions.kind }.isEmpty)
+            XCTAssertTrue(deleted.blocks.contains { $0.kind == TextVersions.kind && $0.text == originalText })
+            XCTAssertTrue(deleted.blocks.contains { $0.kind == TextVersions.kind && $0.text == editedText })
 
             XCTAssertTrue(manager.canRedo)
             if manager.canRedo { manager.redo() }
@@ -319,8 +327,9 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
             XCTAssertFalse(manager.canRedo, "two sessions must require exactly two redos")
             XCTAssertTrue(model.saveNow())
             let saved = try store.loadPage(notebookId: notebookId, pageId: pageId)
-            XCTAssertEqual(saved.blocks.map(\.id), [restored.id])
-            XCTAssertEqual(saved.blocks.map(\.text), [editedText])
+            let current = saved.blocks.filter { $0.kind != TextVersions.kind }
+            XCTAssertEqual(current.map(\.id), [restored.id])
+            XCTAssertEqual(current.map(\.text), [editedText])
             XCTAssertTrue(saved.deletedBlocks.contains { $0.id == deletedID })
         }
     }
@@ -377,7 +386,7 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
             XCTAssertEqual(model.textBlock(id: untouched.id), untouchedSnapshot)
             XCTAssertTrue(model.saveNow())
             let saved = try store.loadPage(notebookId: notebookId, pageId: pageId)
-            XCTAssertEqual(Set(saved.blocks.map(\.id)), Set([untouched.id, id]))
+            XCTAssertEqual(Set(saved.blocks.filter { $0.kind != TextVersions.kind }.map(\.id)), Set([untouched.id, id]))
         }
 
         // Leave the older Resize/Move/Edit actions untouched while Delete remints twice.
@@ -424,8 +433,10 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
         XCTAssertFalse(manager.canRedo)
         XCTAssertEqual(model.textBlocks.map(\.id), [untouched.id])
         XCTAssertTrue(model.saveNow())
-        XCTAssertEqual(try store.loadPage(notebookId: notebookId, pageId: pageId).blocks,
-                       [untouchedSnapshot])
+        let deleted = try store.loadPage(notebookId: notebookId, pageId: pageId)
+        XCTAssertEqual(deleted.blocks.filter { $0.kind != TextVersions.kind }, [untouchedSnapshot])
+        XCTAssertTrue(deleted.blocks.contains { $0.kind == TextVersions.kind && $0.text == "Original paragraph" })
+        XCTAssertTrue(deleted.blocks.contains { $0.kind == TextVersions.kind && $0.text == "Edited paragraph" })
     }
 
     func testExplicitLocalPageDeletionDiscardsItsDraftBeforeTheLandingPageArrives() throws {
@@ -553,8 +564,12 @@ final class CanvasTextSessionLifecycleTests: XCTestCase {
         XCTAssertEqual(model.textBlocks.map(\.id), [restored.id])
         XCTAssertTrue(model.saveNow())
         let saved = try store.loadPage(notebookId: notebookId, pageId: pageId)
-        XCTAssertEqual(saved.blocks.map(\.id), [restored.id])
-        XCTAssertEqual(saved.blocks.first?.text, restored.text)
+        let current = saved.blocks.filter { $0.kind != TextVersions.kind }
+        XCTAssertEqual(current.map(\.id), [restored.id])
+        XCTAssertEqual(current.first?.text, restored.text)
+        XCTAssertTrue(saved.blocks.contains {
+            $0.kind == TextVersions.kind && TextVersions.sourceID($0.id) == original.id && $0.text == "The original paragraph"
+        })
         XCTAssertTrue(saved.deletedBlocks.contains { $0.id == original.id })
     }
 }

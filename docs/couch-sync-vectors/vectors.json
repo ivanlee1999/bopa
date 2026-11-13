@@ -3262,7 +3262,7 @@
     {
       "name": "page-block-move-and-edit-both-survive",
       "kind": "page",
-      "why": "One device reorders a paragraph while the other fixes a typo in a different one. Both edits must survive. Under a page-level ordered array this fails: order would be a scalar, \u00a75.5 would hand the whole envelope to the later writer, and the move would be silently undone by an unrelated typo fix. Per-block keys make them two independent edits.",
+      "why": "One device reorders a paragraph while the other fixes a typo in a different one. Both edits must survive. Under a page-level ordered array this fails: order would be a scalar, \u00a75.5 would hand the whole envelope to the later writer, and the move would be silently undone by an unrelated typo fix. Per-block keys make them two independent edits. Hidden text-version blocks retain exact observed sources; the visible LWW result is unchanged.",
       "a": {
         "type": "page",
         "schema": 1,
@@ -3343,18 +3343,36 @@
           {
             "id": "b2",
             "orderKey": "a1",
-            "text": "Second paragraph, fixed.",
             "createdAt": "2026-09-01T09:30:00Z",
             "updatedAt": "2026-09-01T10:02:00Z",
-            "deviceId": "boox"
+            "deviceId": "boox",
+            "text": "Second paragraph, fixed."
+          },
+          {
+            "id": "text-version:b2:3fc3deaa2b3609eb7d096478e4e522fc071348be1b8e116ce204cff63c08af80",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph.",
+            "kind": "text-version"
+          },
+          {
+            "id": "text-version:b2:5a8382a3b821641c3b4141b16770f1e5a0017fa3f985e02a8e65d458b884f4ad",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:02:00Z",
+            "deviceId": "boox",
+            "text": "Second paragraph, fixed.",
+            "kind": "text-version"
           },
           {
             "id": "b1",
             "orderKey": "b9",
-            "text": "First paragraph.",
             "createdAt": "2026-09-01T09:30:00Z",
             "updatedAt": "2026-09-01T10:01:00Z",
-            "deviceId": "ipad"
+            "deviceId": "ipad",
+            "text": "First paragraph."
           }
         ],
         "deletedBlocks": [],
@@ -3893,7 +3911,7 @@
     {
       "name": "page-block-edit-lww",
       "kind": "page",
-      "why": "The same paragraph edited on both devices. The later write wins the block whole \u2014 the granularity of the conflict is the paragraph, not the page. Recovering the losing text is the applier's job (\u00a76.1b), not the merge's.",
+      "why": "The same paragraph edited on both devices. The later write wins the block whole \u2014 the granularity of the conflict is the paragraph, not the page. Recovering the losing text is the applier's job (\u00a76.1b), not the merge's. Hidden text-version blocks retain exact observed sources; the visible LWW result is unchanged.",
       "a": {
         "type": "page",
         "schema": 1,
@@ -3958,10 +3976,28 @@
           {
             "id": "b1",
             "orderKey": "a0",
-            "text": "milk, eggs and bread",
             "createdAt": "2026-09-01T09:30:00Z",
             "updatedAt": "2026-09-01T10:04:00Z",
-            "deviceId": "boox"
+            "deviceId": "boox",
+            "text": "milk, eggs and bread"
+          },
+          {
+            "id": "text-version:b1:4b1d054fef801b3b0a42f8f38c6b33f1546c45a5821d71d956e5987087dd2f72",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:00:00Z",
+            "deviceId": "ipad",
+            "text": "milk and eggs",
+            "kind": "text-version"
+          },
+          {
+            "id": "text-version:b1:bb791097c5420074346e249c6d7557c3900f8ef8945602580f28578ec662f6ab",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:04:00Z",
+            "deviceId": "boox",
+            "text": "milk, eggs and bread",
+            "kind": "text-version"
           }
         ],
         "deletedBlocks": [],
@@ -3973,7 +4009,7 @@
     {
       "name": "page-block-delete-beats-edit",
       "kind": "page",
-      "why": "One device still holds a block the other deleted. The tombstone wins on both. Sound for the same reason as a stroke: a retyped paragraph is a new block with a new id, so remove-wins can never suppress later work.",
+      "why": "One device still holds a block the other deleted. The tombstone wins on both. Sound for the same reason as a stroke: a retyped paragraph is a new block with a new id, so remove-wins can never suppress later work. Hidden text-version blocks retain exact observed sources; the visible LWW result is unchanged.",
       "a": {
         "type": "page",
         "schema": 1,
@@ -4051,10 +4087,19 @@
           {
             "id": "b1",
             "orderKey": "a0",
-            "text": "First paragraph.",
             "createdAt": "2026-09-01T09:30:00Z",
             "updatedAt": "2026-09-01T09:30:00Z",
-            "deviceId": "ipad"
+            "deviceId": "ipad",
+            "text": "First paragraph."
+          },
+          {
+            "id": "text-version:b2:3fc3deaa2b3609eb7d096478e4e522fc071348be1b8e116ce204cff63c08af80",
+            "orderKey": "a1",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T09:30:00Z",
+            "deviceId": "ipad",
+            "text": "Second paragraph.",
+            "kind": "text-version"
           }
         ],
         "deletedBlocks": [
@@ -4462,7 +4507,7 @@
     {
       "name": "page-block-edit-same-instant-tiebreak",
       "kind": "page",
-      "why": "The same block written in the same millisecond on both devices. `blockTiebreak` decides, by UTF-8 bytes, with `text` last because it is the only component that can contain the separator. Both implementations must pick the same one or they diverge in silence.",
+      "why": "The same block written in the same millisecond on both devices. `blockTiebreak` decides, by UTF-8 bytes, with `text` last because it is the only component that can contain the separator. Both implementations must pick the same one or they diverge in silence. Hidden text-version blocks retain exact observed sources; the visible LWW result is unchanged.",
       "a": {
         "type": "page",
         "schema": 1,
@@ -4527,10 +4572,28 @@
           {
             "id": "b-tie",
             "orderKey": "a0",
-            "text": "written on the iPad",
             "createdAt": "2026-09-01T09:30:00Z",
             "updatedAt": "2026-09-01T10:00:00Z",
-            "deviceId": "ipad"
+            "deviceId": "ipad",
+            "text": "written on the iPad"
+          },
+          {
+            "id": "text-version:b-tie:a6277322c0e973b9eb10c3940f86c1edb746f1b5e03b5b0fe2d30c9931ae9b90",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:00:00Z",
+            "deviceId": "ipad",
+            "text": "written on the iPad",
+            "kind": "text-version"
+          },
+          {
+            "id": "text-version:b-tie:d753c1588bb8dbe6355ec0c92d338901b6afd01a13e19959afa79f44871e7750",
+            "orderKey": "a0",
+            "createdAt": "2026-09-01T09:30:00Z",
+            "updatedAt": "2026-09-01T10:00:00Z",
+            "deviceId": "boox",
+            "text": "written on the BOOX",
+            "kind": "text-version"
           }
         ],
         "deletedBlocks": [],
@@ -5704,6 +5767,518 @@
           "pageHeight": 1000
         }
       ]
+    },
+    {
+      "name": "page-text-version-unicode-source-bytes",
+      "kind": "page",
+      "why": "Canonical-equivalent Unicode is still distinct authored source; hash and recovery do not normalize it.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "text": "caf\u00e9",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "text": "cafe\u0301",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "text": "caf\u00e9",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "text-version:p-source:81ef060bcd98adc7824eb5c1ada83c32491b16018e11e79f00ab9d09e04b015a",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "cafe\u0301",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "text-version:p-source:850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "caf\u00e9",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-text-version-remove-wins",
+      "kind": "page",
+      "why": "Removing the original and a particular version cannot resurrect either; the other exact source stays recoverable.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "text": "two",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:02Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "text-version:p-source:3fc4ccfe745870e2c0d99f71f30ff0656c8dedd41cc1d7d3d376b0dbe685e2f3",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "two",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:02Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "text-version:p-source:7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "one",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [],
+        "deletedBlocks": [
+          {
+            "id": "p-source",
+            "deletedAt": "2026-11-12T10:00:09Z"
+          },
+          {
+            "id": "text-version:p-source:7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed",
+            "deletedAt": "2026-11-12T10:00:09Z"
+          }
+        ],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "text-version:p-source:3fc4ccfe745870e2c0d99f71f30ff0656c8dedd41cc1d7d3d376b0dbe685e2f3",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "two",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:02Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [
+          {
+            "id": "p-source",
+            "deletedAt": "2026-11-12T10:00:09Z"
+          },
+          {
+            "id": "text-version:p-source:7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed",
+            "deletedAt": "2026-11-12T10:00:09Z"
+          }
+        ],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-text-version-kind-change",
+      "kind": "page",
+      "why": "A kind change retains its own fields and the previous Markdown source; unknown kinds are never coerced.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "text": "typed source",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "future-kind",
+            "orderKey": "a",
+            "text": null,
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:02Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "future-kind",
+            "orderKey": "a",
+            "text": null,
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:02Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "text-version:p-source:3ca5c334c7c2b170a81ae5b01e52dd1b8eb0aa40ac26a295532495e79fb13aa1",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "typed source",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-text-version-history-closes-same-source-head",
+      "kind": "page",
+      "why": "Once history exists, later equal-text head metadata joins it too, making merge regrouping associative.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "text": "one",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:03Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "text-version:p-source:7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "one",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:01Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "text-version:p-source:3fc4ccfe745870e2c0d99f71f30ff0656c8dedd41cc1d7d3d376b0dbe685e2f3",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "two",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:02Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "b",
+            "text": "one",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:04Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "text-version:p-source:3fc4ccfe745870e2c0d99f71f30ff0656c8dedd41cc1d7d3d376b0dbe685e2f3",
+            "kind": "text-version",
+            "orderKey": "a",
+            "text": "two",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:02Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "b",
+            "text": "one",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:04Z",
+            "deviceId": "boox"
+          },
+          {
+            "id": "text-version:p-source:7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed",
+            "kind": "text-version",
+            "orderKey": "b",
+            "text": "one",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:04Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      }
+    },
+    {
+      "name": "page-text-version-null-empty-tied-source",
+      "kind": "page",
+      "why": "Absent and empty Markdown sources at the same clock have a deterministic winner; the empty source remains recoverable.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:09Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:09Z",
+            "deviceId": "boox",
+            "text": ""
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:09Z",
+            "deviceId": "boox",
+            "text": ""
+          },
+          {
+            "id": "text-version:p-source:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "kind": "text-version",
+            "orderKey": "a",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:09Z",
+            "deviceId": "boox",
+            "text": ""
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      }
     }
   ]
 }

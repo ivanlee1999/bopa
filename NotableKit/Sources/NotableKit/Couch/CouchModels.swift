@@ -287,8 +287,8 @@ public struct CouchAudioSegment: Codable, Equatable, Sendable {
 /// block that declares both sits at that point on the canvas, like a placed image.
 ///
 /// Blocks merge exactly the way `images` do — union by id, tombstones win, whole-element
-/// last-writer-wins — with one difference: they are ordered by `orderKey` rather than by creation
-/// time. See `CouchMerge.mergePage`.
+/// last-writer-wins — ordered by `orderKey` rather than creation time. Divergent or removed
+/// Markdown source also retains hidden `TextVersions` snapshots.
 public struct CouchBlock: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, kind, orderKey, text, imageAssetId, segments, strokeIds
@@ -301,7 +301,7 @@ public struct CouchBlock: Codable, Equatable, Sendable {
     /// same rule a redrawn stroke follows, and that is what makes remove-wins sound here.
     public var id: String
 
-    /// `md` | `image` | `audio` | `ink` | `link`.
+    /// `md` | `image` | `audio` | `ink` | `link` | `text-version`.
     ///
     /// A string rather than an enum, and an unrecognized value is carried verbatim and drawn as a
     /// placeholder — never dropped, never coerced. This is the field that lets a fifth kind ship on
@@ -324,7 +324,7 @@ public struct CouchBlock: Codable, Equatable, Sendable {
     /// other. Empty sorts first and is legal: a writer with no opinion is not a decode failure.
     public var orderKey: String
 
-    /// Markdown *source*, for `kind == "md"`; nil otherwise.
+    /// Markdown *source*, for `kind == "md"` or a retained `text-version` snapshot.
     ///
     /// Not a parsed tree, not rendered HTML, not a table of attributed runs. Those would oblige two
     /// implementations to agree on a parser — which the conformance vectors could not pin, and
@@ -390,6 +390,27 @@ public struct CouchBlock: Codable, Equatable, Sendable {
     public var updatedAt: String
     /// Which device last wrote this block. The first component of `blockTiebreak`.
     public var deviceId: String
+
+    /// Sync uses equality to skip writes. Swift's synthesized String equality would equate
+    /// different Unicode source bytes and let that optimisation skip a deterministic winner.
+    public static func == (a: CouchBlock, b: CouchBlock) -> Bool {
+        TextVersions.sameSource(a.id, b.id) &&
+        TextVersions.sameSource(a.kind, b.kind) &&
+        TextVersions.sameSource(a.orderKey, b.orderKey) &&
+        TextVersions.sameSource(a.text, b.text) &&
+        TextVersions.sameSource(a.imageAssetId, b.imageAssetId) &&
+        TextVersions.sameSource(a.startedAt, b.startedAt) &&
+        TextVersions.sameSource(a.targetNotebookId, b.targetNotebookId) &&
+        TextVersions.sameSource(a.targetPageId, b.targetPageId) &&
+        TextVersions.sameSource(a.createdAt, b.createdAt) &&
+        TextVersions.sameSource(a.updatedAt, b.updatedAt) &&
+        TextVersions.sameSource(a.deviceId, b.deviceId) &&
+        a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height &&
+        a.strokeIds.count == b.strokeIds.count && zip(a.strokeIds, b.strokeIds).allSatisfy { pair in TextVersions.sameSource(pair.0, pair.1) } &&
+        a.segments.count == b.segments.count && zip(a.segments, b.segments).allSatisfy { pair in
+            TextVersions.sameSource(pair.0.assetId, pair.1.assetId) && pair.0.startMs == pair.1.startMs && pair.0.durationMs == pair.1.durationMs
+        }
+    }
 
     public init(
         id: String,

@@ -154,7 +154,10 @@ final class TextBoxEditingTests: XCTestCase {
         XCTAssertTrue(model.saveNow())
 
         let after = try reloadPage(model)
-        XCTAssertTrue(after.blocks.isEmpty)
+        XCTAssertTrue(after.blocks.filter { $0.kind != TextVersions.kind }.isEmpty)
+        XCTAssertTrue(after.blocks.contains {
+            $0.kind == TextVersions.kind && TextVersions.sourceID($0.id) == written.id && $0.text == "delete me"
+        })
         // Without the tombstone, absence alone cannot be told from "that block has not reached
         // this device yet", and the peer's copy would return on the next merge.
         XCTAssertEqual(after.deletedBlocks.map(\.id), [written.id])
@@ -168,7 +171,10 @@ final class TextBoxEditingTests: XCTestCase {
         XCTAssertTrue(model.saveNow())
 
         let after = try reloadPage(model)
-        XCTAssertTrue(after.blocks.isEmpty)
+        XCTAssertTrue(after.blocks.filter { $0.kind != TextVersions.kind }.isEmpty)
+        XCTAssertTrue(after.blocks.contains {
+            $0.kind == TextVersions.kind && TextVersions.sourceID($0.id) == written.id && $0.text == "temporary"
+        })
         XCTAssertEqual(after.deletedBlocks.map(\.id), [written.id])
     }
 

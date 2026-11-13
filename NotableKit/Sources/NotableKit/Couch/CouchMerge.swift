@@ -248,7 +248,8 @@ public enum CouchMerge {
     ) -> (blocks: [CouchBlock], deleted: [CouchTombstone]) {
         let deleted = unionTombstones(a.deleted, b.deleted)
         let removed = Set(deleted.map(\.id))
-        let blocks = unionById(a.blocks, b.blocks, id: \.id) { x, y in
+        let versions = TextVersions.recoveries(a.blocks, b.blocks, removed: removed)
+        let blocks = unionById(a.blocks + versions, b.blocks, id: \.id) { x, y in
             preferredBlock(x, y)
         }
         .filter { !removed.contains($0.id) }
@@ -274,7 +275,9 @@ public enum CouchMerge {
     private static func preferredBlock(_ x: CouchBlock, _ y: CouchBlock) -> CouchBlock {
         let (mx, my) = (millis(x.updatedAt), millis(y.updatedAt))
         if mx != my { return mx > my ? x : y }
-        return byteCompare(blockTiebreak(x), blockTiebreak(y)) >= 0 ? x : y
+        let key = byteCompare(blockTiebreak(x), blockTiebreak(y))
+        if key != 0 { return key > 0 ? x : y }
+        return byteCompare(blockPresence(x), blockPresence(y)) >= 0 ? x : y
     }
 
     /// Total order over every field of a stroke. Floats go in as their IEEE-754 bit patterns:
@@ -307,8 +310,8 @@ public enum CouchMerge {
     /// before it is drawn from a grammar that excludes `|` — ids and asset ids are UUID- or
     /// `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal, and `kind` is
     /// normatively `[a-z][a-z0-9-]*`, and a link's targets are ids — so with exactly one
-    /// separator-bearing component, and it terminal, the map from block to key is injective and
-    /// this order is genuinely total.
+    /// separator-bearing component, and it terminal, only absent/empty optional strings can
+    /// collide. `blockPresence` resolves that collision after comparing the original key.
     /// Broken into named steps with explicit types rather than written as one array literal: the
     /// literal mixed `String.init` — which is overloaded dozens of ways — with interpolation inside
     /// a closure, and the type checker gave up on it ("unable to type-check this expression in
@@ -326,6 +329,12 @@ public enum CouchMerge {
             segments, strokeIDs, b.text ?? "",
         ]
         return parts.joined(separator: "|")
+    }
+
+    /// Only resolves the old key's absent/empty collision; other winners stay unchanged.
+    private static func blockPresence(_ b: CouchBlock) -> String {
+        [b.startedAt, b.imageAssetId, b.targetNotebookId, b.targetPageId, b.text]
+            .map { $0 == nil ? "0" : "1" }.joined()
     }
 
     /// An optional page-unit coordinate as the tiebreak spells it: its decimal form, or the empty
