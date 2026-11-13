@@ -122,7 +122,8 @@ struct LibraryView: View {
                             narrow: inlineEditor && openNotebook != nil,
                             navigationRevision: navigationRevision,
                             toggleSidebar: { showsSidebar = !sidebarVisible }, openNotebook: open,
-                            selectTopic: { selectDestination(.topic($0)) })
+                            selectTopic: { selectDestination(.topic($0)) },
+                            showAllTopics: { selectDestination(.topics) })
                     } else {
                         FolderContentsView(
                             folderId: selection?.folderId,
@@ -682,7 +683,7 @@ private struct FolderContentsView: View {
         NotebookContentCard(notebook: notebook, layout: browserLayout, edit: { pageID in
             if let pageID { store.rememberOpenedPage(pageID, in: notebook.notebookId) }
             openNotebook(notebook.notebookId)
-        }, topic: { selection = .topic(journalTopicKey($0)) }, accessory: AnyView(notebookOptions(notebook)))
+        }, topic: { selection = .topic(journalTopicCanonicalKey($0)) }, accessory: AnyView(notebookOptions(notebook)))
             .contextMenu { notebookMenu(notebook) }
     }
 

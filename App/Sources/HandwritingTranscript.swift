@@ -82,7 +82,8 @@ final class HandwritingTranscriptIndex: ObservableObject {
 
     static func key(_ notebookID: String, _ pageID: String) -> String { "\(notebookID)/\(pageID)" }
 
-    func setDrawing(_ drawing: Bool, owner: UUID, notebookID: String, pageID: String?) {
+    func setDrawing(_ drawing: Bool, owner: UUID, notebookID: String, pageID: String?, store: NotebookStore? = nil) {
+        store?.setAutomaticTagDrawing(drawing, owner: owner)
         guard drawing, let pageID else {
             guard activeDrawing.removeValue(forKey: owner) != nil, activeDrawing.isEmpty else { return }
             for request in Array(requested.values) { self.request(notebookID: request.notebookID, pageID: request.pageID, store: request.store, delay: request.delay) }
@@ -117,9 +118,14 @@ final class HandwritingTranscriptIndex: ObservableObject {
                 self.records[key] = HandwritingTranscript(fingerprint: fingerprint, text: ""); return
             }
             let url = store.rootURL.appendingPathComponent(".bopa-recognition/\(notebookID)/\(pageID).json")
-            if let record = self.records[key], record.fingerprint == fingerprint { return }
+            if let record = self.records[key], record.fingerprint == fingerprint {
+                store.applyAutomaticTopics(notebookID: notebookID, pageID: pageID, recognizedText: record.text, inkFingerprint: fingerprint)
+                return
+            }
             if let data = try? Data(contentsOf: url), let cached = try? JSONDecoder().decode(HandwritingTranscript.self, from: data), cached.fingerprint == fingerprint {
-                self.records[key] = cached; return
+                self.records[key] = cached
+                store.applyAutomaticTopics(notebookID: notebookID, pageID: pageID, recognizedText: cached.text, inkFingerprint: fingerprint)
+                return
             }
             let image = HandwritingImage.png(PencilKitBridge.drawing(from: page.strokes))
             do {
@@ -133,6 +139,7 @@ final class HandwritingTranscriptIndex: ObservableObject {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try JSONEncoder().encode(record).write(to: url, options: .atomic)
                 self.records[key] = record
+                store.applyAutomaticTopics(notebookID: notebookID, pageID: pageID, recognizedText: text, inkFingerprint: fingerprint)
             } catch { /* Ink stays visible; the next request can retry this disposable cache. */ }
         }
         pending[key] = Pending(token: token, task: task)

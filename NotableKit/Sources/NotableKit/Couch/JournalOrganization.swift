@@ -129,6 +129,9 @@ public func journalTopicKey(_ value: String) -> String {
     journalFold(journalTopicName(value))
 }
 
+/// A stored canonical label may itself begin with #; only raw tag-field input strips it.
+public func journalTopicCanonicalKey(_ name: String) -> String { journalFold(name) }
+
 private func journalFold(_ value: String) -> String {
     String(String.UnicodeScalarView(value.unicodeScalars.map {
         (65...90).contains($0.value) ? UnicodeScalar($0.value + 32)! : $0
@@ -222,6 +225,83 @@ public final class JournalOrganizationStore: @unchecked Sendable {
             entry.topics[key] = JournalTopic(name: knownName, present: present, counter: next.counter, writer: next.writer)
             try entry.validate()
             next.entries[notebookID] = entry
+            try save(next); state = next
+        }
+    }
+
+    /// Revisions are per assignment, including assignments on notes in the Trash. Publish the
+    /// complete rename in one atomic write so a failure cannot remove half the old assignments.
+    public func renameTopic(key: String, to name: String, notebookIDs: Set<String>? = nil) throws {
+        try updateTopic(key: key, replacement: name, notebookIDs: notebookIDs)
+    }
+
+    public func removeTopic(key: String, notebookIDs: Set<String>? = nil) throws {
+        try updateTopic(key: key, replacement: nil, notebookIDs: notebookIDs)
+    }
+
+    /// Automatic suggestions never replace a manual assignment or its removal tombstone.
+    @discardableResult
+    public func addAutomaticTopics(notebookID: String, names: [String], createdAt: Int64) throws -> Bool {
+        try lock.withLock {
+            var next = state
+            var entry = next.entries[notebookID] ?? JournalOrganization(notebookId: notebookID, date: nil, createdAt: createdAt)
+            var additions: [String: String] = [:]
+            for raw in names {
+                // Matcher output is canonical label text, not raw tag-field input. A leading
+                // hash can be part of an existing label and must retain its own synced key.
+                let name = raw.unicodeScalars.split { [9, 10, 11, 12, 13, 32].contains($0.value) }
+                    .map(String.init).joined(separator: " ").precomposedStringWithCanonicalMapping
+                let key = journalFold(name)
+                guard !key.isEmpty, entry.topics[key] == nil else { continue }
+                additions[key] = name
+            }
+            guard !additions.isEmpty else { return false }
+            let observed = state.entries.values.flatMap { $0.topics.values }.map(\.counter).max() ?? 0
+            guard max(next.counter, observed) < journalMaxCounter else { throw JournalOrganizationError.counterExhausted }
+            next.counter = max(next.counter, observed) + 1
+            for (key, name) in additions {
+                entry.topics[key] = JournalTopic(name: name, present: true, counter: next.counter, writer: next.writer)
+            }
+            try entry.validate(); next.entries[notebookID] = entry
+            try save(next); state = next
+            return true
+        }
+    }
+
+    private func updateTopic(key: String, replacement: String?, notebookIDs: Set<String>?) throws {
+        try lock.withLock {
+            guard !key.isEmpty else { throw JournalOrganizationError.invalidRecord }
+            let name = replacement.map(journalTopicName)
+            if let name, name.isEmpty { throw JournalOrganizationError.invalidRecord }
+            let target = name.map(journalFold)
+            let destinationName = target == key ? name : target.flatMap { target in
+                state.entries.filter { notebookIDs?.contains($0.key) != false }.values
+                    .compactMap { $0.topics[target] }.filter(\.present)
+                    .map(\.name).sorted(by: journalLess).first
+            } ?? name
+            let affected = state.entries.filter { id, entry in
+                guard notebookIDs?.contains(id) != false else { return false }
+                guard let topic = entry.topics[key], topic.present else { return false }
+                return name.map { !journalEqual(topic.name, $0) } ?? true
+            }
+            guard !affected.isEmpty else { return }
+            var next = state
+            let observed = state.entries.values.flatMap { $0.topics.values }.map(\.counter).max() ?? 0
+            guard max(next.counter, observed) < journalMaxCounter else { throw JournalOrganizationError.counterExhausted }
+            next.counter = max(next.counter, observed) + 1
+            for (id, original) in affected {
+                var entry = original
+                if target != key {
+                    var removed = entry.topics[key]!
+                    removed.present = false; removed.counter = next.counter; removed.writer = next.writer
+                    entry.topics[key] = removed
+                }
+                if let destinationName, let target, target == key || entry.topics[target]?.present != true {
+                    entry.topics[target] = JournalTopic(name: destinationName, present: true, counter: next.counter, writer: next.writer)
+                }
+                try entry.validate()
+                next.entries[id] = entry
+            }
             try save(next); state = next
         }
     }

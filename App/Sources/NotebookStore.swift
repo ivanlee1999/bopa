@@ -44,6 +44,14 @@ final class NotebookStore: ObservableObject {
     /// test can stamp from a clock it controls.
     let clock: SyncClock
     private let preferences: UserDefaults
+    private struct AutomaticTopicRequest {
+        var notebookID: String; var pageID: String?; var recognizedText: String?; var inkFingerprint: String?
+        var source: String; var matchingText: String
+    }
+    private var automaticTopicRequests: [String: AutomaticTopicRequest] = [:]
+    private var automaticTopicTasks: [String: (token: UUID, task: Task<Void, Never>)] = [:]
+    private var automaticDrawingOwners: Set<UUID> = []
+    private var automaticInk: [String: [StrokeDTO]] = [:]
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -204,13 +212,141 @@ final class NotebookStore: ObservableObject {
     }
 
     func setJournalTopic(notebookID: String, name: String, present: Bool) throws {
-        guard let organization, let manifest = manifest(id: notebookID) else {
-            throw JournalOrganizationError.missingRecord
-        }
+        guard let organization else { throw JournalOrganizationError.missingRecord }
+        let manifest = try liveRenameManifest(notebookID)
         try organization.setTopic(notebookID: notebookID, name: name, present: present,
             createdAt: Int64((NotableDate.parse(manifest.createdAt) ?? Date()).timeIntervalSince1970 * 1000))
         journalEntries = organization.entries()
         NotificationCenter.default.post(name: Self.didChangeLocallyNotification, object: nil)
+    }
+
+    func renameJournalTopic(key: String, to name: String) throws {
+        cancelAutomaticTopics()
+        guard let organization else { throw JournalOrganizationError.missingRecord }
+        try organization.renameTopic(key: key, to: name, notebookIDs: existingJournalNotebookIDs())
+        publishJournalChange()
+    }
+
+    func removeJournalTopic(key: String) throws {
+        cancelAutomaticTopics()
+        guard let organization else { throw JournalOrganizationError.missingRecord }
+        try organization.removeTopic(key: key, notebookIDs: existingJournalNotebookIDs())
+        publishJournalChange()
+    }
+
+    private func publishJournalChange() {
+        journalEntries = organization?.entries() ?? [:]
+        NotificationCenter.default.post(name: Self.didChangeLocallyNotification, object: nil)
+    }
+
+    private func existingJournalNotebookIDs() -> Set<String> {
+        let directories = (try? FileManager.default.contentsOfDirectory(at: rootURL.appendingPathComponent("notebooks"), includingPropertiesForKeys: nil)) ?? []
+        return Set(directories.compactMap { readManifestFromDisk($0.lastPathComponent)?.notebookId })
+    }
+
+    func setAutomaticTagsEnabled(_ enabled: Bool) {
+        preferences.set(enabled, forKey: "journal.automaticTags")
+        if !enabled { cancelAutomaticTopics() }
+    }
+
+    private func cancelAutomaticTopics() {
+        for job in automaticTopicTasks.values { job.task.cancel() }
+        automaticTopicTasks.removeAll(); automaticTopicRequests.removeAll(); automaticInk.removeAll()
+    }
+
+    func setAutomaticTagDrawing(_ drawing: Bool, owner: UUID) {
+        if drawing {
+            automaticDrawingOwners.insert(owner)
+            for job in automaticTopicTasks.values { job.task.cancel() }
+            automaticTopicTasks.removeAll()
+        } else {
+            guard automaticDrawingOwners.remove(owner) != nil, automaticDrawingOwners.isEmpty else { return }
+            for request in Array(automaticTopicRequests.values) {
+                applyAutomaticTopics(notebookID: request.notebookID, pageID: request.pageID,
+                    recognizedText: request.recognizedText, inkFingerprint: request.inkFingerprint,
+                    localSource: request.source, matchingText: request.matchingText)
+            }
+        }
+    }
+
+    /// Called only by durable local saves and newly recognized eligible local ink. A delayed
+    /// result rechecks the exact source and live context before touching organization metadata.
+    @discardableResult
+    func applyAutomaticTopics(notebookID: String, pageID: String? = nil, recognizedText: String? = nil,
+                              inkFingerprint: String? = nil, localSource: String? = nil,
+                              matchingText: String? = nil, delay: Duration = .milliseconds(350)) -> Task<Void, Never> {
+        guard preferences.object(forKey: "journal.automaticTags") as? Bool != false else { return Task {} }
+        let key = "\(notebookID)/\(pageID ?? "title")", token = UUID()
+        var request = AutomaticTopicRequest(notebookID: notebookID, pageID: pageID, recognizedText: recognizedText,
+            inkFingerprint: inkFingerprint, source: localSource ?? "", matchingText: matchingText ?? "")
+        if recognizedText != nil, automaticInk[key] == nil { return Task {} }
+        if recognizedText != nil, (try? automaticTopicSource(request)) == nil { return Task {} }
+        if recognizedText == nil, let pending = automaticTopicRequests[key], pending.recognizedText != nil {
+            request.recognizedText = pending.recognizedText; request.inkFingerprint = pending.inkFingerprint
+        }
+        if localSource == nil {
+            guard let current = try? automaticTopicSource(request) else { return Task {} }
+            request.source = current.text
+        }
+        if matchingText == nil {
+            request.matchingText = recognizedText == nil ? request.source : ""
+            if let pending = automaticTopicRequests[key], TextVersions.sameSource(pending.source, request.source) {
+                request.matchingText += "\n" + pending.matchingText
+            }
+            if let recognized = request.recognizedText { request.matchingText += "\n" + recognized }
+        } else if recognizedText == nil, let recognized = request.recognizedText {
+            request.matchingText += "\n" + recognized
+        }
+        automaticTopicRequests[key] = request
+        automaticTopicTasks[key]?.task.cancel()
+        guard automaticDrawingOwners.isEmpty else { automaticTopicTasks[key] = nil; return Task {} }
+        let task = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            guard let self else { return }
+            defer {
+                if self.automaticTopicTasks[key]?.token == token {
+                    self.automaticTopicTasks[key] = nil; self.automaticTopicRequests[key] = nil
+                }
+            }
+            guard !Task.isCancelled, self.automaticDrawingOwners.isEmpty,
+                  self.preferences.object(forKey: "journal.automaticTags") as? Bool != false,
+                  let source = try? self.automaticTopicSource(request), TextVersions.sameSource(source.text, request.source),
+                  let organization = self.organization else { return }
+            let existing = Set(self.notebooks.map(\.notebookId))
+            let known = organization.entries().values.filter { existing.contains($0.notebookId) }.flatMap(\.visibleTopics)
+            let text = request.matchingText
+            let names = await Task.detached(priority: .utility) { contentTags(text: text, known: known) }.value
+            guard !Task.isCancelled, self.automaticDrawingOwners.isEmpty,
+                  self.preferences.object(forKey: "journal.automaticTags") as? Bool != false,
+                  let current = try? self.automaticTopicSource(request), TextVersions.sameSource(current.text, source.text) else { return }
+            do {
+                let changed = try organization.addAutomaticTopics(notebookID: notebookID, names: names, createdAt: current.createdAt)
+                if request.recognizedText != nil { self.automaticInk[key] = nil }
+                if changed { self.publishJournalChange() }
+            } catch { self.journalError = "Could not add automatic tags: \(error.localizedDescription)" }
+        }
+        automaticTopicTasks[key] = (token, task)
+        return task
+    }
+
+    private func automaticTopicSource(_ request: AutomaticTopicRequest) throws -> (text: String, createdAt: Int64) {
+        let manifest = try liveRenameManifest(request.notebookID)
+        let createdAt = Int64((NotableDate.parse(manifest.createdAt) ?? Date()).timeIntervalSince1970 * 1000)
+        guard let pageID = request.pageID else { return (manifest.title, createdAt) }
+        guard manifest.pageIds.contains(pageID), !manifest.deletedPageIds.contains(where: { $0.id == pageID }),
+              let page = readPageFromDisk(notebookId: request.notebookID, pageId: pageID) else { throw CocoaError(.fileNoSuchFile) }
+        if request.recognizedText != nil {
+            let key = "\(request.notebookID)/\(pageID)"
+            guard let fingerprint = request.inkFingerprint, let eligible = automaticInk[key],
+                  HandwritingTranscript.fingerprint(eligible) == fingerprint,
+                  HandwritingTranscript.fingerprint(page.strokes) == fingerprint else { throw CocoaError(.fileNoSuchFile) }
+        }
+        return (automaticTopicText(page), createdAt)
+    }
+
+    private func automaticTopicText(_ page: PageFile) -> String {
+        let typed = page.blocks.filter { $0.kind == "md" }.compactMap(\.text).joined(separator: "\n\n")
+        return [page.title ?? "", typed, ""].joined(separator: "\n")
     }
 
     func refreshJournal() { journalEntries = organization?.entries() ?? [:] }
@@ -424,6 +560,19 @@ final class NotebookStore: ObservableObject {
         else {
             refresh()
             throw PageRemovedDuringSaveError()
+        }
+        if preferences.object(forKey: "journal.automaticTags") as? Bool != false, page.strokes != onDisk?.strokes {
+            let key = "\(notebookId)/\(page.id)"
+            automaticInk[key] = page.strokes
+            automaticTopicRequests[key]?.recognizedText = nil; automaticTopicRequests[key]?.inkFingerprint = nil
+        }
+        let authored = page.blocks.filter { block in
+            guard block.kind == "md", let text = block.text else { return false }
+            return !TextVersions.sameSource(onDisk?.blocks.first(where: { $0.id == block.id })?.text, text)
+        }.compactMap(\.text).joined(separator: "\n\n")
+        if !authored.isEmpty {
+            applyAutomaticTopics(notebookID: notebookId, pageID: page.id,
+                localSource: automaticTopicText(page), matchingText: authored)
         }
         return page
     }
@@ -899,6 +1048,8 @@ final class NotebookStore: ObservableObject {
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: pageId), options: .atomic)
         refreshAfterLocalChange(documents: [CouchDocID.page(pageId)])
+        applyAutomaticTopics(notebookID: notebookId, pageID: pageId,
+            localSource: automaticTopicText(page), matchingText: title ?? "")
     }
 
     /// Thrown rather than silently ignored, so the overview can say why the button did nothing.
@@ -926,6 +1077,7 @@ final class NotebookStore: ObservableObject {
         manifest.updatedBy = deviceID
         try writeManifest(manifest)
         refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
+        applyAutomaticTopics(notebookID: id, localSource: manifest.title, matchingText: manifest.title)
     }
 
     private func liveRenameManifest(_ id: String) throws -> NotebookManifest {
@@ -1042,6 +1194,11 @@ final class NotebookStore: ObservableObject {
     func trashNotebook(id: String) throws {
         try LocalTrash.addNotebook(id, at: clock.now(), root: rootURL)
         try touchNotebook(id)
+    }
+
+    func trashJournalNotebook(id: String) throws {
+        _ = try liveRenameManifest(id)
+        try trashNotebook(id: id)
     }
 
     /// Throw a folder away. Only the folder itself is marked — its contents become unreachable

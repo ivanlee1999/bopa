@@ -12,11 +12,15 @@ struct JournalLibraryView: View {
     let toggleSidebar: () -> Void
     let openNotebook: (String) -> Void
     var selectTopic: ((String) -> Void)?
+    var showAllTopics: (() -> Void)?
     @State private var selectedDay = JournalDate.key(Date())
     @State private var showingCalendar = false
     @State private var jumpRevision = 0
     @State private var selectedTopic: String?
     @State private var editing: String?
+    @State private var trashTarget: NotebookManifest?
+    @State private var showingTrash = false
+    @State private var managingTags = false
     @State private var error: String?
     @AppStorage("library.layout") private var layoutKey = "feed"
     @AppStorage("library.previewContent") private var previewContent = "ink"
@@ -24,9 +28,10 @@ struct JournalLibraryView: View {
     private var layout: NotebookBrowserLayout { narrow ? .compact : .resolve(layoutKey, compact: sizeClass == .compact) }
     private var topicNames: [String: String] {
         var names: [String: String] = [:]
-        for entry in store.journalEntries.values {
+        let existing = Set(store.notebooks.map(\.notebookId))
+        for entry in store.journalEntries.values where existing.contains(entry.notebookId) {
             for (key, topic) in entry.topics where topic.present {
-                if names[key] == nil || names[key]!.utf8.lexicographicallyPrecedes(topic.name.utf8) { names[key] = topic.name }
+                if names[key] == nil || topic.name.utf8.lexicographicallyPrecedes(names[key]!.utf8) { names[key] = topic.name }
             }
         }
         return names
@@ -54,7 +59,12 @@ struct JournalLibraryView: View {
         VStack(spacing: 0) {
             HStack {
                 Button(action: toggleSidebar) { Image(systemName: "sidebar.left").frame(width: 44, height: 44) }.accessibilityLabel("Browse")
-                Text(title).font(.title2).frame(maxWidth: .infinity, alignment: .leading)
+                Text(title).font(.title2).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("journal.title")
+                Menu {
+                    Button("Manage tags") { managingTags = true }
+                    Button("Trash") { showingTrash = true }
+                } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Journal actions").accessibilityIdentifier("journal.actions")
                 Menu {
                     Picker("Preview layout", selection: $layoutKey) {
                         ForEach(NotebookBrowserLayout.allCases.filter { sizeClass != .compact || $0 != .overview }) { item in
@@ -98,11 +108,7 @@ struct JournalLibraryView: View {
                             Text(group).font(.subheadline).foregroundStyle(.secondary).id(group)
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top), count: layout.columns), alignment: .leading, spacing: 16) {
                                 ForEach(groups[group] ?? [], id: \.notebookId) { note in
-                                    NotebookContentCard(notebook: note, layout: layout, edit: { pageID in
-                                        if let pageID { store.rememberOpenedPage(pageID, in: note.notebookId) }
-                                        openNotebook(note.notebookId)
-                                    }, topic: { if let selectTopic { selectTopic(journalTopicKey($0)) } else { selectedTopic = journalTopicKey($0) } },
-                                    accessory: AnyView(Button { editing = note.notebookId } label: { Image(systemName: "number").frame(width: 44, height: 44) }.accessibilityLabel("Edit tags")))
+                                    card(note)
                                 }
                             }
                             if groups[group]?.isEmpty != false { Text("No notes").foregroundStyle(.secondary) }
@@ -110,9 +116,7 @@ struct JournalLibraryView: View {
                         // Tagged older notebooks need no journal date to belong to a tag.
                         if topics {
                             ForEach(entries.filter { store.journalEntries[$0.notebookId]?.date == nil }, id: \.notebookId) { note in
-                                NotebookContentCard(notebook: note, layout: layout, edit: { pageID in
-                                    if let pageID { store.rememberOpenedPage(pageID, in: note.notebookId) }; openNotebook(note.notebookId)
-                                })
+                                card(note)
                             }
                         }
                         if entries.isEmpty && topics { Text("No notes").foregroundStyle(.secondary) }
@@ -138,9 +142,40 @@ struct JournalLibraryView: View {
                     jump(to: $0); showingCalendar = false
                 }
             }
+            .sheet(isPresented: $managingTags, onDismiss: {
+                if let selectedTopic, topicNames[selectedTopic] == nil {
+                    self.selectedTopic = nil; showAllTopics?()
+                }
+            }) { JournalTagManager() }
+            .sheet(isPresented: $showingTrash) { NavigationStack { TrashView() } }
+            .confirmationDialog("Move to Trash?", isPresented: Binding(get: { trashTarget != nil }, set: { if !$0 { trashTarget = nil } }), titleVisibility: .visible) {
+                Button("Move to Trash", role: .destructive) {
+                    guard let note = trashTarget else { return }
+                    do { try store.trashJournalNotebook(id: note.notebookId) }
+                    catch { self.error = error.localizedDescription }
+                    trashTarget = nil
+                }.accessibilityIdentifier("journal.trashConfirm")
+                Button("Cancel", role: .cancel) { trashTarget = nil }
+            } message: {
+                let count = trashTarget?.pageIds.count ?? 0
+                Text("\(trashTarget?.title ?? "Note")\(count > 1 ? " · \(count) pages" : ""). Restore from Trash.")
+            }
     }
 
     private func jump(to day: String) { selectedDay = day; jumpRevision += 1 }
+
+    private func card(_ note: NotebookManifest) -> some View {
+        NotebookContentCard(notebook: note, layout: layout, edit: { pageID in
+            if let pageID { store.rememberOpenedPage(pageID, in: note.notebookId) }
+            openNotebook(note.notebookId)
+        }, topic: { if let selectTopic { selectTopic(journalTopicCanonicalKey($0)) } else { selectedTopic = journalTopicCanonicalKey($0) } },
+        accessory: AnyView(Menu {
+            Button("Edit tags") { editing = note.notebookId }
+            Button("Move to Trash", role: .destructive) { trashTarget = note }
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+            .accessibilityLabel("Note actions \(note.title)")
+            .accessibilityIdentifier("journal.noteMenu.\(note.notebookId)")))
+    }
 }
 
 struct JournalTagsSheet: View {
@@ -151,31 +186,38 @@ struct JournalTagsSheet: View {
     @State private var error: String?
 
     private var names: [String] {
-        Array(Set(store.journalEntries.values.flatMap(\.visibleTopics)))
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        var canonical: [String: String] = [:]
+        for entry in store.journalEntries.values {
+            for (key, topic) in entry.topics where topic.present {
+                if canonical[key] == nil || topic.name.utf8.lexicographicallyPrecedes(canonical[key]!.utf8) { canonical[key] = topic.name }
+            }
+        }
+        return canonical.values.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
     private func selected(_ name: String) -> Bool {
         store.journalEntries[notebookID]?.visibleTopics.contains {
-            journalTopicKey($0) == journalTopicKey(name)
+            journalTopicCanonicalKey($0) == journalTopicCanonicalKey(name)
         } == true
     }
     var body: some View {
         NavigationStack {
             Form {
-                ForEach(names, id: \.self) { topic in
-                    Button { set(topic, !selected(topic)) } label: {
-                        HStack { Text("#\(topic)"); Spacer(); if selected(topic) { Image(systemName: "checkmark") } }
-                    }
-                }
                 HStack {
                     TextField("Find or create a tag", text: $name)
                         .textInputAutocapitalization(.never)
+                        .accessibilityIdentifier("tags.name")
                         .onSubmit { if set(name, true) { name = "" } }
                     Button("Add") { if set(name, true) { name = "" } }
                         .disabled(journalTopicName(name).isEmpty)
+                        .accessibilityIdentifier("tags.add")
+                }
+                ForEach(names.filter { name.isEmpty || $0.localizedCaseInsensitiveContains(journalTopicName(name)) }, id: \.self) { topic in
+                    Button { if set(topic, !selected(topic)) { name = "" } } label: {
+                        HStack { Text("#\(topic)"); Spacer(); if selected(topic) { Image(systemName: "checkmark") } }
+                    }
                 }
             }.navigationTitle("Tags")
-                .toolbar { Button("Done") { dismiss() } }
+                .toolbar { Button("Done") { dismiss() }.accessibilityIdentifier("tags.edit.done") }
                 .alert("Could not save tag", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                     Button("OK") { error = nil }
                 } message: { Text(error ?? "") }

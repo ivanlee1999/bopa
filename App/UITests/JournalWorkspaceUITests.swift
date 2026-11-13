@@ -62,6 +62,67 @@ final class JournalWorkspaceUITests: XCTestCase {
     }
 
     @MainActor
+    func testManageTagsRenameMergeRemoveAndMoveJournalNoteToRecoverableTrash() {
+        let app = launch(), suffix = String(Int.random(in: 10000...99999))
+        let old = "Old" + suffix, target = "Existing" + suffix, renamed = "Renamed" + suffix
+        XCTAssertTrue(app.buttons["Write"].waitForExistence(timeout: 8)); app.buttons["Write"].tap()
+        XCTAssertTrue(app.buttons["editor.title"].waitForExistence(timeout: 5)); app.buttons["editor.title"].tap()
+        let title = rename(app, suffix: " Tags " + suffix)
+        app.buttons["editor.tags"].tap()
+        let tagField = app.textFields["tags.name"]
+        for name in [old, target] {
+            XCTAssertTrue(tagField.waitForExistence(timeout: 5)); tagField.tap(); tagField.typeText(name)
+            app.buttons["tags.add"].tap(); waitValue("Find or create a tag", tagField)
+        }
+        app.buttons["tags.edit.done"].tap()
+        XCTAssertTrue(app.buttons["tags.edit.done"].waitForNonExistence(timeout: 5))
+        app.buttons["editor.close"].tap()
+        let oldTag = app.buttons["#" + old]
+        XCTAssertTrue(oldTag.waitForExistence(timeout: 5)); oldTag.tap()
+        app.buttons["journal.actions"].tap(); app.buttons["Manage tags"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText(suffix)
+        XCTAssertTrue(app.buttons["tags.menu." + old.lowercased()].waitForExistence(timeout: 5))
+        capture("tag-manager-counts-and-automatic-tags")
+
+        func replaceTag(_ name: String, with replacement: String, action: String) {
+            app.buttons["tags.menu." + name.lowercased()].tap(); app.buttons["Rename or merge"].tap()
+            let input = app.textFields["tags.rename"]
+            XCTAssertTrue(input.waitForExistence(timeout: 5))
+            input.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+            input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (input.value as? String ?? "").count) + replacement)
+            let confirm = app.buttons["tags.renameConfirm"].firstMatch
+            XCTAssertEqual(confirm.label, action); confirm.tap()
+            XCTAssertTrue(app.buttons["tags.menu." + replacement.lowercased()].waitForExistence(timeout: 5))
+        }
+        replaceTag(old, with: renamed, action: "Rename")
+        replaceTag(renamed, with: target, action: "Merge")
+        app.buttons["tags.menu." + target.lowercased()].tap(); app.buttons["Remove from all notes"].tap()
+        let remove = app.buttons["tags.removeConfirm"].firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 5)); remove.tap()
+        XCTAssertTrue(app.buttons["tags.menu." + target.lowercased()].waitForNonExistence(timeout: 5))
+        app.buttons["tags.done"].tap()
+        XCTAssertTrue(app.buttons["tags.done"].waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["journal.title"].label, "Tags", "removing a selected tag returns to the current tag catalog")
+
+        if !app.buttons["Today"].exists { app.buttons["Browse"].tap() }
+        app.buttons["Today"].tap()
+        let noteMenu = app.buttons["Note actions " + title]
+        XCTAssertTrue(noteMenu.waitForExistence(timeout: 5)); noteMenu.tap()
+        capture("journal-note-menu-with-recoverable-trash")
+        app.buttons["Move to Trash"].tap()
+        let trashConfirm = app.buttons["journal.trashConfirm"].firstMatch
+        XCTAssertTrue(trashConfirm.waitForExistence(timeout: 5)); trashConfirm.tap()
+        XCTAssertTrue(noteMenu.waitForNonExistence(timeout: 5))
+        app.buttons["journal.actions"].tap(); app.buttons["Trash"].tap()
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
+        capture("journal-note-retained-in-trash")
+        app.buttons["Restore " + title].tap()
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(noteMenu.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testPreviewFingerSwipesAndFavoritePensCanBePinnedReorderedAndSelected() {
         let app = launch()
         let library = app.buttons["sidebar.library"]

@@ -16,6 +16,7 @@
 		085CB5D2BB53FE9C87192827 /* JournalLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D66E0CB2F5B3E4189406C /* JournalLibraryView.swift */; };
 		116307D46B9DC083022797B1 /* NavigatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 513AE03C724D18B26E321FE0 /* NavigatorTests.swift */; };
 		122E21FD884486D3B1F6AEDC /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */; };
+		187548A3149A6674850A87DA /* JournalTagManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67E986516DC72CA46E296AF4 /* JournalTagManager.swift */; };
 		1AE54A5DA2443BF25BBB9808 /* NotebookSwitcherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 287FCAE371AFED2B0F04CAA3 /* NotebookSwitcherView.swift */; };
 		21D7E6257501CECF0F7E22B4 /* LibraryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DA342EBFED166F5EF7F44CC /* LibraryUITests.swift */; };
 		251F7840D69D1AF42296823C /* PageTurnOvershootTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4A83D48EDB4CE8CA64CD5B /* PageTurnOvershootTests.swift */; };
@@ -163,6 +164,7 @@
 		644E642232F1FF6B8C96F02D /* TrashTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrashTests.swift; sourceTree = "<group>"; };
 		65F089A838509BF507244D0C /* CouchEndToEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CouchEndToEndTests.swift; sourceTree = "<group>"; };
 		660680A3B19AA808922FE5B3 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
+		67E986516DC72CA46E296AF4 /* JournalTagManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalTagManager.swift; sourceTree = "<group>"; };
 		6A93E5DA5490D5DDD7896179 /* FlowPageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlowPageModel.swift; sourceTree = "<group>"; };
 		6BED7857BA1ED1AF56A3E901 /* PageManagementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageManagementTests.swift; sourceTree = "<group>"; };
 		6CD4E58D4FC68D795F4E6447 /* CoverIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverIdentityTests.swift; sourceTree = "<group>"; };
@@ -319,6 +321,7 @@
 				3041E98EE97BA46C3DC18DFD /* HandwritingTranscript.swift */,
 				9714240E1481273663A24885 /* JournalCalendar.swift */,
 				113D66E0CB2F5B3E4189406C /* JournalLibraryView.swift */,
+				67E986516DC72CA46E296AF4 /* JournalTagManager.swift */,
 				3CB3BE8AC3CF7FB2EFDDF2DB /* LibraryActions.swift */,
 				760C1A94995C19FE535F60AB /* LibrarySidebar.swift */,
 				82D99ACFA8F3954E67039180 /* LibrarySort.swift */,
@@ -596,6 +599,7 @@
 				E493A2BAD1BB914E69A1644C /* HandwritingTranscript.swift in Sources */,
 				C16534345D90F9CB9F4E15C7 /* JournalCalendar.swift in Sources */,
 				085CB5D2BB53FE9C87192827 /* JournalLibraryView.swift in Sources */,
+				187548A3149A6674850A87DA /* JournalTagManager.swift in Sources */,
 				319B5129F174D50B1545C040 /* LibraryActions.swift in Sources */,
 				4283276297678BE54BBF534F /* LibrarySidebar.swift in Sources */,
 				6FDBE320E06856B13AC03D2A /* LibrarySort.swift in Sources */,

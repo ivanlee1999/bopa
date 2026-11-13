@@ -3,6 +3,80 @@ import XCTest
 @testable import NotableKit
 
 final class JournalOrganizationTests: XCTestCase {
+    func testBulkMergePreservesExistingDestinationAndUnrelatedRevisions() throws {
+        let store = try JournalOrganizationStore(rootURL: root())
+        let old = JournalTopic(name: "Old", present: true, counter: 100, writer: "remote")
+        let destination = JournalTopic(name: "TARGET", present: true, counter: 95, writer: "other")
+        let untouched = JournalTopic(name: "Keep", present: false, counter: 99, writer: "remote")
+        let original = JournalOrganization(notebookId: "one", date: "2026-11-12", createdAt: 20,
+            topics: ["old": old, "target": destination, "keep": untouched])
+        _ = try store.merge(original)
+        _ = try store.merge(JournalOrganization(notebookId: "two", date: nil, createdAt: 30, topics: ["old": old]))
+        _ = try store.merge(JournalOrganization(notebookId: "pending", date: nil, createdAt: 40, topics: ["old": old]))
+        try store.renameTopic(key: "old", to: "Target", notebookIDs: ["one", "two"])
+        let one = try XCTUnwrap(store.entries()["one"]), two = try XCTUnwrap(store.entries()["two"])
+        XCTAssertEqual(one.topics["target"], destination)
+        XCTAssertEqual(one.topics["keep"], untouched)
+        XCTAssertEqual(one.date, original.date); XCTAssertEqual(one.createdAt, original.createdAt)
+        XCTAssertEqual(two.topics["target"]?.name, "TARGET")
+        XCTAssertFalse(try XCTUnwrap(one.topics["old"]).present)
+        XCTAssertGreaterThan(try XCTUnwrap(one.topics["old"]).counter, 100)
+        XCTAssertEqual(store.entries()["pending"]?.topics["old"], old)
+        let converged = try mergeJournalOrganization(one, original)
+        XCTAssertFalse(try XCTUnwrap(converged.topics["old"]).present)
+        try store.renameTopic(key: "target", to: "Target", notebookIDs: ["one", "two"])
+        XCTAssertEqual(store.entries()["one"]?.topics["target"]?.name, "Target")
+        let renamed = store.entries()
+        try store.renameTopic(key: "target", to: "Target", notebookIDs: ["one", "two"])
+        XCTAssertEqual(store.entries(), renamed, "same-key exact rename is a no-op")
+        try store.removeTopic(key: "target", notebookIDs: ["one", "two"])
+        XCTAssertEqual(store.entries().count, 3)
+        XCTAssertFalse(try XCTUnwrap(store.entries()["two"]?.topics["target"]).present)
+    }
+
+    func testBulkWriteFailureLeavesEveryAssignmentAndCounterUnchanged() throws {
+        let directory = try root(), store = try JournalOrganizationStore(rootURL: directory)
+        for id in ["one", "two"] { try store.setTopic(notebookID: id, name: "Old", present: true, createdAt: 0) }
+        let before = store.entries(), file = directory.appendingPathComponent(".bopa-organization.json")
+        let bytes = try Data(contentsOf: file)
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try store.renameTopic(key: "old", to: "New"))
+        XCTAssertEqual(store.entries(), before)
+        try FileManager.default.removeItem(at: file)
+        try bytes.write(to: file, options: .atomic)
+        XCTAssertEqual(try JournalOrganizationStore(rootURL: directory).entries(), before)
+    }
+
+    func testAutomaticBatchPreservesCanonicalHashAndManualRemoval() throws {
+        let store = try JournalOrganizationStore(rootURL: root())
+        try store.setTopic(notebookID: "one", name: "Removed", present: false, createdAt: 0)
+        let tombstone = store.entries()["one"]?.topics["removed"]
+        XCTAssertTrue(try store.addAutomaticTopics(notebookID: "one", names: ["Removed", "#Work", "Fresh"], createdAt: 50))
+        let entry = try XCTUnwrap(store.entries()["one"])
+        XCTAssertEqual(entry.topics["removed"], tombstone)
+        XCTAssertEqual(entry.topics["#work"]?.name, "#Work"); XCTAssertNil(entry.topics["work"])
+        XCTAssertTrue(try XCTUnwrap(entry.topics["fresh"]).present)
+        XCTAssertFalse(try store.addAutomaticTopics(notebookID: "one", names: ["Removed", "Fresh"], createdAt: 99))
+        XCTAssertEqual(store.entries()["one"], entry)
+        XCTAssertEqual(journalTopicCanonicalKey("#Work"), "#work")
+        XCTAssertEqual(journalTopicKey("##Work"), "#work")
+    }
+
+    func testRawRenameEscapesCanonicalHashWithoutConflatingOtherHashNames() throws {
+        let store = try JournalOrganizationStore(rootURL: root())
+        let literal = JournalTopic(name: "#Work", present: true, counter: 1, writer: "peer")
+        let double = JournalTopic(name: "##Work", present: true, counter: 2, writer: "peer")
+        _ = try store.merge(JournalOrganization(notebookId: "one", date: nil, createdAt: 0,
+            topics: ["#work": literal, "##work": double]))
+        let before = store.entries()
+        try store.renameTopic(key: "#work", to: "##Work")
+        XCTAssertEqual(store.entries(), before)
+        try store.renameTopic(key: "#work", to: "###Work")
+        XCTAssertFalse(try XCTUnwrap(store.entries()["one"]?.topics["#work"]).present)
+        XCTAssertEqual(store.entries()["one"]?.topics["##work"], double)
+    }
+
     private func root() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

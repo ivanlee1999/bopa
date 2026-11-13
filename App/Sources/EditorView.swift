@@ -71,7 +71,7 @@ struct EditorView: View {
             .onAppear {
                 model.attach(store: store, notebookId: notebookId)
                 model.liveState.onDrawingStateChanged = { drawing in
-                    transcripts.setDrawing(drawing, owner: recognitionOwner, notebookID: notebookId, pageID: model.pageId)
+                    transcripts.setDrawing(drawing, owner: recognitionOwner, notebookID: notebookId, pageID: model.pageId, store: store)
                 }
                 model.previewsNeighbors = !handwriting.config.pageNavigation.isPaged
                 // The model asks to close when its notebook vanishes underneath it — deleted
@@ -105,7 +105,7 @@ struct EditorView: View {
             }
             .onDisappear {
                 model.liveState.onDrawingStateChanged = nil
-                transcripts.setDrawing(false, owner: recognitionOwner, notebookID: notebookId, pageID: nil)
+                transcripts.setDrawing(false, owner: recognitionOwner, notebookID: notebookId, pageID: nil, store: store)
                 commitOpenTextBox()
                 model.saveNow()
                 registerLeaveGuard?(nil)

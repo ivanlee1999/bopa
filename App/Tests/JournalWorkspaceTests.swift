@@ -163,6 +163,215 @@ final class JournalWorkspaceTests: XCTestCase {
         XCTAssertTrue(text.uppercased().contains("LOCAL NOTES"), text)
     }
 
+    func testTagManagerUpdatesTrashAndPreservesNotesAndPendingMetadata() throws {
+        let store = try tagStore(), one = try store.createJournalEntry(topic: "Old")
+        let two = try store.createNotebook(title: "Trash note")
+        try store.setJournalTopic(notebookID: two.notebookId, name: "Old", present: true)
+        try store.setJournalTopic(notebookID: two.notebookId, name: "TARGET", present: true)
+        try store.setJournalTopic(notebookID: one.notebookId, name: "Keep", present: true)
+        try store.organization?.setTopic(notebookID: "pending", name: "Old", present: true, createdAt: 0)
+        try store.trashNotebook(id: two.notebookId)
+        let before = store.journalEntries
+        let pageURL = store.notebookDirURL(one.notebookId).appendingPathComponent("pages/\(one.pageIds[0]).json")
+        let pageBytes = try Data(contentsOf: pageURL)
+        try store.renameJournalTopic(key: "old", to: "Target")
+        XCTAssertEqual(store.journalEntries[two.notebookId]?.topics["target"], before[two.notebookId]?.topics["target"])
+        XCTAssertEqual(store.journalEntries[one.notebookId]?.topics["target"]?.name, "TARGET")
+        XCTAssertEqual(store.journalEntries[one.notebookId]?.topics["keep"], before[one.notebookId]?.topics["keep"])
+        XCTAssertEqual(store.journalEntries[one.notebookId]?.date, before[one.notebookId]?.date)
+        XCTAssertEqual(store.journalEntries[one.notebookId]?.createdAt, before[one.notebookId]?.createdAt)
+        try store.removeJournalTopic(key: "target")
+        XCTAssertFalse(try XCTUnwrap(store.journalEntries[two.notebookId]?.topics["target"]).present)
+        XCTAssertTrue(try XCTUnwrap(store.organization?.entries()["pending"]?.topics["old"]).present)
+        XCTAssertEqual(try Data(contentsOf: pageURL), pageBytes)
+        XCTAssertNotNil(store.manifest(id: one.notebookId)); XCTAssertNotNil(store.manifest(id: two.notebookId))
+        try store.restoreNotebook(id: two.notebookId)
+        XCTAssertFalse(try XCTUnwrap(store.journalEntries[two.notebookId]?.topics["target"]).present)
+    }
+
+    func testNoteTagAndJournalTrashActionsRejectFreshMissingOrTrashedAncestors() throws {
+        let store = try tagStore(), folder = try store.createFolder(title: "Folder")
+        let note = try store.createNotebook(title: "Note")
+        try store.moveNotebook(id: note.notebookId, toFolder: folder.id)
+        let journalBefore = try Data(contentsOf: store.rootURL.appendingPathComponent(".bopa-organization.json"))
+        try LocalTrash.addFolder(folder.id, at: Date(), root: store.rootURL)
+        XCTAssertThrowsError(try store.setJournalTopic(notebookID: note.notebookId, name: "Wrong", present: true))
+        XCTAssertThrowsError(try store.trashJournalNotebook(id: note.notebookId))
+        XCTAssertFalse(LocalTrash.load(root: store.rootURL).notebookIDs.contains(note.notebookId))
+        XCTAssertEqual(try Data(contentsOf: store.rootURL.appendingPathComponent(".bopa-organization.json")), journalBefore)
+        try FileManager.default.removeItem(at: store.notebookDirURL(note.notebookId).appendingPathComponent("manifest.json"))
+        XCTAssertThrowsError(try store.setJournalTopic(notebookID: note.notebookId, name: "Wrong", present: true))
+    }
+
+    func testLocalTypedSaveAutomaticallyAddsTagsWithoutChangingSourceOrRevivingRemoval() async throws {
+        let store = try tagStore(), catalog = try store.createNotebook(title: "Catalog")
+        try store.setJournalTopic(notebookID: catalog.notebookId, name: "Project", present: true)
+        let note = try store.createJournalEntry(), baseline = store.journalEntries[note.notebookId]
+        let applied = expectation(description: "durable save assigns tags")
+        let subscription = store.$journalEntries.sink { entries in
+            if entries[note.notebookId]?.topics["focus"]?.present == true && entries[note.notebookId]?.topics["project"]?.present == true { applied.fulfill() }
+        }
+        var page = try store.loadPage(notebookId: note.notebookId, pageId: note.pageIds[0])
+        page.blocks = [CouchBlock(id: "body", kind: "md", text: "Project notes #Focus", createdAt: page.createdAt, updatedAt: page.updatedAt, deviceId: "local")]
+        page.strokes = [try stroke()]
+        page = try store.savePage(page)
+        let pageURL = store.notebookDirURL(note.notebookId).appendingPathComponent("pages/\(page.id).json")
+        let savedBytes = try Data(contentsOf: pageURL)
+        let result = await XCTWaiter.fulfillment(of: [applied], timeout: 3)
+        XCTAssertEqual(result, .completed); subscription.cancel()
+        XCTAssertEqual(try Data(contentsOf: pageURL), savedBytes)
+        XCTAssertEqual(store.journalEntries[note.notebookId]?.date, baseline?.date)
+        XCTAssertEqual(store.journalEntries[note.notebookId]?.createdAt, baseline?.createdAt)
+        try store.setJournalTopic(notebookID: note.notebookId, name: "Focus", present: false)
+        let removed = store.journalEntries[note.notebookId]?.topics["focus"]
+        page.blocks[0].text = "Project notes #Focus again"
+        _ = try store.savePage(page)
+        await store.applyAutomaticTopics(notebookID: note.notebookId, pageID: page.id, delay: .zero).value
+        XCTAssertEqual(store.journalEntries[note.notebookId]?.topics["focus"], removed)
+    }
+
+    func testDelayedAutomaticTagsRejectRemoteTextAndTitleBeforeDebounce() async throws {
+        let store = try tagStore(), note = try store.createJournalEntry()
+        var page = try store.loadPage(notebookId: note.notebookId, pageId: note.pageIds[0])
+        page.blocks = [CouchBlock(id: "body", kind: "md", text: "#Local", createdAt: page.createdAt, updatedAt: page.updatedAt, deviceId: "local")]
+        page = try store.savePage(page)
+        let pending = store.applyAutomaticTopics(notebookID: note.notebookId, pageID: page.id, delay: .milliseconds(20))
+        page.blocks[0].text = "#Remote"
+        try JSONEncoder().encode(page).write(to: store.notebookDirURL(note.notebookId).appendingPathComponent("pages/\(page.id).json"), options: .atomic)
+        await pending.value
+        XCTAssertTrue(store.journalEntries[note.notebookId]?.topics.isEmpty == true)
+        try store.renameNotebook(id: note.notebookId, title: "#LocalTitle")
+        let titleTask = store.applyAutomaticTopics(notebookID: note.notebookId, delay: .milliseconds(20))
+        var incoming = try XCTUnwrap(store.manifest(id: note.notebookId)); incoming.title = "#RemoteTitle"
+        try JSONEncoder().encode(incoming).write(to: store.notebookDirURL(note.notebookId).appendingPathComponent("manifest.json"), options: .atomic)
+        await titleTask.value
+        XCTAssertTrue(store.journalEntries[note.notebookId]?.topics.isEmpty == true)
+    }
+
+    func testOnlyFreshRecognitionOfLocallySavedInkCanAssignTopics() async throws {
+        let store = try tagStore(), note = try store.createJournalEntry(), pageID = note.pageIds[0]
+        var page = try store.loadPage(notebookId: note.notebookId, pageId: pageID)
+        page.strokes = [try stroke()]; page = try store.savePage(page)
+        let fingerprint = HandwritingTranscript.fingerprint(page.strokes)
+        let updated = expectation(description: "fresh local recognition tags ink")
+        let subscription = store.$journalEntries.sink { entries in
+            if entries[note.notebookId]?.topics["inktag"]?.present == true { updated.fulfill() }
+        }
+        let index = HandwritingTranscriptIndex(recognize: { _ in "#InkTag" })
+        await index.request(notebookID: note.notebookId, pageID: pageID, store: store, delay: .zero).value
+        let result = await XCTWaiter.fulfillment(of: [updated], timeout: 3)
+        XCTAssertEqual(result, .completed); subscription.cancel()
+        let pageURL = store.notebookDirURL(note.notebookId).appendingPathComponent("pages/\(pageID).json")
+        let saved = try Data(contentsOf: pageURL)
+        let reopened = NotebookStore(rootURL: store.rootURL, preferences: try XCTUnwrap(UserDefaults(suiteName: store.rootURL.lastPathComponent)))
+        let previewOnly = HandwritingTranscriptIndex(recognize: { _ in "#Wrong" })
+        await previewOnly.request(notebookID: note.notebookId, pageID: pageID, store: reopened, delay: .zero).value
+        XCTAssertNil(reopened.journalEntries[note.notebookId]?.topics["wrong"])
+        try FileManager.default.removeItem(at: store.rootURL.appendingPathComponent(".bopa-recognition/\(note.notebookId)/\(pageID).json"))
+        let uncachedPreview = HandwritingTranscriptIndex(recognize: { _ in "#WrongPreview" })
+        await uncachedPreview.request(notebookID: note.notebookId, pageID: pageID, store: reopened, delay: .zero).value
+        XCTAssertNil(reopened.journalEntries[note.notebookId]?.topics["wrongpreview"])
+        page.strokes.append(try stroke(id: "new")); page = try store.savePage(page)
+        await store.applyAutomaticTopics(notebookID: note.notebookId, pageID: pageID, recognizedText: "#Stale", inkFingerprint: fingerprint, delay: .zero).value
+        XCTAssertNil(store.journalEntries[note.notebookId]?.topics["stale"])
+        try store.trashNotebook(id: note.notebookId)
+        await store.applyAutomaticTopics(notebookID: note.notebookId, pageID: pageID, recognizedText: "#Trash", inkFingerprint: HandwritingTranscript.fingerprint(page.strokes), delay: .zero).value
+        XCTAssertNil(store.journalEntries[note.notebookId]?.topics["trash"])
+        XCTAssertEqual(try JSONDecoder().decode(PageFile.self, from: saved).strokes.count, 1)
+        XCTAssertEqual(try store.loadPage(notebookId: note.notebookId, pageId: pageID).strokes, page.strokes)
+    }
+
+    func testAutomaticAssignmentDefersDuringPenContactAndCanBeDisabled() async throws {
+        let store = try tagStore(), note = try store.createNotebook(title: "Plain"), owner = UUID()
+        store.setAutomaticTagDrawing(true, owner: owner)
+        try store.renameNotebook(id: note.notebookId, title: "#AfterPen")
+        XCTAssertNil(store.journalEntries[note.notebookId])
+        let updated = expectation(description: "assign after pen up")
+        let subscription = store.$journalEntries.sink { entries in
+            if entries[note.notebookId]?.topics["afterpen"]?.present == true { updated.fulfill() }
+        }
+        store.setAutomaticTagDrawing(false, owner: owner)
+        let result = await XCTWaiter.fulfillment(of: [updated], timeout: 3)
+        XCTAssertEqual(result, .completed); subscription.cancel()
+        let disabled = try tagStore(automatic: false), plain = try disabled.createNotebook(title: "Plain")
+        try disabled.renameNotebook(id: plain.notebookId, title: "#NotAssigned")
+        await disabled.applyAutomaticTopics(notebookID: plain.notebookId, delay: .zero).value
+        XCTAssertNil(disabled.journalEntries[plain.notebookId])
+    }
+
+    func testLocalInkAndFreshOCRDoNotClassifyUntouchedRemoteTypedBlocks() async throws {
+        let store = try tagStore(), note = try store.createJournalEntry(), pageID = note.pageIds[0]
+        var page = try store.loadPage(notebookId: note.notebookId, pageId: pageID)
+        page.blocks = [CouchBlock(id: "remote", kind: "md", text: "#Remote", createdAt: page.createdAt, updatedAt: page.updatedAt, deviceId: "peer")]
+        try JSONEncoder().encode(page).write(to: store.notebookDirURL(note.notebookId).appendingPathComponent("pages/\(pageID).json"), options: .atomic)
+        let noRemoteTag = expectation(description: "ink save does not classify remote typing"); noRemoteTag.isInverted = true
+        let subscription = store.$journalEntries.sink { entries in
+            if entries[note.notebookId]?.topics["remote"] != nil { noRemoteTag.fulfill() }
+        }
+        page.strokes = [try stroke()]; _ = try store.savePage(page)
+        let result = await XCTWaiter.fulfillment(of: [noRemoteTag], timeout: 0.7)
+        XCTAssertEqual(result, .completed); subscription.cancel()
+        await store.applyAutomaticTopics(notebookID: note.notebookId, pageID: pageID,
+            recognizedText: "#LocalInk", inkFingerprint: HandwritingTranscript.fingerprint(page.strokes), delay: .zero).value
+        XCTAssertTrue(store.journalEntries[note.notebookId]?.topics["localink"]?.present == true)
+        XCTAssertNil(store.journalEntries[note.notebookId]?.topics["remote"])
+    }
+
+    func testCachedTranscriptNeedsANewLocalInkEditAndNeverRetroactivelyTagsWhenEnabled() async throws {
+        let store = try tagStore(automatic: false), note = try store.createJournalEntry(), pageID = note.pageIds[0]
+        var page = try store.loadPage(notebookId: note.notebookId, pageId: pageID)
+        page.strokes = [try stroke()]; page = try store.savePage(page)
+        let index = HandwritingTranscriptIndex(recognize: { _ in "#CachedUndo" })
+        await index.request(notebookID: note.notebookId, pageID: pageID, store: store, delay: .zero).value
+        store.setAutomaticTagsEnabled(true)
+        await index.request(notebookID: note.notebookId, pageID: pageID, store: store, delay: .zero).value
+        XCTAssertNil(store.journalEntries[note.notebookId]?.topics["cachedundo"])
+        page.strokes.append(try stroke(id: "temporary")); page = try store.savePage(page)
+        page.strokes.removeLast(); page = try store.savePage(page)
+        let applied = expectation(description: "local undo can reuse its exact cached transcript")
+        let subscription = store.$journalEntries.sink { entries in
+            if entries[note.notebookId]?.topics["cachedundo"]?.present == true { applied.fulfill() }
+        }
+        let cached = HandwritingTranscriptIndex(recognize: { _ in XCTFail("Expected existing transcript cache"); return "#Unexpected" })
+        await cached.request(notebookID: note.notebookId, pageID: pageID, store: store, delay: .zero).value
+        let result = await XCTWaiter.fulfillment(of: [applied], timeout: 3)
+        XCTAssertEqual(result, .completed); subscription.cancel()
+        XCTAssertEqual(try store.loadPage(notebookId: note.notebookId, pageId: pageID).strokes, page.strokes)
+    }
+
+    func testGlobalTagRemovalCancelsDeferredAssignmentsAndInkButAllowsFutureEdits() async throws {
+        let store = try tagStore(), catalog = try store.createNotebook(title: "Catalog")
+        try store.setJournalTopic(notebookID: catalog.notebookId, name: "Work", present: true)
+        let note = try store.createJournalEntry(), owner = UUID(), pageID = note.pageIds[0]
+        store.setAutomaticTagDrawing(true, owner: owner)
+        var page = try store.loadPage(notebookId: note.notebookId, pageId: pageID)
+        page.blocks = [CouchBlock(id: "body", kind: "md", text: "#Work", createdAt: page.createdAt, updatedAt: page.updatedAt, deviceId: "local")]
+        page.strokes = [try stroke()]; page = try store.savePage(page)
+        try store.removeJournalTopic(key: "work")
+        let noOldWork = expectation(description: "global removal cancels the old edit"); noOldWork.isInverted = true
+        let subscription = store.$journalEntries.sink { entries in
+            if entries[note.notebookId]?.topics["work"] != nil { noOldWork.fulfill() }
+        }
+        store.setAutomaticTagDrawing(false, owner: owner)
+        await store.applyAutomaticTopics(notebookID: note.notebookId, pageID: pageID, recognizedText: "#Work",
+            inkFingerprint: HandwritingTranscript.fingerprint(page.strokes), delay: .zero).value
+        let result = await XCTWaiter.fulfillment(of: [noOldWork], timeout: 0.7)
+        XCTAssertEqual(result, .completed); subscription.cancel()
+        page.blocks[0].text = "#Work again"
+        _ = try store.savePage(page)
+        await store.applyAutomaticTopics(notebookID: note.notebookId, pageID: pageID, delay: .zero).value
+        XCTAssertTrue(store.journalEntries[note.notebookId]?.topics["work"]?.present == true)
+        XCTAssertFalse(try XCTUnwrap(store.journalEntries[catalog.notebookId]?.topics["work"]).present)
+    }
+
+    private func tagStore(automatic: Bool? = nil) throws -> NotebookStore {
+        let name = "tags-test-\(UUID().uuidString)", defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        if let automatic { defaults.set(automatic, forKey: "journal.automaticTags") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root); UserDefaults(suiteName: name)?.removePersistentDomain(forName: name) }
+        return NotebookStore(rootURL: root, preferences: defaults)
+    }
+
     private func stroke(id: String = "original") throws -> StrokeDTO {
         let points: [NotableStrokePoint] = (0..<20).map { index in
             let x = Float(20 + index * 8), y = Float(80 + (index % 3) * 10)

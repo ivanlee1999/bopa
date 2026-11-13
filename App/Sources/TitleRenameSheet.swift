@@ -44,7 +44,7 @@ struct TitleRenameSheet: View {
                     .onSubmit(save)
                 if writing {
                     TitleInkPad(drawing: $drawing, contact: {
-                        transcripts.setDrawing($0, owner: recognitionOwner, notebookID: request.notebookID, pageID: request.pageID ?? "title-pad")
+                        transcripts.setDrawing($0, owner: recognitionOwner, notebookID: request.notebookID, pageID: request.pageID ?? "title-pad", store: store)
                     }).frame(height: 190)
                         .allowsHitTesting(!recognizing)
                         .background(.white).overlay { Rectangle().stroke(Modernist.neutral400) }
@@ -80,7 +80,7 @@ struct TitleRenameSheet: View {
                     }
                 }
                 .onAppear { focused = true }
-                .onDisappear { transcripts.setDrawing(false, owner: recognitionOwner, notebookID: request.notebookID, pageID: nil) }
+                .onDisappear { transcripts.setDrawing(false, owner: recognitionOwner, notebookID: request.notebookID, pageID: nil, store: store) }
         }.presentationDetents([.medium, .large])
     }
 
