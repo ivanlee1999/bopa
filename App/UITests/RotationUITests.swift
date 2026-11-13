@@ -25,7 +25,7 @@ final class RotationUITests: XCTestCase {
 
         // Scoped to the grid: it is the one column that lists notebooks, and saying so keeps
         // the match unambiguous whatever else the library grows.
-        let card = app.descendants(matching: .any)["library.contents"].staticTexts[title]
+        let card = app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"]
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         card.tap()
 

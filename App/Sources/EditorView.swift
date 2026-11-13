@@ -7,6 +7,7 @@ import SwiftUI
 struct EditorView: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var handwriting: HandwritingSettings
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -26,6 +27,8 @@ struct EditorView: View {
     @State private var flowInput = FlowInputController()
     @State private var typing = false
     @State private var showingTags = false
+    @State private var renaming: TitleRenameRequest?
+    @State private var recognitionOwner = UUID()
     @AppStorage("editor.prefersTyping") private var prefersTyping = Platform.isMac
     @State private var actionError: LibraryActionError?
     @State private var showingPageOverview = false
@@ -67,6 +70,9 @@ struct EditorView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 model.attach(store: store, notebookId: notebookId)
+                model.liveState.onDrawingStateChanged = { drawing in
+                    transcripts.setDrawing(drawing, owner: recognitionOwner, notebookID: notebookId, pageID: model.pageId)
+                }
                 model.previewsNeighbors = !handwriting.config.pageNavigation.isPaged
                 // The model asks to close when its notebook vanishes underneath it — deleted
                 // locally or by a merge — because an editor over nothing has nothing to show.
@@ -82,6 +88,8 @@ struct EditorView: View {
                 typing = prefersTyping || isCompact || model.page.map { !FlowText.markdown(in: $0.blocks).isEmpty } == true
             }
             .onChange(of: model.pageId) { _, _ in attachFlow() }
+            .onReceive(NotificationCenter.default.publisher(for: NotebookStore.didChangeLocallyNotification)) { _ in requestTranscript() }
+            .onReceive(NotificationCenter.default.publisher(for: NotebookStore.didApplyRemoteChangesNotification)) { _ in requestTranscript() }
             .focusedSceneValue(\.editorMenuActions,
                 showingPageOverview || showingNotebookSwitcher || model.saveError != nil || actionError != nil ? nil : EditorMenuActions(
                     pages: showPages,
@@ -96,6 +104,8 @@ struct EditorView: View {
                 model.previewsNeighbors = !navigation.isPaged
             }
             .onDisappear {
+                model.liveState.onDrawingStateChanged = nil
+                transcripts.setDrawing(false, owner: recognitionOwner, notebookID: notebookId, pageID: nil)
                 commitOpenTextBox()
                 model.saveNow()
                 registerLeaveGuard?(nil)
@@ -144,6 +154,9 @@ struct EditorView: View {
             }
             .sheet(isPresented: $showingTags) {
                 JournalTagsSheet(notebookID: notebookId)
+            }
+            .sheet(item: $renaming) { request in
+                TitleRenameSheet(request: request) { model.refreshPageTitle() }
             }
     }
 
@@ -229,22 +242,31 @@ struct EditorView: View {
         .accessibilityLabel("Library")
         .accessibilityIdentifier("editor.close")
 
-        Button(action: showNotebookSwitcher) {
+        Button {
+            guard commitOpenTextBox(), model.saveNow(), let manifest else { return }
+            renaming = TitleRenameRequest(notebookID: notebookId, title: manifest.title)
+        } label: {
             HStack(spacing: 4) {
-                Text(store.journalEntries[notebookId]?.date ?? manifest?.title ?? "Notebook")
+                Text(manifest?.title ?? "Notebook")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
             }
             .foregroundStyle(Modernist.ink)
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(onSwitchNotebook == nil)
-        .accessibilityLabel("Switch notebook")
+        .accessibilityLabel("Rename notebook")
         .accessibilityValue(manifest?.title ?? "Notebook")
-        .accessibilityIdentifier("editor.notebooks")
+        .accessibilityIdentifier("editor.title")
+
+        if !isCompact {
+            Button(action: showNotebookSwitcher) { Image(systemName: "chevron.down") }
+                .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
+                .disabled(onSwitchNotebook == nil)
+                .accessibilityLabel("Switch notebook").accessibilityValue(manifest?.title ?? "Notebook")
+                .accessibilityIdentifier("editor.notebooks")
+        }
 
     }
 
@@ -324,6 +346,11 @@ struct EditorView: View {
     private func attachFlow() {
         guard let pageID = model.pageId else { return }
         _ = flow.attach(store: store, notebookID: notebookId, pageID: pageID)
+        requestTranscript()
+    }
+
+    private func requestTranscript() {
+        if let pageID = model.pageId { transcripts.request(notebookID: notebookId, pageID: pageID, store: store) }
     }
 
     private func setTyping(_ selected: Bool) {
@@ -352,6 +379,10 @@ struct EditorView: View {
 
     private var optionsMenu: some View {
         Menu {
+            Button {
+                guard commitOpenTextBox(), model.saveNow(), let pageID = model.pageId else { return }
+                renaming = TitleRenameRequest(notebookID: notebookId, pageID: pageID, title: model.page?.title ?? "")
+            } label: { Label("Rename page", systemImage: "pencil") }
             Button(action: addPage) {
                 Label("Add page", systemImage: "plus")
             }
@@ -615,7 +646,10 @@ final class CanvasLiveState {
     /// Whether a tool sequence is active. Reloading the canvas mid-gesture cancels it.
     /// This retains the established tool-up boundary; it does not claim to track delayed
     /// physical Pencil pressure updates.
-    var isDrawing = false
+    var isDrawing = false {
+        didSet { if isDrawing != oldValue { onDrawingStateChanged?(isDrawing) } }
+    }
+    var onDrawingStateChanged: ((Bool) -> Void)?
 }
 
 /// Lets the SwiftUI chrome drive the canvas's zoom. Attached the same way the undo

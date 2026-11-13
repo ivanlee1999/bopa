@@ -342,7 +342,7 @@ final class NotebookStore: ObservableObject {
         // file's and at worst stale — a rename that arrived from the BOOX while the page was open.
         // Taking the file's value stops an autosave from undoing it, the same way the stroke
         // fold-back below stops one from undoing the BOOX's ink.
-        page.title = onDisk?.title ?? page.title
+        if let onDisk { page.title = onDisk.title }
         // A page's sheet is set when it is created and never edited here, so the file's
         // declaration is at least as fresh as the caller's — and an autosave must not be able to
         // un-declare a size the merge just wrote, which would reflow the page under the ink.
@@ -889,9 +889,12 @@ final class NotebookStore: ObservableObject {
     /// through this device did not erase a name given on the BOOX. This is the first thing here
     /// that can set one.
     func renamePage(in notebookId: String, pageId: String, title: String?) throws {
+        let manifest = try liveRenameManifest(notebookId)
+        guard manifest.pageIds.contains(pageId), !manifest.deletedPageIds.contains(where: { $0.id == pageId }) else { throw CocoaError(.fileNoSuchFile) }
         var page = try loadPage(notebookId: notebookId, pageId: pageId)
+        guard !TextVersions.sameSource(page.title, title) else { return }
         page.title = title
-        page.updatedAt = clock.stamp()
+        page.updatedAt = clock.stamp(after: page.updatedAt)
         page.updatedBy = deviceID
         try encoder.encode(page)
             .write(to: pageURL(notebookId: notebookId, pageId: pageId), options: .atomic)
@@ -916,12 +919,28 @@ final class NotebookStore: ObservableObject {
     // MARK: - Notebook management
 
     func renameNotebook(id: String, title: String) throws {
-        guard var manifest = manifest(id: id) else { throw CocoaError(.fileNoSuchFile) }
+        var manifest = try liveRenameManifest(id)
+        guard !TextVersions.sameSource(manifest.title, title) else { return }
         manifest.title = title
-        manifest.updatedAt = clock.stamp()
+        manifest.updatedAt = clock.stamp(after: manifest.updatedAt)
         manifest.updatedBy = deviceID
         try writeManifest(manifest)
         refreshAfterLocalChange(documents: [CouchDocID.notebook(id)])
+    }
+
+    private func liveRenameManifest(_ id: String) throws -> NotebookManifest {
+        guard let manifest = readManifestFromDisk(id) else { throw CocoaError(.fileNoSuchFile) }
+        let currentTrash = LocalTrash.load(root: rootURL)
+        guard !currentTrash.notebookIDs.contains(id) else { throw CocoaError(.fileNoSuchFile) }
+        let currentFolders = (try? Data(contentsOf: foldersURL)).flatMap { try? decoder.decode(FoldersFile.self, from: $0) }?.folders ?? []
+        var parent = manifest.parentFolderId, seen: Set<String> = []
+        while let folderID = parent {
+            guard seen.insert(folderID).inserted, !currentTrash.folderIDs.contains(folderID) else { throw CocoaError(.fileNoSuchFile) }
+            // The library adopts a missing parent at root; keep that existing reachability rule.
+            guard let folder = currentFolders.first(where: { $0.id == folderID }) else { break }
+            parent = folder.parentFolderId
+        }
+        return manifest
     }
 
     /// Thrown when a move names a folder no listing shows — trashed, inside a trashed subtree,

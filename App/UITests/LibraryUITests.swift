@@ -18,7 +18,7 @@ final class LibraryUITests: XCTestCase {
         let source = "A flowing thought \(Int.random(in: 10000...99999))\n\nA second paragraph"
         input.tap(); input.typeText(source)
         capture("flow-typing-portrait", app: app)
-        for id in ["editor.notebooks", "editor.inputSurface", "editor.tags", "editor.pages"] {
+        for id in ["editor.title", "editor.inputSurface", "editor.tags", "editor.pages"] {
             let control = app.buttons[id]
             XCTAssertGreaterThanOrEqual(control.frame.width, 44)
             XCTAssertTrue(app.windows.firstMatch.frame.contains(control.frame), "\(id) must fit the phone header")
@@ -99,7 +99,7 @@ final class LibraryUITests: XCTestCase {
         XCTAssertTrue(shelf.staticTexts[title].isHittable)
         capture("library-list-portrait", app: app)
 
-        shelf.staticTexts[title].tap()
+        shelf.buttons["Edit \(title)"].tap()
         XCTAssertTrue(app.buttons["editor.pages"].waitForExistence(timeout: 5))
         app.buttons["editor.pages"].tap()
         let done = app.buttons["pageOverview.done"]

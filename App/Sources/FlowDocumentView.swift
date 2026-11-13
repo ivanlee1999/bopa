@@ -265,6 +265,12 @@ struct FlowCanvasPreview: View {
             || page.backgroundType != "native"
     }
 
+    static func hasNonInkContent(_ page: PageFile) -> Bool {
+        if !page.images.isEmpty || !TextBoxLayout.textBoxes(in: page.blocks).isEmpty { return true }
+        if case .native = PageBackground(background: page.background, backgroundType: page.backgroundType) { return false }
+        return true
+    }
+
     var body: some View {
         if let image = FlowPagePreview.canvas(page: page, notebookDir: store.notebookDirURL(notebookID), storeRoot: store.rootURL) {
             Image(uiImage: image).resizable().scaledToFit()

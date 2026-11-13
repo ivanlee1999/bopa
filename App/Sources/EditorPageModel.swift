@@ -897,6 +897,11 @@ final class EditorPageModel: NSObject, ObservableObject {
         page?.blocks.first { $0.id == id }
     }
 
+    func refreshPageTitle() {
+        guard let store, let pageId, let latest = try? store.loadPage(notebookId: notebookId, pageId: pageId) else { return }
+        page?.title = latest.title
+    }
+
     /// Puts a box back the way it was, or takes it away again if it was not there before.
     ///
     /// The one operation undo needs, because every change to a text box — typing into a new one,

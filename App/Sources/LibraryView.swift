@@ -120,6 +120,7 @@ struct LibraryView: View {
                         JournalLibraryView(topics: selection == .topics || selectedTopic != nil,
                             allDates: selection == .journal, initialTopic: selectedTopic,
                             narrow: inlineEditor && openNotebook != nil,
+                            navigationRevision: navigationRevision,
                             toggleSidebar: { showsSidebar = !sidebarVisible }, openNotebook: open,
                             selectTopic: { selectDestination(.topic($0)) })
                     } else {
@@ -213,6 +214,7 @@ private struct FolderContentsView: View {
     @State private var newNotebookPageSize = PageSizePreset.default.size
     @State private var newNotebookTemplate = NativeTemplate.blank
     @AppStorage("library.layout") private var layout = "automatic"
+    @AppStorage("library.previewContent") private var previewContent = "ink"
     @State private var showingNewFolder = false
     @State private var newFolderTitle = ""
 
@@ -486,6 +488,9 @@ private struct FolderContentsView: View {
                     Text(item.title).tag(item.rawValue)
                 }
             }
+            Picker("Content", selection: $previewContent) {
+                Text("Ink").tag("ink"); Text("Text").tag("text")
+            }
             Menu {
                 Picker("Sort by", selection: $sortOrderRaw) {
                     ForEach(LibrarySortOrder.allCases) { order in
@@ -643,7 +648,7 @@ private struct FolderContentsView: View {
                     if usesList {
                         VStack(spacing: 0) {
                             ForEach(notebooks, id: \.notebookId) { notebook in
-                                notebookRow(notebook)
+                                contentCard(notebook)
                             }
                         }
                     } else if browserLayout == .feed {

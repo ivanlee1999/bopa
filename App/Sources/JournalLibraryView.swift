@@ -8,14 +8,18 @@ struct JournalLibraryView: View {
     var allDates = false
     var initialTopic: String?
     var narrow = false
+    var navigationRevision = 0
     let toggleSidebar: () -> Void
     let openNotebook: (String) -> Void
     var selectTopic: ((String) -> Void)?
-    @State private var date = Date()
+    @State private var selectedDay = JournalDate.key(Date())
+    @State private var showingCalendar = false
+    @State private var jumpRevision = 0
     @State private var selectedTopic: String?
     @State private var editing: String?
     @State private var error: String?
     @AppStorage("library.layout") private var layoutKey = "feed"
+    @AppStorage("library.previewContent") private var previewContent = "ink"
 
     private var layout: NotebookBrowserLayout { narrow ? .compact : .resolve(layoutKey, compact: sizeClass == .compact) }
     private var topicNames: [String: String] {
@@ -28,19 +32,23 @@ struct JournalLibraryView: View {
         return names
     }
     private var allTopics: [String] { topicNames.keys.sorted() }
-    private var day: String {
-        let format = DateFormatter(); format.locale = Locale(identifier: "en_US_POSIX")
-        format.dateFormat = "yyyy-MM-dd"; return format.string(from: date)
-    }
     private var entries: [NotebookManifest] {
         store.search("").notebooks.filter { notebook in
             guard let entry = store.journalEntries[notebook.notebookId] else { return false }
             if topics { return selectedTopic.map { entry.topics[$0]?.present == true } ?? false }
-            return entry.date != nil && (allDates || entry.date == day)
-        }.sorted { (store.journalEntries[$0.notebookId]?.createdAt ?? 0) > (store.journalEntries[$1.notebookId]?.createdAt ?? 0) }
+            return entry.date != nil
+        }.sorted {
+            let a = store.journalEntries[$0.notebookId]?.createdAt ?? 0, b = store.journalEntries[$1.notebookId]?.createdAt ?? 0
+            return a == b ? $0.notebookId < $1.notebookId : a > b
+        }
     }
-    private var dates: [String] { Array(Set(entries.compactMap { store.journalEntries[$0.notebookId]?.date })).sorted(by: >) }
-    private var title: String { topics ? selectedTopic.map { "#\(topicNames[$0] ?? $0)" } ?? "Tags" : allDates ? "Journal" : "Today" }
+    private var groups: [String: [NotebookManifest]] {
+        Dictionary(grouping: entries.filter { store.journalEntries[$0.notebookId]?.date != nil }) {
+            store.journalEntries[$0.notebookId]!.date!
+        }
+    }
+    private var dates: [String] { Array(Set(groups.keys).union(topics ? [] : [selectedDay])).sorted(by: >) }
+    private var title: String { topics ? selectedTopic.map { "#\(topicNames[$0] ?? $0)" } ?? "Tags" : "Journal" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,20 +61,30 @@ struct JournalLibraryView: View {
                             Text(item.title).tag(item.rawValue)
                         }
                     }
+                    Picker("Content", selection: $previewContent) {
+                        Text("Ink").tag("ink"); Text("Text").tag("text")
+                    }
                 } label: { Image(systemName: "rectangle.grid.2x2").frame(width: 44, height: 44) }
                     .accessibilityLabel("Preview layout")
                 Button("Write") {
                     do {
                         let note = try store.createJournalEntry(topic: topics ? selectedTopic.flatMap { topicNames[$0] } : nil)
-                        date = Date(); openNotebook(note.notebookId)
+                        jump(to: JournalDate.key(Date())); openNotebook(note.notebookId)
                     } catch { self.error = error.localizedDescription }
                 }.buttonStyle(.borderedProminent).tint(Modernist.ink)
             }.padding(.horizontal, 16).padding(.vertical, 8)
-            if !topics && !allDates {
-                DatePicker("Journal date", selection: $date, displayedComponents: .date)
-                    .padding(.horizontal, 20).padding(.bottom, 10)
+            if !topics {
+                HStack {
+                    Button { showingCalendar = true } label: {
+                        Label(selectedDay, systemImage: "calendar").frame(minHeight: 44)
+                    }.accessibilityIdentifier("journal.calendar")
+                    Spacer()
+                    Button("Today") { jump(to: JournalDate.key(Date())) }.frame(minHeight: 44)
+                        .accessibilityIdentifier("journal.today")
+                }.padding(.horizontal, 20)
             }
             ModernistRule()
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if topics && selectedTopic == nil {
@@ -77,9 +95,9 @@ struct JournalLibraryView: View {
                     } else {
                         if topics { Button("All tags") { selectedTopic = nil } }
                         ForEach(dates, id: \.self) { group in
-                            if allDates || topics { Text(group).font(.subheadline).foregroundStyle(.secondary) }
+                            Text(group).font(.subheadline).foregroundStyle(.secondary).id(group)
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top), count: layout.columns), alignment: .leading, spacing: 16) {
-                                ForEach(entries.filter { store.journalEntries[$0.notebookId]?.date == group }, id: \.notebookId) { note in
+                                ForEach(groups[group] ?? [], id: \.notebookId) { note in
                                     NotebookContentCard(notebook: note, layout: layout, edit: { pageID in
                                         if let pageID { store.rememberOpenedPage(pageID, in: note.notebookId) }
                                         openNotebook(note.notebookId)
@@ -87,6 +105,7 @@ struct JournalLibraryView: View {
                                     accessory: AnyView(Button { editing = note.notebookId } label: { Image(systemName: "number").frame(width: 44, height: 44) }.accessibilityLabel("Edit tags")))
                                 }
                             }
+                            if groups[group]?.isEmpty != false { Text("No notes").foregroundStyle(.secondary) }
                         }
                         // Tagged older notebooks need no journal date to belong to a tag.
                         if topics {
@@ -96,10 +115,16 @@ struct JournalLibraryView: View {
                                 })
                             }
                         }
-                        if entries.isEmpty { Text("No notes").foregroundStyle(.secondary) }
+                        if entries.isEmpty && topics { Text("No notes").foregroundStyle(.secondary) }
                     }
                     if let message = store.journalError { Text(message).foregroundStyle(.red) }
                 }.padding(20)
+            }
+            .task(id: "\(selectedDay)#\(jumpRevision)") { await Task.yield(); if !topics { proxy.scrollTo(selectedDay, anchor: .top) } }
+            .accessibilityIdentifier("journal.timeline")
+            .onChange(of: navigationRevision) { _, _ in
+                if !topics && !allDates { jump(to: JournalDate.key(Date())) }
+            }
             }
         }.background(Modernist.paper)
             .onAppear { selectedTopic = initialTopic }
@@ -108,7 +133,14 @@ struct JournalLibraryView: View {
             .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
                 if let editing { JournalTagsSheet(notebookID: editing) }
             }
+            .sheet(isPresented: $showingCalendar) {
+                JournalCalendar(counts: groups.mapValues(\.count), selectedDay: selectedDay) {
+                    jump(to: $0); showingCalendar = false
+                }
+            }
     }
+
+    private func jump(to day: String) { selectedDay = day; jumpRevision += 1 }
 }
 
 struct JournalTagsSheet: View {

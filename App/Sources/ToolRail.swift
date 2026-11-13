@@ -161,6 +161,7 @@ final class ToolSelection: ObservableObject {
     /// pen you were writing with rather than to a pen as broad as the marker.
     @Published private(set) var widths: [Kind: Width] = [:]
     @Published private(set) var eraserMode: EraserMode = .pixel
+    @Published private(set) var favorites: [PenFavorite] = []
 
     private let defaults: UserDefaults
 
@@ -180,6 +181,12 @@ final class ToolSelection: ObservableObject {
            Modernist.inks.indices.contains(stored) {
             inkIndex = stored
         }
+        if let data = defaults.data(forKey: "editor.penFavorites"), let stored = try? JSONDecoder().decode([PenFavorite].self, from: data) {
+            var seen: Set<String> = []
+            favorites = stored.filter { $0.valid && seen.insert($0.id).inserted }
+        } else {
+            favorites = [PenFavorite(id: "default-pen", pen: Kind.pen.rawValue, colorID: ink.id, width: (widths[.pen] ?? .medium).rawValue)]
+        }
     }
 
     private static func widthKey(_ kind: Kind) -> String { "editor.width.\(kind.rawValue)" }
@@ -190,6 +197,30 @@ final class ToolSelection: ObservableObject {
 
     /// The width the current tool writes at.
     var width: Width { widths[kind] ?? .medium }
+
+    var selectedFavoriteID: String? {
+        favorites.first { $0.pen == kind.rawValue && $0.colorID == ink.id && $0.width == width.rawValue }?.id
+    }
+
+    func pinCurrent() {
+        guard kind.takesInk, selectedFavoriteID == nil else { return }
+        favorites.append(PenFavorite(id: UUID().uuidString.lowercased(), pen: kind.rawValue, colorID: ink.id, width: width.rawValue))
+        persistFavorites()
+    }
+
+    func apply(_ favorite: PenFavorite) {
+        guard let kind = favorite.kind, let width = favorite.strokeWidth,
+              let color = Modernist.inks.firstIndex(where: { $0.id == favorite.colorID }), kind.takesInk else { return }
+        self.kind = kind; inkIndex = color; widths[kind] = width
+        defaults.set(color, forKey: Self.inkKey); defaults.set(width.rawValue, forKey: Self.widthKey(kind))
+        revision += 1
+    }
+
+    func moveFavorites(from offsets: IndexSet, to destination: Int) {
+        favorites.move(fromOffsets: offsets, toOffset: destination); persistFavorites()
+    }
+    func deleteFavorites(at offsets: IndexSet) { favorites.remove(atOffsets: offsets); persistFavorites() }
+    private func persistFavorites() { if let data = try? JSONEncoder().encode(favorites) { defaults.set(data, forKey: "editor.penFavorites") } }
 
     func select(_ kind: Kind) {
         self.kind = kind
@@ -236,6 +267,9 @@ final class ToolSelection: ObservableObject {
             default: break
             }
             if let index = Modernist.inkIndex(matching: inking.color) { inkIndex = index }
+            if let width = Width.allCases.first(where: { abs(kind.baseWidth * $0.scale - inking.width) < 0.01 }) {
+                widths[kind] = width
+            }
         } else if tool is PKEraserTool {
             kind = .eraser
         } else if tool is PKLassoTool {
@@ -292,6 +326,8 @@ struct ToolRail: View {
     var vertical = true
     @State private var showingInk = false
     @State private var showingTools = false
+    @State private var showingFavorites = false
+    @State private var showingPopoverFavorites = false
     @State private var lastWritingTool: ToolSelection.Kind = .pen
 
     private var hit: CGFloat { vertical ? Modernist.hit : Modernist.hitCompact }
@@ -302,6 +338,8 @@ struct ToolRail: View {
                 VStack(spacing: 0) {
                     ScrollView(.vertical) {
                         VStack(spacing: 0) {
+                            ForEach(selection.favorites) { favorite in favoriteButton(favorite) }
+                            if !selection.favorites.isEmpty { ModernistRule() }
                             tools
                             if selection.kind.hasWidth {
                                 ModernistRule().frame(width: hit)
@@ -325,10 +363,14 @@ struct ToolRail: View {
                 }
             } else {
                 HStack(spacing: 0) {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 0) {
+                            ForEach(selection.favorites) { favorite in favoriteButton(favorite) }
+                        }
+                    }.scrollIndicators(.hidden).frame(minWidth: 0, maxWidth: .infinity)
                     compactToolChooser
                     toolButton(.eraser)
                     toolButton(.lasso)
-                    Spacer(minLength: 0)
                     history
                     inkMenu
                 }
@@ -346,9 +388,23 @@ struct ToolRail: View {
         .onChange(of: selection.kind, initial: true) { _, kind in
             if kind.takesInk { lastWritingTool = kind }
         }
+        .sheet(isPresented: $showingFavorites) { PenFavoritesEditor(selection: selection) }
     }
 
     // MARK: Groups
+
+    private func favoriteButton(_ favorite: PenFavorite) -> some View {
+        Button { selection.apply(favorite) } label: {
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: favorite.kind?.symbolName ?? "pencil.tip").font(.system(size: 19))
+                Circle().fill(favorite.ink?.color ?? Modernist.ink).frame(width: 8, height: 8).offset(x: 6, y: 4)
+            }
+        }.buttonStyle(RailButtonStyle(selected: selection.selectedFavoriteID == favorite.id, size: hit))
+            .accessibilityLabel("Favorite: \(favorite.label)")
+            .accessibilityIdentifier("editor.favorite.\(favorite.id)")
+            .accessibilityAddTraits(selection.selectedFavoriteID == favorite.id ? .isSelected : [])
+            .contextMenu { Button("Edit favorites") { if showingTools { showingPopoverFavorites = true } else { showingFavorites = true } } }
+    }
 
     @ViewBuilder
     private var tools: some View {
@@ -362,7 +418,8 @@ struct ToolRail: View {
     }
 
     private func toolButton(_ kind: ToolSelection.Kind) -> some View {
-        Button {
+        let selected = selection.kind == kind && (!kind.takesInk || selection.selectedFavoriteID == nil)
+        return Button {
             if !vertical && kind == .eraser && selection.kind == .eraser {
                 showingTools = true
             } else {
@@ -372,9 +429,9 @@ struct ToolRail: View {
             Image(systemName: kind.symbolName)
                 .font(.system(size: 20, weight: .medium))
         }
-        .buttonStyle(RailButtonStyle(selected: selection.kind == kind, size: hit))
+        .buttonStyle(RailButtonStyle(selected: selected, size: hit))
         .accessibilityLabel(kind.label)
-        .accessibilityAddTraits(selection.kind == kind ? .isSelected : [])
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("editor.tool.\(kind.rawValue)")
     }
 
@@ -391,7 +448,7 @@ struct ToolRail: View {
                 Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
             }
         }
-        .buttonStyle(RailButtonStyle(selected: selection.kind.takesInk, size: hit))
+        .buttonStyle(RailButtonStyle(selected: selection.kind.takesInk && selection.selectedFavoriteID == nil, size: hit))
         .accessibilityLabel(selection.kind.takesInk ? "Writing tools and stroke settings" : lastWritingTool.label)
         .accessibilityHint("Tap the selected writing tool or eraser again for stroke settings")
         .accessibilityValue(selection.kind.label + (selection.kind.hasWidth ? ", " + selection.width.label : ""))
@@ -416,6 +473,13 @@ struct ToolRail: View {
                             }
                         }
                         if !vertical { toolButton(.text) }
+                        if !selection.favorites.isEmpty {
+                            Text("Favorites").font(.subheadline)
+                            ScrollView(.horizontal) { HStack { ForEach(selection.favorites) { favorite in favoriteButton(favorite) } } }
+                        }
+                        Button { selection.pinCurrent() } label: { Label("Pin current pen", systemImage: "pin") }
+                            .disabled(!selection.kind.takesInk || selection.selectedFavoriteID != nil)
+                        Button("Edit favorites") { showingPopoverFavorites = true }
                         Text(selection.kind.label).font(.subheadline)
                         if selection.kind.hasWidth {
                             Divider()
@@ -433,6 +497,7 @@ struct ToolRail: View {
                    maxHeight: dynamicTypeSize.isAccessibilitySize ? nil : 420)
             .background(Modernist.paper)
             .tint(Modernist.ink)
+            .sheet(isPresented: $showingPopoverFavorites) { PenFavoritesEditor(selection: selection) }
             .presentationCompactAdaptation(dynamicTypeSize.isAccessibilitySize ? .sheet : .popover)
         }
     }

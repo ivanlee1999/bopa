@@ -10,6 +10,7 @@ struct BopaApp: App {
     @StateObject private var syncCoordinator = SyncCoordinator()
     @StateObject private var handwriting = HandwritingSettings()
     @StateObject private var backendHost = SyncBackendHost()
+    @StateObject private var transcripts = HandwritingTranscriptIndex()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -27,6 +28,7 @@ struct BopaApp: App {
                 .environmentObject(syncCoordinator)
                 .environmentObject(handwriting)
                 .environmentObject(backendHost)
+                .environmentObject(transcripts)
                 .tint(Modernist.ink)
                 // The Modernist tokens describe one ground — a light one. There is no dark
                 // variant to switch to, and half of the chrome inverting while the paper

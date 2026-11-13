@@ -20,9 +20,7 @@ struct PageOverviewView: View {
     /// Tapping a page opens it in the editor and closes the navigator.
     let openPage: (String) -> Void
 
-    @State private var renamingPageId: String?
-    @State private var renameTitle = ""
-    @State private var showingRename = false
+    @State private var renaming: TitleRenameRequest?
     @State private var deletingPageId: String?
     @State private var outliningPageId: String?
     @State private var outlineTitle = ""
@@ -56,20 +54,7 @@ struct PageOverviewView: View {
             }
         }
         .background(Modernist.paper)
-        .alert("Rename page", isPresented: $showingRename) {
-            TextField("Name", text: $renameTitle)
-            Button("Rename") {
-                guard let pageId = renamingPageId else { return }
-                let trimmed = renameTitle.trimmingCharacters(in: .whitespaces)
-                perform("Renaming the page", error: $actionError) {
-                    // An empty name clears it rather than storing "", so the cell falls back to
-                    // "Page 3" instead of showing a blank label.
-                    try store.renamePage(
-                        in: notebookId, pageId: pageId, title: trimmed.isEmpty ? nil : trimmed)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
+        .sheet(item: $renaming) { TitleRenameSheet(request: $0) }
         .alert("Add to outline", isPresented: $showingOutlinePrompt) {
             TextField("Section name", text: $outlineTitle)
             Button("Add") {
@@ -110,17 +95,15 @@ struct PageOverviewView: View {
     private func pageCell(pageId: String, index: Int) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Button { openPage(pageId) } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    thumbnail(pageId: pageId)
-                    Text(label(for: pageId, index: index))
-                        .font(Modernist.font(14, .semibold))
-                        .foregroundStyle(Modernist.ink)
-                        .lineLimit(2)
-                }
+                thumbnail(pageId: pageId)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("pages.page.\(pageId)")
             .accessibilityAddTraits(pageId == currentPageId ? .isSelected : [])
+            Button { rename(pageId) } label: {
+                Text(label(for: pageId, index: index)).font(Modernist.font(14, .semibold))
+                    .foregroundStyle(Modernist.ink).lineLimit(2).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }.buttonStyle(.plain).accessibilityLabel("Rename page")
             HStack {
                 if pageId == currentPageId {
                     Label("Current", systemImage: "checkmark")
@@ -184,6 +167,11 @@ struct PageOverviewView: View {
         }
     }
 
+    private func rename(_ pageId: String) {
+        renaming = TitleRenameRequest(notebookID: notebookId, pageID: pageId,
+            title: (try? store.loadPage(notebookId: notebookId, pageId: pageId).title) ?? "")
+    }
+
     /// The page's own name if it has one, else its position — the number is what everyone counts
     /// pages by, and a page nobody named has nothing else to say.
     private func label(for pageId: String, index: Int) -> String {
@@ -219,9 +207,7 @@ struct PageOverviewView: View {
         }
         Divider()
         Button {
-            renamingPageId = pageId
-            renameTitle = (try? store.loadPage(notebookId: notebookId, pageId: pageId).title) ?? ""
-            showingRename = true
+            rename(pageId)
         } label: {
             Label("Rename", systemImage: "pencil")
         }

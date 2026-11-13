@@ -18,7 +18,7 @@ final class EraserUITests: XCTestCase {
     private func openNotebook(_ app: XCUIApplication, titled title: String) -> XCUIElement {
         // Scoped to the grid: it is the one column that lists notebooks, and saying so keeps
         // the match unambiguous whatever else the library grows.
-        let card = app.descendants(matching: .any)["library.contents"].staticTexts[title]
+        let card = app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"]
         XCTAssertTrue(card.waitForExistence(timeout: 10), "notebook \(title) should be listed")
         card.tap()
         let canvas = app.descendants(matching: .any)["editor.canvas"].firstMatch

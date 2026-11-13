@@ -155,7 +155,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         let b = "Switch B \(suffix)"
         create(a, in: app)
         create(b, in: app)
-        app.descendants(matching: .any)["library.contents"].staticTexts[a].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(a)"].tap()
         draw(in: app)
         waitForValue("strokes:1", on: canvas(app))
         app.buttons["Add page"].tap()
@@ -231,7 +231,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.openLibraryForTests()
         let title = "Options baseline \(UUID().uuidString.prefix(6))"
         create(title, in: app)
-        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"].tap()
         let originalHeight = recordInitialDrawingViewport("options", in: app)
         assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
         XCTAssertTrue(app.buttons["editor.options"].waitForExistence(timeout: 5))
@@ -260,7 +260,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.openLibraryForTests()
         let title = "Text keyboard \(UUID().uuidString.prefix(6))"
         create(title, in: app)
-        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"].tap()
         let originalHeight = recordInitialDrawingViewport("text", in: app)
         assertDrawingKeyboardHidden(app, canvasHeight: originalHeight)
 
@@ -311,7 +311,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.openLibraryForTests()
         let title = "Writing workspace \(UUID().uuidString.prefix(6))"
         create(title, in: app)
-        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"].tap()
         let forward = app.buttons["editor.forwardPage"]
         XCTAssertTrue(forward.waitForExistence(timeout: 5))
         XCTAssertEqual(forward.label, "Add page")
@@ -368,7 +368,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.openLibraryForTests()
         let title = "Large text notebook \(UUID().uuidString.prefix(6))"
         create(title, in: app)
-        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"].tap()
         XCTAssertTrue(app.buttons["editor.pages"].waitForExistence(timeout: 5))
         assertEditorFits(app, landscape: false)
         XCTAssertFalse(app.buttons["editor.notebooks"].frame.intersects(app.buttons["editor.pages"].frame))
@@ -398,7 +398,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.openLibraryForTests()
         let title = "Empty erase \(UUID().uuidString.prefix(6))"
         create(title, in: app)
-        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"].tap()
         draw(in: app)
         waitForValue("strokes:0", on: canvas(app))
         app.buttons["editor.close"].tap()
@@ -413,7 +413,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.openLibraryForTests()
         let title = "Active text \(UUID().uuidString.prefix(6))"
         create(title, in: app)
-        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"].tap()
         canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
         let text = app.textViews["editor.textbox.input"]
         XCTAssertTrue(text.waitForExistence(timeout: 5))
@@ -423,7 +423,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.terminate()
         app.launch()
         app.openLibraryForTests()
-        app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(title)"].tap()
         // Creation rounds page coordinates; tap inside the saved box, not its top-left edge.
         canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
             .withOffset(CGVector(dx: 4, dy: 4)).tap()
@@ -443,7 +443,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         let b = "Text destination \(suffix)"
         create(a, in: app)
         create(b, in: app)
-        app.descendants(matching: .any)["library.contents"].staticTexts[a].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(a)"].tap()
         canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3)).tap()
         let text = app.textViews["editor.textbox.input"]
         XCTAssertTrue(text.waitForExistence(timeout: 5))
@@ -470,7 +470,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.terminate()
         app.launch()
         app.openLibraryForTests()
-        app.descendants(matching: .any)["library.contents"].staticTexts[a].tap()
+        app.descendants(matching: .any)["library.contents"].buttons["Edit \(a)"].tap()
         // Creation rounds page coordinates; tap inside the saved box, not its top-left edge.
         canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
             .withOffset(CGVector(dx: 4, dy: 4)).tap()
