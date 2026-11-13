@@ -51,9 +51,8 @@ targets:
         # Only standard HTTPS/Keychain crypto: exempt from export compliance, declared
         # here so App Store Connect stops asking on every upload.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
-        # Set at archive time (scripts/archive.sh TEAM_ID); empty keeps simulator builds
-        # and CI signing-free.
-        DEVELOPMENT_TEAM: ""
+        # Existing release team; simulator and CI builds disable code signing explicitly.
+        DEVELOPMENT_TEAM: "357RJB33ZU"
         CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: dev.ivan.bopa
         MARKETING_VERSION: 0.11.0
