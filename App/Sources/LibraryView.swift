@@ -20,8 +20,11 @@ struct LibraryView: View {
     @State private var openAfterBrowsing: OpenNotebook?
     @State private var navigationRevision = 0
     @State private var sidebarIsPresentingModal = false
+    @State private var inlineEditor = false
+    @State private var editorLeaveGuard: (() -> Bool)?
+    @State private var editorLeaveOwner: String?
 
-    /// Identifiable wrapper so the editor can be driven by `fullScreenCover(item:)`.
+    /// Stable editor identity across selection and window resizing.
     struct OpenNotebook: Identifiable, Hashable {
         let id: String
         var pageId: String? = nil
@@ -39,43 +42,28 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if sidebarVisible {
-                LibrarySidebar(selection: $selection, isPresentingModal: $sidebarIsPresentingModal,
-                               selectDestination: selectDestination,
-                               closeSidebar: { showsSidebar = false }, openNotebook: open)
-                    .frame(width: horizontalSizeClass == .compact ? nil : 300)
-                    .accessibilityIdentifier("library.sidebar")
-                    .overlay(alignment: .trailing) {
-                        Rectangle()
-                            .fill(Modernist.ink)
-                            .frame(width: Modernist.ruleHeavy)
-                    }
-            }
-            if horizontalSizeClass != .compact || !sidebarVisible {
-                if selection == .today || selection == .topics {
-                    JournalLibraryView(topics: selection == .topics,
-                        toggleSidebar: { showsSidebar = !sidebarVisible }, openNotebook: open)
-                } else {
-                FolderContentsView(
-                    folderId: selection?.folderId,
-                    selection: $selection,
-                    navigationRevision: navigationRevision,
-                    menuCommandsEnabled: openNotebook == nil && browsingNotebook == nil && resolvingConflict == nil
-                        && !sidebarIsPresentingModal,
-                    toggleSidebar: { showsSidebar = !sidebarVisible },
-                    openNotebook: open,
-                    showPages: showPages)
+        GeometryReader { geometry in
+            ZStack(alignment: .trailing) {
+                browser
+                    .allowsHitTesting(inlineEditor || openNotebook == nil)
+                    .accessibilityHidden(!inlineEditor && openNotebook != nil)
+                if let target = openNotebook {
+                    editor(target)
+                        .frame(width: inlineEditor
+                            ? geometry.size.width - (sidebarVisible ? 220 : 0) - 300
+                            : geometry.size.width)
                 }
             }
+            .onAppear { inlineEditor = geometry.size.width >= 1200 }
+            .onChange(of: geometry.size.width) { _, width in inlineEditor = width >= 1200 }
         }
         .background(Modernist.paper)
         // Picking a folder on a one-column screen means "show me that folder".
         .onChange(of: selection) { _, _ in
             if horizontalSizeClass == .compact { showsSidebar = false }
         }
-        // The editor is presented, not pushed: presenting gives the canvas the whole
-        // screen, which is what you want when you are writing.
+        // One editor instance changes width with the workspace, retaining native input/undo
+        // when rotation reveals the browser alongside it.
         // While a notebook is open the editor, not the disk, holds the truth about it — so sync
         // may push it but must never write to it. Cleared on dismiss, which is also when
         // EditorView's onDisappear has just flushed, so the next run reconciles it for real.
@@ -89,17 +77,6 @@ struct LibraryView: View {
                 // backend is selected, so this cannot run a WebDAV sync under CouchDB.
                 Task { await backendHost.syncIfAutomatic() }
             }
-        }
-        // No navigation stack around it: the editor draws its own docked top bar, and a
-        // system bar over it would be a second row of chrome saying the same things.
-        .fullScreenCover(item: $openNotebook) { target in
-            EditorView(notebookId: target.id, initialPageId: target.pageId,
-                       onClose: { openNotebook = nil },
-                       onSwitchNotebook: { openTarget(OpenNotebook(id: $0)) })
-                // A new notebook needs its own model, canvas and undo stack even though the
-                // full-screen presentation stays open throughout the switch.
-                .id(target.id)
-                .environmentObject(store)
         }
         // Presented here rather than inside the grid, alongside the editor it stands in for:
         // a conflicted notebook has to reach the chooser by the same route as a clean one.
@@ -123,6 +100,66 @@ struct LibraryView: View {
         }
     }
 
+    private var browser: some View {
+        HStack(spacing: 0) {
+            if sidebarVisible {
+                LibrarySidebar(selection: $selection, isPresentingModal: $sidebarIsPresentingModal,
+                               selectDestination: selectDestination,
+                               closeSidebar: { showsSidebar = false }, openNotebook: open)
+                    .frame(width: horizontalSizeClass == .compact ? nil : 220)
+                    .accessibilityIdentifier("library.sidebar")
+                    .overlay(alignment: .trailing) {
+                        Rectangle()
+                            .fill(Modernist.ink)
+                            .frame(width: Modernist.ruleHeavy)
+                    }
+            }
+            if horizontalSizeClass != .compact || !sidebarVisible {
+                VStack(spacing: 0) {
+                    if isJournalSelection {
+                        JournalLibraryView(topics: selection == .topics || selectedTopic != nil,
+                            allDates: selection == .journal, initialTopic: selectedTopic,
+                            narrow: inlineEditor && openNotebook != nil,
+                            toggleSidebar: { showsSidebar = !sidebarVisible }, openNotebook: open,
+                            selectTopic: { selectDestination(.topic($0)) })
+                    } else {
+                        FolderContentsView(
+                            folderId: selection?.folderId,
+                            narrow: inlineEditor && openNotebook != nil,
+                            selection: $selection,
+                            navigationRevision: navigationRevision,
+                            menuCommandsEnabled: openNotebook == nil && browsingNotebook == nil && resolvingConflict == nil
+                                && !sidebarIsPresentingModal,
+                            toggleSidebar: { showsSidebar = !sidebarVisible },
+                            openNotebook: open,
+                            showPages: showPages)
+                    }
+                }.frame(width: inlineEditor && openNotebook != nil ? 300 : nil)
+            }
+            if inlineEditor && openNotebook != nil { Spacer(minLength: 0) }
+        }
+    }
+
+    private var selectedTopic: String? {
+        if case .topic(let key) = selection { return key }
+        return nil
+    }
+
+    private var isJournalSelection: Bool {
+        selection == .today || selection == .journal || selection == .topics || selectedTopic != nil
+    }
+
+    private func editor(_ target: OpenNotebook) -> some View {
+        EditorView(notebookId: target.id, initialPageId: target.pageId,
+                   onClose: { openNotebook = nil },
+                   onSwitchNotebook: { openTarget(OpenNotebook(id: $0)) },
+                   registerLeaveGuard: { guardClosure in
+                       if let guardClosure { editorLeaveOwner = target.id; editorLeaveGuard = guardClosure }
+                       else if editorLeaveOwner == target.id { editorLeaveOwner = nil; editorLeaveGuard = nil }
+                   })
+            .id(target.id).environmentObject(store)
+    }
+
     private func showPages(_ notebookId: String) {
         if let conflict = coordinator.conflict(for: notebookId) {
             resolvingConflict = conflict
@@ -144,6 +181,7 @@ struct LibraryView: View {
     }
 
     private func openTarget(_ target: OpenNotebook) {
+        if openNotebook != target, editorLeaveGuard?() == false { return }
         let notebookId = target.id
         if let conflict = coordinator.conflict(for: notebookId) {
             resolvingConflict = conflict
@@ -162,6 +200,7 @@ private struct FolderContentsView: View {
     @EnvironmentObject private var backendHost: SyncBackendHost
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let folderId: String?
+    var narrow = false
     @Binding var selection: LibrarySelection?
     let navigationRevision: Int
     let menuCommandsEnabled: Bool
@@ -239,7 +278,8 @@ private struct FolderContentsView: View {
     /// The design's one-handed layout: notebooks become a list of cover chips rather than
     /// a grid, so a title never truncates to fit a column.
     private var isCompact: Bool { horizontalSizeClass == .compact }
-    private var usesList: Bool { layout == "list" || (layout != "grid" && isCompact) }
+    private var browserLayout: NotebookBrowserLayout { narrow ? .compact : .resolve(layout, compact: isCompact) }
+    private var usesList: Bool { browserLayout == .compact }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -391,7 +431,7 @@ private struct FolderContentsView: View {
     /// further off.
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
+            HStack(spacing: narrow ? 8 : 12) {
                 Button(action: toggleSidebar) {
                     Image(systemName: "sidebar.leading").font(.system(size: 19, weight: .medium))
                 }
@@ -401,8 +441,8 @@ private struct FolderContentsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     if folderId != nil { breadcrumb }
                     Text(title)
-                        .font(Modernist.display(30))
-                        .tracking(Modernist.displayTracking(30))
+                        .font(narrow ? Modernist.font(16, .bold) : Modernist.display(30))
+                        .tracking(narrow ? 0 : Modernist.displayTracking(30))
                         .foregroundStyle(Modernist.ink)
                         .lineLimit(1)
                 }
@@ -414,7 +454,7 @@ private struct FolderContentsView: View {
             ModernistRule(heavy: true)
         }
         .tint(Modernist.ink)
-        .padding(.horizontal, 22)
+        .padding(.horizontal, narrow ? 12 : 22)
         .padding(.top, 8)
     }
 
@@ -442,9 +482,9 @@ private struct FolderContentsView: View {
     private var optionsMenu: some View {
         Menu {
             Picker("View", selection: $layout) {
-                Text("Automatic").tag("automatic")
-                Label("Grid", systemImage: "square.grid.2x2").tag("grid")
-                Label("List", systemImage: "list.bullet").tag("list")
+                ForEach(NotebookBrowserLayout.allCases.filter { !isCompact || $0 != .overview }) { item in
+                    Text(item.title).tag(item.rawValue)
+                }
             }
             Menu {
                 Picker("Sort by", selection: $sortOrderRaw) {
@@ -606,17 +646,17 @@ private struct FolderContentsView: View {
                                 notebookRow(notebook)
                             }
                         }
+                    } else if browserLayout == .feed {
+                        LazyVStack(spacing: 18) {
+                            ForEach(notebooks, id: \.notebookId) { notebook in contentCard(notebook) }
+                        }
                     } else {
                         LazyVGrid(
-                            columns: [
-                                GridItem(
-                                    .adaptive(minimum: 170, maximum: 250), spacing: 14,
-                                    alignment: .top)
-                            ],
+                            columns: Array(repeating: GridItem(.flexible(), spacing: 14, alignment: .top), count: browserLayout.columns),
                             alignment: .leading, spacing: 20
                         ) {
                             ForEach(notebooks, id: \.notebookId) { notebook in
-                                notebookCard(notebook)
+                                contentCard(notebook)
                             }
                         }
                     }
@@ -632,6 +672,14 @@ private struct FolderContentsView: View {
     }
 
     // MARK: Rows and cards
+
+    private func contentCard(_ notebook: NotebookManifest) -> some View {
+        NotebookContentCard(notebook: notebook, layout: browserLayout, edit: { pageID in
+            if let pageID { store.rememberOpenedPage(pageID, in: notebook.notebookId) }
+            openNotebook(notebook.notebookId)
+        }, topic: { selection = .topic(journalTopicKey($0)) }, accessory: AnyView(notebookOptions(notebook)))
+            .contextMenu { notebookMenu(notebook) }
+    }
 
     /// Opening a subfolder moves the sidebar selection rather than pushing, so the two
     /// columns can never disagree about where the user is.

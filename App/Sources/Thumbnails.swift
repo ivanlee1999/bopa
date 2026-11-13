@@ -34,6 +34,13 @@ enum ThumbnailRenderer {
         guard let page = try? store.loadPage(notebookId: notebookId, pageId: pageId)
         else { return nil }
 
+        if !FlowText.ordered(page.blocks).isEmpty {
+            let image = FlowPagePreview.image(page: page, notebookDir: store.notebookDirURL(notebookId),
+                storeRoot: store.rootURL, width: size.width, maximumHeight: size.height)
+            cache.setObject(image, forKey: key)
+            return image
+        }
+
         let pageWidth = CGFloat(page.pageSize.width)
         let pageRect = CGRect(x: 0, y: 0, width: pageWidth, height: CGFloat(page.pageSize.height))
         let fitted = fittedPageRect(pageSize: page.pageSize)

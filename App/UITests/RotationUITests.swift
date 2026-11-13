@@ -81,6 +81,7 @@ final class RotationUITests: XCTestCase {
         app.launchArguments = ["--uitest-reset-tool"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
 
         let canvas = openFreshNotebook(app)
         XCTAssertEqual(canvas.value as? String, "strokes:0")

@@ -10,6 +10,7 @@ final class EraserUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = arguments
         app.launch()
+        app.openLibraryForTests()
         return app
     }
 

@@ -33,14 +33,14 @@ import XCTest
 /// Prefer `pushNow()` over `sync()` in a new test unless the pull is the thing being tested.
 @MainActor
 final class CouchAppLayerEndToEndTests: XCTestCase {
-    private let serverURL = "http://127.0.0.1:5984"
+    private let serverURL = ProcessInfo.processInfo.environment["BOPA_COUCH_URL"] ?? "http://127.0.0.1:5984"
     /// The same server reached by another spelling of its address. Used only by the checkpoint
     /// test, which needs two endpoint identities without needing a second database — the sync
     /// account is a member, not an admin, so it cannot create one.
-    private let alternateServerURL = "http://localhost:5984"
-    private let database = "notes"
-    private let username = "sync"
-    private let password = "testsyncpw"
+    private var alternateServerURL: String { serverURL.replacingOccurrences(of: "127.0.0.1", with: "localhost") }
+    private let database = ProcessInfo.processInfo.environment["BOPA_COUCH_DATABASE"] ?? "notes"
+    private let username = ProcessInfo.processInfo.environment["BOPA_COUCH_USER"] ?? "sync"
+    private let password = ProcessInfo.processInfo.environment["BOPA_COUCH_PASSWORD"] ?? "testsyncpw"
 
     private var rootURL: URL!
     private var namespace = ""
@@ -369,9 +369,9 @@ final class CouchAppLayerEndToEndTests: XCTestCase {
 /// server, and gating it would mean the rule went unchecked on exactly the machines that run the
 /// suite without one.
 final class CouchSyncStateNamingTests: XCTestCase {
-    private let serverURL = "http://127.0.0.1:5984"
-    private let username = "sync"
-    private let password = "testsyncpw"
+    private let serverURL = ProcessInfo.processInfo.environment["BOPA_COUCH_URL"] ?? "http://127.0.0.1:5984"
+    private let username = ProcessInfo.processInfo.environment["BOPA_COUCH_USER"] ?? "sync"
+    private let password = ProcessInfo.processInfo.environment["BOPA_COUCH_PASSWORD"] ?? "testsyncpw"
 
     /// The other half of that identity, which needs no server: two databases on one address must
     /// not share a state file.

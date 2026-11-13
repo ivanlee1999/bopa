@@ -149,6 +149,7 @@ final class NotebookSwitchingUITests: XCTestCase {
                                "-handwriting.fingerDrawing", "true"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
         let suffix = UUID().uuidString.prefix(6)
         let a = "Switch A \(suffix)"
         let b = "Switch B \(suffix)"
@@ -207,6 +208,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         screenshot("library-recent-notebooks")
         app.terminate()
         app.launch()
+        app.openLibraryForTests()
         if !app.descendants(matching: .any)["library.sidebar"].exists {
             app.buttons["library.toggleSidebar"].tap()
         }
@@ -226,6 +228,7 @@ final class NotebookSwitchingUITests: XCTestCase {
                                "-handwriting.fingerDrawing", "true"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
         let title = "Options baseline \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
@@ -254,6 +257,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
         let title = "Text keyboard \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
@@ -304,6 +308,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.launchArguments = ["--uitest-reset-tool", "-handwriting.pageNavigation", "paged"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
         let title = "Writing workspace \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
@@ -360,6 +365,7 @@ final class NotebookSwitchingUITests: XCTestCase {
                                "UICTContentSizeCategoryAccessibilityXXXL"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
         let title = "Large text notebook \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
@@ -389,6 +395,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-select-eraser", "-handwriting.fingerDrawing", "true"]
         app.launch()
+        app.openLibraryForTests()
         let title = "Empty erase \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
@@ -403,6 +410,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-select-text"]
         app.launch()
+        app.openLibraryForTests()
         let title = "Active text \(UUID().uuidString.prefix(6))"
         create(title, in: app)
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
@@ -414,6 +422,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         XCTAssertTrue(app.buttons["library.add"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
+        app.openLibraryForTests()
         app.descendants(matching: .any)["library.contents"].staticTexts[title].tap()
         // Creation rounds page coordinates; tap inside the saved box, not its top-left edge.
         canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
@@ -428,6 +437,7 @@ final class NotebookSwitchingUITests: XCTestCase {
         app.launchArguments = ["--uitest-select-text"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
         let suffix = UUID().uuidString.prefix(6)
         let a = "Text source \(suffix)"
         let b = "Text destination \(suffix)"
@@ -459,6 +469,7 @@ final class NotebookSwitchingUITests: XCTestCase {
                       || app.state == .runningBackgroundSuspended)
         app.terminate()
         app.launch()
+        app.openLibraryForTests()
         app.descendants(matching: .any)["library.contents"].staticTexts[a].tap()
         // Creation rounds page coordinates; tap inside the saved box, not its top-left edge.
         canvas(app).coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))

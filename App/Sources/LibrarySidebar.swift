@@ -7,7 +7,9 @@ import SwiftUI
 /// where these folders and notes came from. Its contents appear below like any other.
 enum LibrarySelection: Hashable {
     case today
+    case journal
     case topics
+    case topic(String)
     case root
     case folder(String)
 
@@ -109,7 +111,8 @@ struct LibrarySidebar: View {
             ScrollView {
                 VStack(spacing: 0) {
                     journalRow("Today", systemImage: "calendar", destination: .today)
-                    journalRow("Topics", systemImage: "number", destination: .topics)
+                    journalRow("All entries", systemImage: "list.bullet", destination: .journal)
+                    journalRow("Tags", systemImage: "number", destination: .topics)
                     rootRow
 
                     if !store.recentNotebooks.isEmpty {

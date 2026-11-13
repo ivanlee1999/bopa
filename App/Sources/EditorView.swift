@@ -16,11 +16,17 @@ struct EditorView: View {
     /// the presenter hands the close action down instead of contributing a toolbar item.
     var onClose: (() -> Void)?
     var onSwitchNotebook: ((String) -> Void)?
+    var registerLeaveGuard: (((() -> Bool)?) -> Void)?
 
     @StateObject private var toolSelection = ToolSelection()
     /// Everything about the open page — what is loaded, what the canvas holds, when it is
     /// saved. A model rather than `@State` so those rules are unit-testable; see its header.
     @StateObject private var model = EditorPageModel()
+    @StateObject private var flow = FlowPageModel()
+    @State private var flowInput = FlowInputController()
+    @State private var typing = false
+    @State private var showingTags = false
+    @AppStorage("editor.prefersTyping") private var prefersTyping = Platform.isMac
     @State private var actionError: LibraryActionError?
     @State private var showingPageOverview = false
     @State private var showingNotebookSwitcher = false
@@ -64,9 +70,18 @@ struct EditorView: View {
                 model.previewsNeighbors = !handwriting.config.pageNavigation.isPaged
                 // The model asks to close when its notebook vanishes underneath it — deleted
                 // locally or by a merge — because an editor over nothing has nothing to show.
-                model.requestClose = { onClose?() }
+                model.requestClose = {
+                    if let recovered = flow.recoveredNotebookID, let onSwitchNotebook { onSwitchNotebook(recovered) }
+                    else { onClose?() }
+                }
+                model.prepareExternalDraft = { flowInput.finish(); return flow.flush() }
+                model.discardExternalDraft = flow.discardAfterLocalDeletion
+                registerLeaveGuard?({ commitOpenTextBox() && model.prepareToLeave() })
                 if model.pageId == nil { model.openInitialPage(preferredPageId: initialPageId) }
+                attachFlow()
+                typing = prefersTyping || isCompact || model.page.map { !FlowText.markdown(in: $0.blocks).isEmpty } == true
             }
+            .onChange(of: model.pageId) { _, _ in attachFlow() }
             .focusedSceneValue(\.editorMenuActions,
                 showingPageOverview || showingNotebookSwitcher || model.saveError != nil || actionError != nil ? nil : EditorMenuActions(
                     pages: showPages,
@@ -83,6 +98,10 @@ struct EditorView: View {
             .onDisappear {
                 commitOpenTextBox()
                 model.saveNow()
+                registerLeaveGuard?(nil)
+            }
+            .onChange(of: initialPageId) { _, value in
+                if let value, value != model.pageId, commitOpenTextBox() { model.open(pageId: value) }
             }
             // Leaving the app does not pop the editor, so the debounced save has to be flushed
             // here too — otherwise switching apps or locking the iPad within two seconds of the
@@ -107,7 +126,7 @@ struct EditorView: View {
                     NotebookNavigatorView(
                         notebookId: notebookId,
                         currentPageId: model.pageId,
-                        openPage: { model.open(pageId: $0) })
+                        openPage: { if commitOpenTextBox() { model.open(pageId: $0) } })
                         .environmentObject(store)
                 }
             }
@@ -123,6 +142,9 @@ struct EditorView: View {
                     showingNotebookSwitcher = false
                 }
             }
+            .sheet(isPresented: $showingTags) {
+                JournalTagsSheet(notebookID: notebookId)
+            }
     }
 
     // MARK: Chrome
@@ -131,7 +153,14 @@ struct EditorView: View {
     /// waits to be dragged out of the way.
     @ViewBuilder
     private var chrome: some View {
-        if isCompact {
+        if typing {
+            VStack(spacing: 0) {
+                topBar
+                FlowDocumentView(model: flow, controller: flowInput, notebookID: notebookId,
+                    tags: { showingTags = true }, draw: { setTyping(false) },
+                    newThought: newThoughtAction)
+            }
+        } else if isCompact {
             VStack(spacing: 0) {
                 topBar
                 canvasArea
@@ -150,11 +179,26 @@ struct EditorView: View {
         }
     }
 
+    private var newThoughtAction: (() -> Void)? {
+        guard onSwitchNotebook != nil else { return nil }
+        return { newThought() }
+    }
+
     private var topBar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 notebookIdentity
                 Spacer(minLength: 4)
+                Button { setTyping(!typing) } label: {
+                    Image(systemName: typing ? "pencil.tip" : "textformat")
+                        .frame(width: Modernist.hitCompact, height: Modernist.hitCompact)
+                }.buttonStyle(.plain)
+                    .accessibilityLabel(typing ? "Draw" : "Type")
+                    .accessibilityIdentifier("editor.inputSurface")
+                Button { commitOpenTextBox(); showingTags = true } label: {
+                    Image(systemName: "number").frame(width: Modernist.hitCompact, height: Modernist.hitCompact)
+                }.buttonStyle(.plain).accessibilityLabel("Tags")
+                    .accessibilityIdentifier("editor.tags")
                 if !dynamicTypeSize.isAccessibilitySize, let manifest { pageControls(manifest) }
                 optionsMenu
             }
@@ -187,7 +231,7 @@ struct EditorView: View {
 
         Button(action: showNotebookSwitcher) {
             HStack(spacing: 4) {
-                Text(manifest?.title ?? "Notebook")
+                Text(store.journalEntries[notebookId]?.date ?? manifest?.title ?? "Notebook")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
@@ -267,24 +311,38 @@ struct EditorView: View {
     /// Writes back whatever box is open. Every route off this page calls it first: a box left
     /// open is a text view floating over a page it no longer belongs to, and its typing would be
     /// committed onto whatever page arrived next.
-    private func commitOpenTextBox() {
+    @discardableResult
+    private func commitOpenTextBox() -> Bool {
         viewport.endTextEditing()
+        flowInput.finish()
+        return flow.flush()
+    }
+
+    private func attachFlow() {
+        guard let pageID = model.pageId else { return }
+        _ = flow.attach(store: store, notebookID: notebookId, pageID: pageID)
+    }
+
+    private func setTyping(_ selected: Bool) {
+        guard commitOpenTextBox(), model.saveNow() else { return }
+        attachFlow()
+        typing = selected; prefersTyping = selected
     }
 
     private func showPages() {
-        commitOpenTextBox()
+        guard commitOpenTextBox() else { return }
         guard model.saveNow() else { return }
         showingPageOverview = true
     }
 
     private func closeNotebook() {
-        commitOpenTextBox()
+        guard commitOpenTextBox() else { return }
         model.close()
     }
 
     private func showNotebookSwitcher() {
         guard onSwitchNotebook != nil else { return }
-        commitOpenTextBox()
+        guard commitOpenTextBox() else { return }
         guard model.prepareToLeave() else { return }
         showingNotebookSwitcher = true
     }
@@ -297,6 +355,10 @@ struct EditorView: View {
             .accessibilityIdentifier("editor.addPageMenu")
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(model.editingBlockID != nil)
+            Button(action: newThought) { Label("New thought", systemImage: "square.and.pencil") }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(onSwitchNotebook == nil)
+            ShareLink(item: shareText) { Label("Share typed text", systemImage: "square.and.arrow.up") }
             Divider()
             Button(action: showNotebookSwitcher) {
                 Label("Switch notebook…", systemImage: "rectangle.on.rectangle")
@@ -431,7 +493,7 @@ struct EditorView: View {
 
     private func openPage(at index: Int) {
         guard let manifest, manifest.pageIds.indices.contains(index) else { return }
-        commitOpenTextBox()
+        guard commitOpenTextBox() else { return }
         model.open(pageId: manifest.pageIds[index])
     }
 
@@ -451,7 +513,7 @@ struct EditorView: View {
     ///   the latch set with no page load coming to clear it, which silently killed every
     ///   subsequent crossing for the rest of the session.
     private func crossSeam(_ direction: Int, _ carried: CGFloat) -> Bool {
-        commitOpenTextBox()
+        guard commitOpenTextBox() else { return false }
         if direction > 0 {
             return model.enterNextPageAcrossSeam(carrying: carried)
         }
@@ -470,7 +532,7 @@ struct EditorView: View {
     /// Failure is reported through the same alert a failed save uses — a disk that is full
     /// produces no page, and silence would read as the scroll simply not working.
     private func appendPageWithoutLeaving() {
-        commitOpenTextBox()
+        guard commitOpenTextBox() else { return }
         guard model.nextPageId == nil else { return }
         guard model.saveNow(persistingScroll: false) else { return }
         do {
@@ -487,7 +549,7 @@ struct EditorView: View {
     /// missed. It reports through the same alert a failed save does, because it is the same kind
     /// of news.
     private func addPage() {
-        commitOpenTextBox()
+        guard commitOpenTextBox() else { return }
         guard model.saveNow() else { return }
         do {
             let newPage = try store.addPage(
@@ -500,6 +562,25 @@ struct EditorView: View {
 
     private var paperBinding: Binding<NativeTemplate> {
         Binding(get: { pageTemplate }, set: { setTemplate($0) })
+    }
+
+    private func newThought() {
+        guard let onSwitchNotebook, commitOpenTextBox(), model.prepareToLeave() else { return }
+        do { onSwitchNotebook(try store.createJournalEntry().notebookId) }
+        catch { actionError = LibraryActionError(action: "Creating a note", underlying: error) }
+    }
+
+    private var shareText: String {
+        guard let manifest else { return "" }
+        return manifest.pageIds.compactMap { pageID -> String? in
+            guard let page = try? store.loadPage(notebookId: notebookId, pageId: pageID) else { return nil }
+            let body = pageID == flow.page?.id
+                ? flow.parts.filter(\.isMarkdown).map(\.source).joined(separator: "\n\n")
+                : FlowText.markdown(in: page.blocks)
+            let annotations = page.blocks.filter { $0.kind == "md" && !FlowText.isFlow($0) }
+                .compactMap(\.text).joined(separator: "\n\n")
+            return [body, annotations].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        }.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
     /// The *whether* of changing paper lives here — only native-backed pages may — and the

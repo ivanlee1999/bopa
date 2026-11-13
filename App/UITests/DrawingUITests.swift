@@ -61,6 +61,7 @@ final class DrawingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-reset-tool"]
         app.launch()
+        app.openLibraryForTests()
 
         let canvas = openFreshNotebook(app)
         XCTAssertEqual(canvas.value as? String, "strokes:0")
@@ -90,6 +91,7 @@ final class DrawingUITests: XCTestCase {
         // simulator inspection may leave the device in landscape, where the page is taller.
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
 
         let canvas = openFreshNotebook(app)
         let pageCounter = app.buttons["editor.pages"]
@@ -159,6 +161,7 @@ final class DrawingUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-reset-tool"]
         app.launch()
+        app.openLibraryForTests()
 
         let canvas = openFreshNotebook(app)
         XCTAssertEqual(canvas.value as? String, "strokes:0")

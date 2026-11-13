@@ -15,10 +15,10 @@ import XCTest
 /// this costs nothing in CI.
 @MainActor
 final class CouchEndToEndTests: XCTestCase {
-    private let serverURL = "http://127.0.0.1:5984"
-    private let database = "notes"
-    private let username = "sync"
-    private let password = "testsyncpw"
+    private let serverURL = ProcessInfo.processInfo.environment["BOPA_COUCH_URL"] ?? "http://127.0.0.1:5984"
+    private let database = ProcessInfo.processInfo.environment["BOPA_COUCH_DATABASE"] ?? "notes"
+    private let username = ProcessInfo.processInfo.environment["BOPA_COUCH_USER"] ?? "sync"
+    private let password = ProcessInfo.processInfo.environment["BOPA_COUCH_PASSWORD"] ?? "testsyncpw"
 
     private var rootURL: URL!
     private var namespace = ""
@@ -83,6 +83,36 @@ final class CouchEndToEndTests: XCTestCase {
             Task { await engine.markDirty(ids) }
         }
         return (store, engine)
+    }
+
+    /// Native typing reaches another device and edits return through the same real save path.
+    func testFlowEditorSourceAndParagraphIDsRoundTripBetweenDevices() async throws {
+        let first = try makeDevice(deviceID: "typed-a-\(namespace)")
+        let second = try makeDevice(deviceID: "typed-b-\(namespace)")
+        let notebook = try first.store.createJournalEntry(topic: "Product")
+        let pageID = notebook.pageIds[0]
+        let editor = FlowPageModel()
+        XCTAssertTrue(editor.attach(store: first.store, notebookID: notebook.notebookId, pageID: pageID))
+        editor.update("A typed thought 👋\n\nSecond paragraph", id: try XCTUnwrap(editor.parts.first?.id))
+        XCTAssertTrue(editor.flush())
+        let original = try first.store.loadPage(notebookId: notebook.notebookId, pageId: pageID)
+        try await Task.sleep(for: .milliseconds(200))
+        let uploaded = await first.engine.flush()
+        XCTAssertTrue(uploaded.failures.isEmpty)
+        _ = try await second.engine.pull(); second.store.refresh()
+        let remote = FlowPageModel()
+        XCTAssertTrue(remote.attach(store: second.store, notebookID: notebook.notebookId, pageID: pageID))
+        XCTAssertEqual(remote.parts.first?.source, "A typed thought 👋\n\nSecond paragraph")
+        remote.update("A typed thought 👋\n\nEdited on another device", id: try XCTUnwrap(remote.parts.first?.id))
+        XCTAssertTrue(remote.flush())
+        try await Task.sleep(for: .milliseconds(200))
+        let returned = await second.engine.flush()
+        XCTAssertTrue(returned.failures.isEmpty)
+        _ = try await first.engine.pull(); first.store.refresh()
+        let result = try first.store.loadPage(notebookId: notebook.notebookId, pageId: pageID)
+        XCTAssertEqual(FlowText.markdown(in: result.blocks), "A typed thought 👋\n\nEdited on another device")
+        XCTAssertEqual(Set(result.blocks.filter { $0.kind == "md" }.map(\.id)), Set(original.blocks.filter { $0.kind == "md" }.map(\.id)))
+        XCTAssertEqual(first.store.journalEntries[notebook.notebookId]?.visibleTopics, ["Product"])
     }
 
     /// A page drawn on one device, through its real save path, arriving on another.

@@ -4,6 +4,38 @@ import XCTest
 /// retained with the test results for reviewing the library, pages and settings together.
 final class LibraryUITests: XCTestCase {
     @MainActor
+    func testFlowTypingSurvivesRelaunchAndStartsAnotherThought() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-editor.prefersTyping", "YES"]
+        app.launch()
+        let write = app.buttons["Write"]
+        XCTAssertTrue(write.waitForExistence(timeout: 8))
+        write.tap()
+        let input = app.textViews["editor.flowText"].firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        let source = "A flowing thought \(Int.random(in: 10000...99999))\n\nA second paragraph"
+        input.tap(); input.typeText(source)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertEqual(input.value as? String, source)
+        capture("flow-typing-wide-workspace", app: app)
+        XCUIDevice.shared.orientation = .portrait
+        // Leave immediately, before the debounce; lifecycle flushing must keep both paragraphs.
+        XCUIDevice.shared.press(.home)
+        app.terminate(); app.launch()
+        let recent = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.recent.'")).firstMatch
+        XCTAssertTrue(recent.waitForExistence(timeout: 8)); recent.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        XCTAssertEqual(input.value as? String, source)
+        app.buttons["New thought"].firstMatch.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        XCTAssertEqual(input.value as? String, "")
+        app.buttons["editor.inputSurface"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["editor.canvas"].firstMatch.waitForExistence(timeout: 8))
+        app.buttons["editor.close"].tap()
+    }
+
+    @MainActor
     private func capture(_ name: String, app: XCUIApplication) {
         // Capture the display: application screenshots can crop using stale portrait bounds
         // during iPad rotation, even after the scene has adopted landscape geometry.
@@ -31,6 +63,7 @@ final class LibraryUITests: XCTestCase {
         app.launchArguments = ["--uitest-reset-tool", "-navigator.tab", "pages"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
+        app.openLibraryForTests()
         defer { XCUIDevice.shared.orientation = .portrait }
 
         let title = "Field notes \(Int.random(in: 10000...99999))"
@@ -38,7 +71,7 @@ final class LibraryUITests: XCTestCase {
         XCTAssertTrue(addNotebook.waitForExistence(timeout: 5))
         // Set this through the actual control: launch-argument defaults override later
         // UserDefaults writes and would prevent the Grid/List preference from changing.
-        selectLayout("Grid", app: app)
+        selectLayout("2 × 2", app: app)
         addNotebook.tap()
         let name = app.textFields["newNotebook.title"]
         XCTAssertTrue(name.waitForExistence(timeout: 5))
@@ -51,7 +84,7 @@ final class LibraryUITests: XCTestCase {
         let shelf = app.descendants(matching: .any)["library.contents"]
         XCTAssertTrue(shelf.staticTexts[title].waitForExistence(timeout: 5))
         capture("library-grid-portrait", app: app)
-        selectLayout("List", app: app)
+        selectLayout("Compact list", app: app)
         XCTAssertEqual(app.buttons["library.options"].value as? String, "List")
         XCTAssertTrue(shelf.staticTexts[title].isHittable)
         capture("library-list-portrait", app: app)
@@ -85,5 +118,18 @@ final class LibraryUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: landscape, evaluatedWith: app)], timeout: 5), .completed)
         XCTAssertTrue(addNotebook.isHittable)
         capture("library-list-landscape", app: app)
+    }
+}
+
+// Existing ink tests use the optional Library, while the app opens into Today.
+extension XCUIApplication {
+    func openLibraryForTests() {
+        let root = buttons["sidebar.library"]
+        if root.waitForExistence(timeout: 5) { root.tap() }
+        let options = buttons["library.options"]
+        if options.waitForExistence(timeout: 5) {
+            options.tap()
+            buttons["Compact list"].tap()
+        }
     }
 }

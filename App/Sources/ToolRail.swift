@@ -21,7 +21,7 @@ final class ToolSelection: ObservableObject {
             case .marker: "Highlighter"
             case .eraser: "Eraser"
             case .lasso: "Select"
-            case .text: "Text"
+            case .text: "Text box"
             }
         }
 
@@ -328,7 +328,6 @@ struct ToolRail: View {
                     compactToolChooser
                     toolButton(.eraser)
                     toolButton(.lasso)
-                    toolButton(.text)
                     Spacer(minLength: 0)
                     history
                     inkMenu
@@ -416,6 +415,7 @@ struct ToolRail: View {
                                 toolButton(kind)
                             }
                         }
+                        if !vertical { toolButton(.text) }
                         Text(selection.kind.label).font(.subheadline)
                         if selection.kind.hasWidth {
                             Divider()

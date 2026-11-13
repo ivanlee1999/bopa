@@ -87,6 +87,11 @@ final class EditorPageModel: NSObject, ObservableObject {
     /// Asked to dismiss the editor when there is nothing left to show — the notebook itself is
     /// gone, or its last page is. Handed in by the view, which owns the navigation.
     var requestClose: (() -> Void)?
+    /// A native flowing editor owns its own durable draft; it must flush before this model
+    /// replaces the page. Existing canvas-only callers leave these hooks unset.
+    var prepareExternalDraft: (() -> Bool)?
+    var discardExternalDraft: (() -> Void)?
+    private var preparingExternalDraft = false
     /// Where the page about to be opened should be scrolled to, when the scroll — not the
     /// page's own saved position — decides. Set immediately before `open`, consumed by it.
     ///
@@ -138,6 +143,7 @@ final class EditorPageModel: NSObject, ObservableObject {
     }
 
     @objc private func storeDidApplyRemoteChanges() {
+        guard !preparingExternalDraft else { return }
         if savingPage {
             storeChangeDuringSave = .remote
             return
@@ -148,6 +154,7 @@ final class EditorPageModel: NSObject, ObservableObject {
     }
 
     @objc private func storeDidChangeLocally() {
+        guard !preparingExternalDraft else { return }
         if savingPage {
             if storeChangeDuringSave == nil { storeChangeDuringSave = .local }
             return
@@ -179,6 +186,8 @@ final class EditorPageModel: NSObject, ObservableObject {
             return true
         }
 
+        if remoteChange, !flushExternalDraft() { return false }
+        if !remoteChange { discardExternalDraft?() }
         if remoteChange, dirty || liveState.isDrawing || editingBlockID != nil { recoveryPending = true }
         if recoveryPending {
             // A text view owns an uncommitted draft. Keep its original page alive until Done,
@@ -312,6 +321,7 @@ final class EditorPageModel: NSObject, ObservableObject {
     ///   either way.
     @discardableResult
     func open(pageId newPageId: String, persistingScroll: Bool = true) -> Bool {
+        guard flushExternalDraft() else { return false }
         // Do not replace a page while a tool gesture or an uncommitted text draft owns it.
         guard !liveState.isDrawing, editingBlockID == nil else { return false }
         // Every route off the current page runs through here, so this is where its debounced
@@ -389,7 +399,14 @@ final class EditorPageModel: NSObject, ObservableObject {
 
     /// Shared by closing and switching notebooks. Failed saves keep the current editor alive.
     func prepareToLeave() -> Bool {
-        !liveState.isDrawing && saveNow()
+        flushExternalDraft() && !liveState.isDrawing && saveNow()
+    }
+
+    private func flushExternalDraft() -> Bool {
+        guard let prepareExternalDraft else { return true }
+        preparingExternalDraft = true
+        defer { preparingExternalDraft = false }
+        return prepareExternalDraft()
     }
 
     /// Enters the page below the seam, carrying the overshoot with it: what was scroll past this
