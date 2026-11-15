@@ -39,14 +39,19 @@ struct BopaApp: App {
                     // objects independently, so the host cannot take them as constructor
                     // arguments.
                     backendHost.attach(store: store, coordinator: syncCoordinator)
+                    transcripts.serverReader = { [weak backendHost] notebookID, pageID in
+                        await backendHost?.serverTranscript(notebookID: notebookID, pageID: pageID)
+                    }
                 }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     switch phase {
                     case .active:
                         backendHost.becameActive()
                     case .background:
+                        transcripts.invalidateServerText()
                         backendHost.enteredBackground()
                     default:
+                        transcripts.invalidateServerText()
                         backendHost.willResignActive()
                     }
                 }
@@ -56,13 +61,18 @@ struct BopaApp: App {
                 .onReceive(NotificationCenter.default.publisher(
                     for: NotebookStore.didChangeLocallyNotification)
                 ) { _ in
+                    transcripts.invalidateServerText()
                     backendHost.noteEdited()
                 }
                 .onReceive(NotificationCenter.default.publisher(
                     for: CouchSettings.didChangeNotification)
                 ) { _ in
+                    transcripts.invalidateServerText()
                     backendHost.configure()
                     if scenePhase == .active { backendHost.becameActive() }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NotebookStore.didApplyRemoteChangesNotification)) { _ in
+                    transcripts.invalidateServerText()
                 }
                 // A WebDAV address was added or cleared. Only the library's sync button cares, so
                 // this re-reads that rather than rebuilding the CouchDB stack underneath it.

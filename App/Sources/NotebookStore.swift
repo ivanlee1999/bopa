@@ -351,6 +351,12 @@ final class NotebookStore: ObservableObject {
 
     func refreshJournal() { journalEntries = organization?.entries() ?? [:] }
 
+    func transcriptPage(notebookID: String, pageID: String) -> PageFile? {
+        guard let manifest = try? liveRenameManifest(notebookID), manifest.pageIds.contains(pageID),
+              !manifest.deletedPageIds.contains(where: { $0.id == pageID }) else { return nil }
+        return readPageFromDisk(notebookId: notebookID, pageId: pageID)
+    }
+
     func manifest(id: String) -> NotebookManifest? {
         notebooks.first { $0.notebookId == id }
     }

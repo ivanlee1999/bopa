@@ -69,18 +69,67 @@ enum HandwritingImage {
 final class HandwritingTranscriptIndex: ObservableObject {
     typealias Recognizer = @Sendable (Data) async throws -> String
     @Published private(set) var records: [String: HandwritingTranscript] = [:]
-    private struct Pending { var token: UUID; var task: Task<Void, Never> }
+    private struct Pending { var token: UUID; var task: Task<Void, Never>; var owner: UUID? = nil }
     private var pending: [String: Pending] = [:]
     private var activeDrawing: [UUID: String] = [:]
     private struct Request { var notebookID: String; var pageID: String; var store: NotebookStore; var delay: Duration }
     private var requested: [String: Request] = [:]
     private let recognize: Recognizer
+    typealias ServerReader = @MainActor (String, String) async -> VerifiedScribeText?
+    var serverReader: ServerReader?
+    var serverTextEnabled: @MainActor () -> Bool = { UserDefaults.standard.bool(forKey: CouchSettings.cloudTextKey) }
+    @Published private(set) var serverRecords: [String: VerifiedScribeText] = [:]
+    private var serverTasks: [String: Pending] = [:]
+    private var editingNotebooks: [UUID: String] = [:]
 
     init(recognize: @escaping Recognizer = { try await HandwritingTextReader.shared.recognize($0) }) {
         self.recognize = recognize
     }
 
     static func key(_ notebookID: String, _ pageID: String) -> String { "\(notebookID)/\(pageID)" }
+
+    func invalidateServerText() {
+        for job in serverTasks.values { job.task.cancel() }
+        serverTasks.removeAll(); serverRecords.removeAll()
+    }
+
+    func cancelServerRequest(notebookID: String, pageID: String, owner: UUID) {
+        let key = Self.key(notebookID, pageID)
+        guard serverTasks[key]?.owner == owner else { return }
+        serverTasks[key]?.task.cancel(); serverTasks[key] = nil
+    }
+
+    func setEditing(_ editing: Bool, owner: UUID, notebookID: String) {
+        if editing { editingNotebooks[owner] = notebookID; invalidateServerText() }
+        else { editingNotebooks[owner] = nil }
+    }
+
+    @discardableResult
+    func requestServer(notebookID: String, pageID: String, store: NotebookStore, owner: UUID = UUID()) -> Task<Void, Never> {
+        let key = Self.key(notebookID, pageID), token = UUID()
+        guard serverTextEnabled(), activeDrawing.isEmpty, !editingNotebooks.values.contains(notebookID),
+              let serverReader, let page = store.transcriptPage(notebookID: notebookID, pageID: pageID) else {
+            serverTasks[key]?.task.cancel(); serverTasks[key] = nil; serverRecords[key] = nil; return Task {}
+        }
+        if var job = serverTasks[key] {
+            job.owner = owner; serverTasks[key] = job
+            return job.task
+        }
+        let ink = ScribeInkSnapshot(page)
+        if serverRecords[key]?.ink != ink { serverRecords[key] = nil }
+        let task = Task { [weak self] in
+            let result = await serverReader(notebookID, pageID)
+            guard let self, !Task.isCancelled, self.serverTasks[key]?.token == token else { return }
+            defer { self.serverTasks[key] = nil }
+            guard self.serverTextEnabled(), self.activeDrawing.isEmpty, !self.editingNotebooks.values.contains(notebookID),
+                  let current = store.transcriptPage(notebookID: notebookID, pageID: pageID), ScribeInkSnapshot(current) == ink,
+                  let result, result.ink == ink, result.result.hasSourceIdentity,
+                  result.result.pageId == pageID, result.result.notebookId == notebookID else { self.serverRecords[key] = nil; return }
+            self.serverRecords[key] = result
+        }
+        serverTasks[key] = Pending(token: token, task: task, owner: owner)
+        return task
+    }
 
     func setDrawing(_ drawing: Bool, owner: UUID, notebookID: String, pageID: String?, store: NotebookStore? = nil) {
         store?.setAutomaticTagDrawing(drawing, owner: owner)
@@ -90,12 +139,16 @@ final class HandwritingTranscriptIndex: ObservableObject {
             return
         }
         let key = Self.key(notebookID, pageID)
+        invalidateServerText()
         activeDrawing[owner] = key
         for job in pending.values { job.task.cancel() }
         pending.removeAll()
     }
 
-    func text(notebookID: String, pageID: String, fingerprint: String) -> String? {
+    func text(notebookID: String, pageID: String, fingerprint: String, serverInk: ScribeInkSnapshot? = nil) -> String? {
+        if serverTextEnabled(), !editingNotebooks.values.contains(notebookID),
+           let record = serverRecords[Self.key(notebookID, pageID)], record.ink == serverInk,
+           !record.result.text.isEmpty { return record.result.text }
         guard let value = records[Self.key(notebookID, pageID)], value.fingerprint == fingerprint else { return nil }
         return value.text.isEmpty ? nil : value.text
     }

@@ -32,6 +32,8 @@ struct CouchSettings: Equatable {
     static let databaseKey = "couch.database"
     static let usernameKey = "couch.username"
     static let deviceIDKey = "couch.deviceID"
+    static let cloudTextKey = "couch.useServerHandwritingText"
+    static let textDatabaseKey = "couch.textDatabase"
     static let keychainAccount = "dev.ivan.bopa.couchdb"
 
     static let didChangeNotification = Notification.Name("dev.ivan.bopa.couchSettingsDidChange")
@@ -43,6 +45,7 @@ struct CouchSettings: Equatable {
     /// Identifies this device in every document it writes. Must differ from the BOOX's, because
     /// it is the tiebreak when two edits share a millisecond.
     var deviceID: String
+    var textDatabase = "notes_text"
 
     static var backend: SyncBackend {
         get {
@@ -58,13 +61,15 @@ struct CouchSettings: Equatable {
             database: UserDefaults.standard.string(forKey: databaseKey) ?? "notes",
             username: UserDefaults.standard.string(forKey: usernameKey) ?? "",
             password: Keychain.load(account: keychainAccount) ?? "",
-            deviceID: UserDefaults.standard.string(forKey: deviceIDKey) ?? defaultDeviceID)
+            deviceID: UserDefaults.standard.string(forKey: deviceIDKey) ?? defaultDeviceID,
+            textDatabase: UserDefaults.standard.string(forKey: textDatabaseKey) ?? "notes_text")
     }
 
     func save() {
         UserDefaults.standard.set(serverURL, forKey: Self.urlKey)
         UserDefaults.standard.set(database.isEmpty ? "notes" : database, forKey: Self.databaseKey)
         UserDefaults.standard.set(username, forKey: Self.usernameKey)
+        UserDefaults.standard.set(textDatabase, forKey: Self.textDatabaseKey)
         UserDefaults.standard.set(
             deviceID.isEmpty ? Self.defaultDeviceID : deviceID, forKey: Self.deviceIDKey)
         Keychain.save(account: Self.keychainAccount, value: password)

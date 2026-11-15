@@ -23,6 +23,13 @@ final class SyncBackendHost: ObservableObject {
     private var engine: CouchSyncEngine?
     private var couchStore: FileCouchStore?
     private var organizationSync: JournalOrganizationSync?
+    private var transcriptClient: CouchDBClient?
+    private var transcriptDatabase = "notes_text"
+    private var transcriptGeneration = UUID()
+    var serverTextEnabled: @MainActor () -> Bool = { UserDefaults.standard.bool(forKey: CouchSettings.cloudTextKey) }
+    var readTranscript: @Sendable (CouchDBClient, String, String, ScribeInkSnapshot, String) async throws -> VerifiedScribeText? = {
+        try await ScribeTextReader.read(client: $0, notebookID: $1, pageID: $2, localInk: $3, textDatabase: $4)
+    }
 
     /// Asks the system to hold the process open for the final flush. Injected so the lifecycle is
     /// testable; see `BackgroundFlushAssertion`.
@@ -73,6 +80,7 @@ final class SyncBackendHost: ObservableObject {
 
     /// Rebuilds the CouchDB stack from current settings. Safe to call repeatedly.
     func configure() {
+        transcriptGeneration = UUID(); transcriptClient = nil
         backend = loadBackend()
         webdavConfigured = SyncSettings.isServerConfigured
         guard let store else { return }
@@ -104,6 +112,8 @@ final class SyncBackendHost: ObservableObject {
         }
 
         let settings = loadSettings()
+        transcriptClient = settings.makeClient()
+        transcriptDatabase = settings.textDatabase
         store.deviceID = settings.deviceID
         guard let stack = CouchSyncStack.make(
             settings: settings, rootURL: store.rootURL,
@@ -183,6 +193,24 @@ final class SyncBackendHost: ObservableObject {
         // was a published field left the peer still listing it, and nothing but this will ever
         // send it. A no-op on every launch after the first.
         store.republishStrandedTrashings()
+    }
+
+    func serverTranscript(notebookID: String, pageID: String) async -> VerifiedScribeText? {
+        guard serverTextEnabled(), backend == .couchdb, let client = transcriptClient,
+              !transcriptDatabase.isEmpty, let engine, let couchStore, let store,
+              let page = store.transcriptPage(notebookID: notebookID, pageID: pageID) else { return nil }
+        let generation = transcriptGeneration, ink = ScribeInkSnapshot(page), documentID = CouchDocID.page(pageID)
+        let state = await engine.currentState
+        guard generation == transcriptGeneration, serverTextEnabled(), !state.dirty.contains(documentID),
+              !couchStore.pendingMarkIDs().contains(documentID) else { return nil }
+        let result = try? await readTranscript(client, notebookID, pageID, ink, transcriptDatabase)
+        let latestState = await engine.currentState
+        guard !Task.isCancelled, generation == transcriptGeneration, serverTextEnabled(),
+              !latestState.dirty.contains(documentID), !couchStore.pendingMarkIDs().contains(documentID),
+              let latest = store.transcriptPage(notebookID: notebookID, pageID: pageID),
+              ScribeInkSnapshot(latest) == ink, let result, result.ink == ink,
+              latestState.revs[documentID] == result.result.sourceRev else { return nil }
+        return result
     }
 
     // MARK: Lifecycle

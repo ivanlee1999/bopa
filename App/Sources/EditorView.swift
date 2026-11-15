@@ -70,6 +70,7 @@ struct EditorView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 model.attach(store: store, notebookId: notebookId)
+                transcripts.setEditing(true, owner: recognitionOwner, notebookID: notebookId)
                 model.liveState.onDrawingStateChanged = { drawing in
                     transcripts.setDrawing(drawing, owner: recognitionOwner, notebookID: notebookId, pageID: model.pageId, store: store)
                 }
@@ -106,6 +107,7 @@ struct EditorView: View {
             .onDisappear {
                 model.liveState.onDrawingStateChanged = nil
                 transcripts.setDrawing(false, owner: recognitionOwner, notebookID: notebookId, pageID: nil, store: store)
+                transcripts.setEditing(false, owner: recognitionOwner, notebookID: notebookId)
                 commitOpenTextBox()
                 model.saveNow()
                 registerLeaveGuard?(nil)

@@ -198,6 +198,7 @@ struct SyncSettingsView: View {
     @State private var backend = CouchSettings.backend
     @State private var automatic = SyncSettings.isAutomaticEnabled
     @State private var showingFolderPicker = false
+    @AppStorage(CouchSettings.cloudTextKey) private var useServerText = false
 
     /// Set by the app so the CouchDB section can drive syncs. Nil in previews and in tests that
     /// render the form on its own.
@@ -232,6 +233,18 @@ struct SyncSettingsView: View {
                     HostedCouchSettingsSection(settings: $couchSettings, host: backendHost)
                 } else {
                     CouchSettingsSection(settings: $couchSettings, host: nil)
+                }
+                Section {
+                    Toggle("Use server handwriting text", isOn: $useServerText)
+                        .onChange(of: useServerText) { _, _ in
+                            NotificationCenter.default.post(name: CouchSettings.didChangeNotification, object: nil)
+                        }
+                    if useServerText {
+                        TextField("Transcript database", text: $couchSettings.textDatabase)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
+                } footer: {
+                    Text("Read enhanced handwriting text from your configured CouchDB server. Its Scribe service may use a cloud model. Local recognition stays available; this switch does not configure a provider or send notes to one.")
                 }
             case .webdav:
                 webdavSections

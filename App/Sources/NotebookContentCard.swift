@@ -26,7 +26,9 @@ enum NotebookBrowserLayout: String, CaseIterable, Identifiable {
 struct NotebookContentCard: View {
     @EnvironmentObject private var store: NotebookStore
     @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("library.previewContent") private var previewContent = "ink"
+    @AppStorage(CouchSettings.cloudTextKey) private var useServerText = false
     let notebook: NotebookManifest
     var layout = NotebookBrowserLayout.feed
     let edit: (String?) -> Void
@@ -36,6 +38,7 @@ struct NotebookContentCard: View {
     @State private var page: PageFile?
     @State private var expanded = false
     @State private var inkFingerprint = ""
+    @State private var serverInk: ScribeInkSnapshot?
     @State private var renaming: TitleRenameRequest?
     @State private var showingPages = false
 
@@ -46,7 +49,7 @@ struct NotebookContentCard: View {
     private var topics: [String] { store.journalEntries[notebook.notebookId]?.visibleTopics ?? [] }
     private var revision: String { pageID.map { store.pageRevision(notebookId: notebook.notebookId, pageId: $0) } ?? "" }
     private var transcript: String? {
-        pageID.flatMap { transcripts.text(notebookID: notebook.notebookId, pageID: $0, fingerprint: inkFingerprint) }
+        pageID.flatMap { transcripts.text(notebookID: notebook.notebookId, pageID: $0, fingerprint: inkFingerprint, serverInk: serverInk) }
     }
 
     var body: some View {
@@ -122,7 +125,17 @@ struct NotebookContentCard: View {
                 guard let pageID else { page = nil; return }
                 page = try? store.loadPage(notebookId: notebook.notebookId, pageId: pageID)
                 inkFingerprint = HandwritingTranscript.fingerprint(page?.strokes ?? [])
+                serverInk = page.map(ScribeInkSnapshot.init)
                 transcripts.request(notebookID: notebook.notebookId, pageID: pageID, store: store)
+            }
+            .task(id: "\(pageID ?? "")#\(revision)#\(previewContent)#\(useServerText)#\(scenePhase)") {
+                guard let pageID, useServerText, previewContent == "text", scenePhase == .active else { return }
+                let owner = UUID()
+                defer { transcripts.cancelServerRequest(notebookID: notebook.notebookId, pageID: pageID, owner: owner) }
+                while !Task.isCancelled {
+                    transcripts.requestServer(notebookID: notebook.notebookId, pageID: pageID, store: store, owner: owner)
+                    do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                }
             }
             .sheet(item: $renaming) { TitleRenameSheet(request: $0) }
             .sheet(isPresented: $showingPages) {
