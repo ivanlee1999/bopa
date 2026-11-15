@@ -17,10 +17,10 @@ final class JournalWorkspaceUITests: XCTestCase {
         app.buttons["rename.save"].tap()
         return result
     }
-    @MainActor private func launch() -> XCUIApplication {
+    @MainActor private func launch(layout: String = "feed") -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments = ["--uitest-reset-tool", "-editor.prefersTyping", "YES", "-library.layout", "feed"]
+        app.launchArguments = ["--uitest-reset-tool", "-editor.prefersTyping", "YES", "-library.layout", layout]
         app.launch(); return app
     }
 
@@ -41,7 +41,6 @@ final class JournalWorkspaceUITests: XCTestCase {
 
         let timeline = app.scrollViews["journal.timeline"]
         XCTAssertTrue(timeline.waitForExistence(timeout: 5))
-        app.buttons["Expand"].firstMatch.tap()
         app.buttons["journal.calendar"].tap()
         XCTAssertTrue(app.buttons["Choose month and year"].waitForExistence(timeout: 5))
         app.buttons["Choose month and year"].tap()
@@ -124,7 +123,7 @@ final class JournalWorkspaceUITests: XCTestCase {
 
     @MainActor
     func testPreviewFingerSwipesAndFavoritePensCanBePinnedReorderedAndSelected() {
-        let app = launch()
+        let app = launch(layout: "large")
         let library = app.buttons["sidebar.library"]
         if !library.exists { app.buttons["Browse"].tap() }
         XCTAssertTrue(library.waitForExistence(timeout: 5)); library.tap()

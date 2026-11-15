@@ -59,7 +59,16 @@ struct NotebookContentCard: View {
             } label: {
                 Text(notebook.title).font(.headline).lineLimit(2).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             }.buttonStyle(.plain).accessibilityLabel("Rename \(notebook.title)")
-            if layout == .compact {
+            if layout == .feed {
+                LazyVStack(alignment: .leading, spacing: 24) {
+                    ForEach(Array(notebook.pageIds.enumerated()), id: \.element) { index, pageID in
+                        NotebookReadingPage(notebookID: notebook.notebookId, pageID: pageID, number: index + 1,
+                            edit: { edit(pageID) }, rename: { title in
+                                renaming = TitleRenameRequest(notebookID: notebook.notebookId, pageID: pageID, title: title)
+                            })
+                    }
+                }
+            } else if layout == .compact {
                 Button { edit(pageID) } label: {
                     HStack(alignment: .top, spacing: 12) {
                         if let pageID, let image = ThumbnailRenderer.thumbnail(notebookId: notebook.notebookId, pageId: pageID, store: store) {
@@ -73,22 +82,7 @@ struct NotebookContentCard: View {
                 }.buttonStyle(.plain)
             } else {
                 if let page {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if previewContent == "text", let transcript {
-                            if FlowCanvasPreview.hasNonInkContent(page) { FlowCanvasPreview(page: page, notebookID: notebook.notebookId) }
-                            VStack(alignment: .leading, spacing: 6) {
-                                Label("Recognized handwriting", systemImage: "text.viewfinder").font(.caption).foregroundStyle(.secondary)
-                                Text(transcript).textSelection(.enabled)
-                            }
-                        } else if FlowCanvasPreview.hasCanvas(page) { FlowCanvasPreview(page: page, notebookID: notebook.notebookId) }
-                        ForEach(FlowText.sections(in: page.blocks)) { section in
-                            if section.isMarkdown { FlowReadText(source: section.source) }
-                            else if let block = section.blocks.first, previewContent != "text" || transcript == nil || block.kind != "ink" { FlowBoundaryView(block: block, page: page, notebookID: notebook.notebookId) }
-                        }
-                        if !FlowCanvasPreview.hasCanvas(page), FlowText.ordered(page.blocks).isEmpty {
-                            Text("Empty note").foregroundStyle(.secondary).padding(.vertical, 24)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    NotebookPageContent(page: page, notebookID: notebook.notebookId, transcript: transcript, previewContent: previewContent)
                         .frame(maxHeight: expanded ? nil : layout.previewHeight, alignment: .top).clipped()
                         .background(PreviewPageSwipe(enabled: notebook.pageIds.count > 1, move: movePage))
                         .accessibilityIdentifier("preview.content.\(notebook.notebookId)")
@@ -104,16 +98,19 @@ struct NotebookContentCard: View {
                 }
             }
             HStack(spacing: 8) {
-                if let pageID {
+                if layout == .feed {
+                    Text("\(notebook.pageIds.count) \(notebook.pageIds.count == 1 ? "page" : "pages")")
+                } else if let pageID {
                     Button { renaming = TitleRenameRequest(notebookID: notebook.notebookId, pageID: pageID, title: page?.title ?? "") } label: {
                         Text(page?.title ?? "Page \((notebook.pageIds.firstIndex(of: pageID) ?? 0) + 1)").lineLimit(1)
                     }.accessibilityLabel("Rename page")
                 }
-                Button { showingPages = true } label: {
+                if layout != .feed { Button { showingPages = true } label: {
                     Label("\((notebook.pageIds.firstIndex(of: pageID ?? "") ?? 0) + 1)/\(notebook.pageIds.count)", systemImage: "rectangle.grid.2x2")
                 }.accessibilityLabel("Preview pages").accessibilityIdentifier("preview.pages.\(notebook.notebookId)")
                     .accessibilityValue("\((notebook.pageIds.firstIndex(of: pageID ?? "") ?? 0) + 1)/\(notebook.pageIds.count)")
-                if layout != .compact { Button(expanded ? "Collapse" : "Expand") { expanded.toggle() } }
+                }
+                if layout != .compact && layout != .feed { Button(expanded ? "Collapse" : "Expand") { expanded.toggle() } }
                 Spacer(minLength: 0)
                 Button("Edit") { edit(pageID) }
                     .accessibilityLabel("Edit \(notebook.title)")
@@ -121,15 +118,15 @@ struct NotebookContentCard: View {
             }.font(.caption).buttonStyle(.plain).frame(minHeight: 44)
             ModernistRule()
         }.foregroundStyle(Modernist.ink)
-            .task(id: "\(pageID ?? "")#\(revision)") {
-                guard let pageID else { page = nil; return }
+            .task(id: "\(layout.rawValue)#\(pageID ?? "")#\(revision)") {
+                guard layout != .feed, let pageID else { page = nil; return }
                 page = try? store.loadPage(notebookId: notebook.notebookId, pageId: pageID)
                 inkFingerprint = HandwritingTranscript.fingerprint(page?.strokes ?? [])
                 serverInk = page.map(ScribeInkSnapshot.init)
                 transcripts.request(notebookID: notebook.notebookId, pageID: pageID, store: store)
             }
-            .task(id: "\(pageID ?? "")#\(revision)#\(previewContent)#\(useServerText)#\(scenePhase)") {
-                guard let pageID, useServerText, previewContent == "text", scenePhase == .active else { return }
+            .task(id: "\(layout.rawValue)#\(pageID ?? "")#\(revision)#\(previewContent)#\(useServerText)#\(scenePhase)") {
+                guard layout != .feed, let pageID, useServerText, previewContent == "text", scenePhase == .active else { return }
                 let owner = UUID()
                 defer { transcripts.cancelServerRequest(notebookID: notebook.notebookId, pageID: pageID, owner: owner) }
                 while !Task.isCancelled {
@@ -155,6 +152,94 @@ struct NotebookContentCard: View {
     @ViewBuilder private func tag(_ name: String) -> some View {
         if let topic { Button("#\(name)") { topic(name) }.buttonStyle(.plain).font(.caption).frame(minHeight: 44) }
         else { Text("#\(name)").font(.caption) }
+    }
+}
+
+private struct NotebookReadingPage: View {
+    @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("library.previewContent") private var previewContent = "ink"
+    @AppStorage(CouchSettings.cloudTextKey) private var useServerText = false
+    let notebookID: String
+    let pageID: String
+    let number: Int
+    let edit: () -> Void
+    let rename: (String) -> Void
+    @State private var page: PageFile?
+    @State private var inkFingerprint = ""
+    @State private var serverInk: ScribeInkSnapshot?
+
+    private var revision: String { store.pageRevision(notebookId: notebookID, pageId: pageID) }
+    private var transcript: String? {
+        transcripts.text(notebookID: notebookID, pageID: pageID, fingerprint: inkFingerprint, serverInk: serverInk)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button { rename(page?.title ?? "") } label: {
+                HStack {
+                    Text("Page \(number)")
+                    if let title = page?.title, !title.isEmpty, title != "Page \(number)" { Text(title).lineLimit(1) }
+                }.font(.caption).foregroundStyle(.secondary).frame(minHeight: 44)
+            }.buttonStyle(.plain).accessibilityLabel("Rename page \(number)")
+            if let page {
+                NotebookPageContent(page: page, notebookID: notebookID, transcript: transcript, previewContent: previewContent)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle()).onTapGesture(perform: edit)
+                    .accessibilityIdentifier("preview.content.\(notebookID).\(pageID)")
+            } else {
+                ProgressView().frame(maxWidth: .infinity, minHeight: 100)
+            }
+        }
+        .task(id: revision) {
+            let requestedRevision = revision
+            let work = Task.detached(priority: .userInitiated) { [store, notebookID, pageID] in
+                let page = try? store.readPage(notebookId: notebookID, pageId: pageID)
+                return (page, HandwritingTranscript.fingerprint(page?.strokes ?? []), page.map(ScribeInkSnapshot.init))
+            }
+            let ready = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            guard !Task.isCancelled, revision == requestedRevision else { return }
+            page = ready.0; inkFingerprint = ready.1; serverInk = ready.2
+            transcripts.request(notebookID: notebookID, pageID: pageID, store: store)
+        }
+        .task(id: "\(revision)#\(previewContent)#\(useServerText)#\(scenePhase)") {
+            guard useServerText, previewContent == "text", scenePhase == .active else { return }
+            let owner = UUID()
+            defer { transcripts.cancelServerRequest(notebookID: notebookID, pageID: pageID, owner: owner) }
+            while !Task.isCancelled {
+                transcripts.requestServer(notebookID: notebookID, pageID: pageID, store: store, owner: owner)
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            }
+        }
+    }
+}
+
+private struct NotebookPageContent: View {
+    let page: PageFile
+    let notebookID: String
+    let transcript: String?
+    let previewContent: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if previewContent == "text", let transcript {
+                if FlowCanvasPreview.hasNonInkContent(page) { FlowCanvasPreview(page: page, notebookID: notebookID) }
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Recognized handwriting", systemImage: "text.viewfinder").font(.caption).foregroundStyle(.secondary)
+                    Text(transcript).textSelection(.enabled)
+                }
+            } else if FlowCanvasPreview.hasCanvas(page) { FlowCanvasPreview(page: page, notebookID: notebookID) }
+            ForEach(FlowText.sections(in: page.blocks)) { section in
+                if section.isMarkdown { FlowReadText(source: section.source) }
+                else if let block = section.blocks.first, previewContent != "text" || transcript == nil || block.kind != "ink" {
+                    FlowBoundaryView(block: block, page: page, notebookID: notebookID)
+                }
+            }
+            if !FlowCanvasPreview.hasCanvas(page), FlowText.ordered(page.blocks).isEmpty {
+                Text("Empty note").foregroundStyle(.secondary).padding(.vertical, 24)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
