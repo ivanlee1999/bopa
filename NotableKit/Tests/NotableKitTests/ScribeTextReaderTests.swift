@@ -35,6 +35,29 @@ final class ScribeTextReaderTests: XCTestCase {
         XCTAssertEqual(server.requestLog.map(\.path), ["/notes/page:p", "/notes_text/pagetext:p", "/notes/page:p"])
     }
 
+    func testNonStringFormatRemainsVerifiedLiteralText() async throws {
+        for format: Any in [[String: String](), [String](), true, 42, NSNull()] {
+            let (server, client, page, text) = fixture()
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(text)) as? [String: Any])
+            let source = "# Literal heading\n- [x] Literal task"
+            json["text"] = source; json["format"] = format
+            server.seedRaw("pagetext:p", json)
+            let verified = try await ScribeTextReader.read(client: client, notebookID: "book", pageID: "p", localInk: ScribeInkSnapshot(page))
+            let value = try XCTUnwrap(verified?.result)
+            XCTAssertTrue(value.hasSourceIdentity); XCTAssertNil(value.format); XCTAssertEqual(value.text, source)
+            XCTAssertFalse(TranscriptContent(text: value.text, format: value.format).isMarkdown)
+        }
+    }
+
+    func testLossyFormatDoesNotRelaxSourceIdentityOrRequiredTextTypes() throws {
+        let (_, _, _, text) = fixture()
+        for key in ["pageId", "notebookId", "text", "sourceRev", "sourceFingerprint", "pipelineVersion"] {
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(text)) as? [String: Any])
+            json["format"] = [String: String](); json[key] = 42
+            XCTAssertThrowsError(try JSONDecoder().decode(ScribePageText.self, from: JSONSerialization.data(withJSONObject: json)), key)
+        }
+    }
+
     func testStaleMissingOrMalformedEnhancedIdentityIsRejected() async throws {
         for variant in 0..<4 {
             let (server, client, page, original) = fixture()

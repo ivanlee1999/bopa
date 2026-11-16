@@ -16,6 +16,29 @@ public struct ScribePageText: Codable, Sendable {
     public var sourceFingerprint: String?
     public var pipelineVersion: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case pageId, notebookId, pageTitle, text, format, engine, language, recognizedClock
+        case updatedAt, updatedBy, sourceRev, sourceFingerprint, pipelineVersion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        pageId = try values.decode(String.self, forKey: .pageId)
+        notebookId = try values.decodeIfPresent(String.self, forKey: .notebookId)
+        pageTitle = try values.decodeIfPresent(String.self, forKey: .pageTitle)
+        text = try values.decode(String.self, forKey: .text)
+        // Only the display hint is lossy; unrecognized values must remain literal text.
+        format = try? values.decode(String.self, forKey: .format)
+        engine = try values.decodeIfPresent(String.self, forKey: .engine)
+        language = try values.decodeIfPresent(String.self, forKey: .language)
+        recognizedClock = try values.decodeIfPresent(String.self, forKey: .recognizedClock)
+        updatedAt = try values.decodeIfPresent(String.self, forKey: .updatedAt)
+        updatedBy = try values.decodeIfPresent(String.self, forKey: .updatedBy)
+        sourceRev = try values.decodeIfPresent(String.self, forKey: .sourceRev)
+        sourceFingerprint = try values.decodeIfPresent(String.self, forKey: .sourceFingerprint)
+        pipelineVersion = try values.decodeIfPresent(String.self, forKey: .pipelineVersion)
+    }
+
     public init(pageId: String, notebookId: String?, text: String, sourceRev: String? = nil,
                 sourceFingerprint: String? = nil, pipelineVersion: String? = nil, format: String? = nil) {
         self.pageId = pageId; self.notebookId = notebookId; self.text = text
