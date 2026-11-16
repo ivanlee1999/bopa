@@ -6,6 +6,7 @@ public struct ScribePageText: Codable, Sendable {
     public var notebookId: String?
     public var pageTitle: String?
     public var text: String
+    public var format: String?
     public var engine: String?
     public var language: String?
     public var recognizedClock: String?
@@ -16,9 +17,10 @@ public struct ScribePageText: Codable, Sendable {
     public var pipelineVersion: String?
 
     public init(pageId: String, notebookId: String?, text: String, sourceRev: String? = nil,
-                sourceFingerprint: String? = nil, pipelineVersion: String? = nil) {
+                sourceFingerprint: String? = nil, pipelineVersion: String? = nil, format: String? = nil) {
         self.pageId = pageId; self.notebookId = notebookId; self.text = text
         self.sourceRev = sourceRev; self.sourceFingerprint = sourceFingerprint; self.pipelineVersion = pipelineVersion
+        self.format = format
     }
 
     public var hasSourceIdentity: Bool {

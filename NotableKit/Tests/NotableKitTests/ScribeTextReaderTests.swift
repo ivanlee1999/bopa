@@ -13,7 +13,7 @@ final class ScribeTextReaderTests: XCTestCase {
         server.seed("page:p", page)
         let text = ScribePageText(pageId: "p", notebookId: "book", text: "Server text",
             sourceRev: server.revision("page:p"), sourceFingerprint: "sha256:" + String(repeating: "a", count: 64),
-            pipelineVersion: "scribe-v2:" + String(repeating: "b", count: 64))
+            pipelineVersion: "scribe-v2:" + String(repeating: "b", count: 64), format: "markdown")
         server.seed("pagetext:p", text)
         return (server, CouchDBClient(transport: server), page, text)
     }
@@ -30,6 +30,7 @@ final class ScribeTextReaderTests: XCTestCase {
         let (server, client, page, _) = fixture()
         let result = try await ScribeTextReader.read(client: client, notebookID: "book", pageID: "p", localInk: ScribeInkSnapshot(page))
         XCTAssertEqual(result?.result.text, "Server text")
+        XCTAssertEqual(result?.result.format, "markdown")
         XCTAssertEqual(server.requestLog.map(\.method), ["GET", "GET", "GET"])
         XCTAssertEqual(server.requestLog.map(\.path), ["/notes/page:p", "/notes_text/pagetext:p", "/notes/page:p"])
     }

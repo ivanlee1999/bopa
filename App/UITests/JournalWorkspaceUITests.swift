@@ -132,6 +132,8 @@ final class JournalWorkspaceUITests: XCTestCase {
         let field = app.textFields["newNotebook.title"]
         XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(title)
         app.buttons["newNotebook.create"].tap()
+        let search = app.textFields["library.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText(title)
         let edit = app.buttons["Edit \(title)"]
         XCTAssertTrue(edit.waitForExistence(timeout: 5)); edit.tap()
         let input = app.textViews["editor.flowText"].firstMatch

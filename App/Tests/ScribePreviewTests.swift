@@ -19,13 +19,14 @@ final class ScribePreviewTests: XCTestCase {
     }
     private func result(_ note: NotebookManifest, _ page: PageFile, text: String = "#ServerTag") -> VerifiedScribeText {
         VerifiedScribeText(result: ScribePageText(pageId: page.id, notebookId: note.notebookId, text: text, sourceRev: "1-source",
-            sourceFingerprint: "sha256:" + String(repeating: "a", count: 64), pipelineVersion: "scribe-v2:" + String(repeating: "b", count: 64)),
+            sourceFingerprint: "sha256:" + String(repeating: "a", count: 64), pipelineVersion: "scribe-v2:" + String(repeating: "b", count: 64), format: "markdown"),
             ink: ScribeInkSnapshot(page))
     }
 
     func testRemoteDisplayNeverMutatesInkTypedSourceOrAutomaticTags() async throws {
         let (store, note, page) = try fixture(), index = HandwritingTranscriptIndex()
-        let verified = result(note, page)
+        var verified = result(note, page)
+        verified.result.format = "markdown"
         index.serverTextEnabled = { true }; index.serverReader = { _, _ in verified }
         let pageURL = store.notebookDirURL(note.notebookId).appendingPathComponent("pages/\(page.id).json")
         let pageBytes = try Data(contentsOf: pageURL), metadataURL = store.rootURL.appendingPathComponent(".bopa-organization.json")
@@ -34,6 +35,7 @@ final class ScribePreviewTests: XCTestCase {
         let subscription = store.$journalEntries.sink { if $0[note.notebookId]?.topics["servertag"] != nil { unexpected.fulfill() } }
         await index.requestServer(notebookID: note.notebookId, pageID: page.id, store: store).value
         XCTAssertEqual(index.text(notebookID: note.notebookId, pageID: page.id, fingerprint: "", serverInk: ScribeInkSnapshot(page)), "#ServerTag")
+        XCTAssertEqual(index.content(notebookID: note.notebookId, pageID: page.id, fingerprint: "", serverInk: ScribeInkSnapshot(page))?.format, "markdown")
         let observed = await XCTWaiter.fulfillment(of: [unexpected], timeout: 0.6)
         XCTAssertEqual(observed, .completed); subscription.cancel()
         XCTAssertEqual(try Data(contentsOf: pageURL), pageBytes)
@@ -48,6 +50,7 @@ final class ScribePreviewTests: XCTestCase {
         let fingerprint = HandwritingTranscript.fingerprint(page.strokes), ink = ScribeInkSnapshot(page)
         await index.requestServer(notebookID: note.notebookId, pageID: page.id, store: store).value
         XCTAssertEqual(index.text(notebookID: note.notebookId, pageID: page.id, fingerprint: fingerprint, serverInk: ink), "Local fallback")
+        XCTAssertNil(index.content(notebookID: note.notebookId, pageID: page.id, fingerprint: fingerprint, serverInk: ink)?.format)
         let verified = result(note, page, text: "Enhanced")
         index.serverReader = { _, _ in verified }
         await index.requestServer(notebookID: note.notebookId, pageID: page.id, store: store).value
@@ -129,6 +132,22 @@ final class ScribePreviewTests: XCTestCase {
         index.cancelServerRequest(notebookID: note.notebookId, pageID: page.id, owner: oldOwner)
         await gate.resume(result(note, page, text: "Current owner")); await successor.value
         XCTAssertEqual(index.serverRecords[HandwritingTranscriptIndex.key(note.notebookId, page.id)]?.result.text, "Current owner")
+    }
+
+    func testMarkdownFormatCannotSurviveAnEraseOrLeakIntoLocalOCRFallback() async throws {
+        let (store, note, page) = try fixture(), index = HandwritingTranscriptIndex(recognize: { _ in "# Local literal" })
+        await index.request(notebookID: note.notebookId, pageID: page.id, store: store, delay: .zero).value
+        var verified = result(note, page, text: "# Enhanced heading")
+        verified.result.format = "markdown"
+        index.serverTextEnabled = { true }; index.serverReader = { _, _ in verified }
+        await index.requestServer(notebookID: note.notebookId, pageID: page.id, store: store).value
+        XCTAssertTrue(index.content(notebookID: note.notebookId, pageID: page.id, fingerprint: "", serverInk: ScribeInkSnapshot(page))?.isMarkdown == true)
+        var erased = page; erased.strokes = []; erased = try store.savePage(erased, baselineStrokeIDs: Set(page.strokes.map(\.id)))
+        await index.requestServer(notebookID: note.notebookId, pageID: page.id, store: store).value
+        XCTAssertNil(index.content(notebookID: note.notebookId, pageID: page.id, fingerprint: "", serverInk: ScribeInkSnapshot(erased)))
+        let fallback = index.content(notebookID: note.notebookId, pageID: page.id,
+            fingerprint: HandwritingTranscript.fingerprint(page.strokes), serverInk: ScribeInkSnapshot(erased))
+        XCTAssertEqual(fallback?.text, "# Local literal"); XCTAssertFalse(fallback?.isMarkdown ?? true)
     }
 }
 

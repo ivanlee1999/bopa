@@ -146,11 +146,15 @@ final class HandwritingTranscriptIndex: ObservableObject {
     }
 
     func text(notebookID: String, pageID: String, fingerprint: String, serverInk: ScribeInkSnapshot? = nil) -> String? {
+        content(notebookID: notebookID, pageID: pageID, fingerprint: fingerprint, serverInk: serverInk)?.text
+    }
+
+    func content(notebookID: String, pageID: String, fingerprint: String, serverInk: ScribeInkSnapshot? = nil) -> TranscriptContent? {
         if serverTextEnabled(), !editingNotebooks.values.contains(notebookID),
            let record = serverRecords[Self.key(notebookID, pageID)], record.ink == serverInk,
-           !record.result.text.isEmpty { return record.result.text }
+           !record.result.text.isEmpty { return TranscriptContent(text: record.result.text, format: record.result.format) }
         guard let value = records[Self.key(notebookID, pageID)], value.fingerprint == fingerprint else { return nil }
-        return value.text.isEmpty ? nil : value.text
+        return value.text.isEmpty ? nil : TranscriptContent(text: value.text)
     }
 
     @discardableResult

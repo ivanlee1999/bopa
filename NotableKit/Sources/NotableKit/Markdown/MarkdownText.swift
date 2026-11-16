@@ -135,7 +135,7 @@ public enum MarkdownText {
     /// `` `**x**` `` shows the asterisks), and a marker with no partner on the same line is
     /// itself literal — an unmatched `*` is a bullet somebody typed mid-sentence, not the start
     /// of emphasis that runs to the end of the paragraph.
-    private static func parseInline(_ line: String) -> [Span] {
+    public static func parseInline(_ line: String) -> [Span] {
         var spans: [Span] = []
         var pending = ""
         // Never reassigned: a top-level run carries no styling of its own, and everything nested

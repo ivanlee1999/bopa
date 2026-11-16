@@ -46,6 +46,7 @@ struct PreviewPageSwipe: UIViewRepresentable {
             while let view = target, view !== pan.view {
                 if view is UIControl { return false }
                 if let text = view as? UITextView, text.isEditable || text.selectedRange.length > 0 { return false }
+                if let scroll = view as? UIScrollView, scroll.contentSize.width > scroll.bounds.width + 1 { return false }
                 target = view.superview
             }
             beganAt = touch.timestamp; return true

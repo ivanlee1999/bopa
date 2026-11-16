@@ -48,8 +48,8 @@ struct NotebookContentCard: View {
     }
     private var topics: [String] { store.journalEntries[notebook.notebookId]?.visibleTopics ?? [] }
     private var revision: String { pageID.map { store.pageRevision(notebookId: notebook.notebookId, pageId: $0) } ?? "" }
-    private var transcript: String? {
-        pageID.flatMap { transcripts.text(notebookID: notebook.notebookId, pageID: $0, fingerprint: inkFingerprint, serverInk: serverInk) }
+    private var transcript: TranscriptContent? {
+        pageID.flatMap { transcripts.content(notebookID: notebook.notebookId, pageID: $0, fingerprint: inkFingerprint, serverInk: serverInk) }
     }
 
     var body: some View {
@@ -76,7 +76,7 @@ struct NotebookContentCard: View {
                         }
                         VStack(alignment: .leading, spacing: 5) {
                             if let page { Text(FlowText.markdown(in: page.blocks)).font(.callout).lineLimit(2).foregroundStyle(.secondary) }
-                            if previewContent == "text", let transcript { Text(transcript).font(.callout).lineLimit(3).foregroundStyle(.secondary) }
+                            if previewContent == "text", let transcript { TranscriptReadText(content: transcript).font(.callout).frame(maxHeight: 100, alignment: .top).clipped().foregroundStyle(.secondary) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain)
@@ -171,8 +171,8 @@ private struct NotebookReadingPage: View {
     @State private var serverInk: ScribeInkSnapshot?
 
     private var revision: String { store.pageRevision(notebookId: notebookID, pageId: pageID) }
-    private var transcript: String? {
-        transcripts.text(notebookID: notebookID, pageID: pageID, fingerprint: inkFingerprint, serverInk: serverInk)
+    private var transcript: TranscriptContent? {
+        transcripts.content(notebookID: notebookID, pageID: pageID, fingerprint: inkFingerprint, serverInk: serverInk)
     }
 
     var body: some View {
@@ -218,7 +218,7 @@ private struct NotebookReadingPage: View {
 private struct NotebookPageContent: View {
     let page: PageFile
     let notebookID: String
-    let transcript: String?
+    let transcript: TranscriptContent?
     let previewContent: String
 
     var body: some View {
@@ -227,7 +227,7 @@ private struct NotebookPageContent: View {
                 if FlowCanvasPreview.hasNonInkContent(page) { FlowCanvasPreview(page: page, notebookID: notebookID) }
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Recognized handwriting", systemImage: "text.viewfinder").font(.caption).foregroundStyle(.secondary)
-                    Text(transcript).textSelection(.enabled)
+                    TranscriptReadText(content: transcript)
                 }
             } else if FlowCanvasPreview.hasCanvas(page) { FlowCanvasPreview(page: page, notebookID: notebookID) }
             ForEach(FlowText.sections(in: page.blocks)) { section in
