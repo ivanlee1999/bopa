@@ -5,7 +5,7 @@ public enum ContentTitle {
     public static func firstLine(_ source: String) -> String? {
         for raw in source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n") {
             var line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.hasPrefix("```") || line.hasPrefix("~~~") || line.hasPrefix("![") { continue }
+            if line.hasPrefix("```") || line.hasPrefix("~~~") { continue }
             var heading = false
             while true {
                 let before = line
@@ -16,12 +16,13 @@ public enum ContentTitle {
                     .replacingOccurrences(of: #"^\[[ xX]\]\s*"#, with: "", options: .regularExpression)
                 if line == before { break }
             }
+            if line.range(of: #"^(?:!\[[^\]]*\]\([^)]*\)|!\[\[[^\]]+\]\])\s*$"#, options: .regularExpression) != nil { continue }
             if heading { line = line.replacingOccurrences(of: #"\s+#+\s*$"#, with: "", options: .regularExpression) }
             if line.hasPrefix("|") { line.removeFirst() }
             if line.hasSuffix("|"), !line.hasSuffix("\\|") { line.removeLast() }
             line = line.replacingOccurrences(of: #"\[\[[^\]|]*\|([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
                 .replacingOccurrences(of: #"\[\[([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
-                .replacingOccurrences(of: #"\[([^\]]+)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+                .replacingOccurrences(of: #"!?\[([^\]]+)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
                 .replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
             for marker in [#"\*\*"#, "__", #"\*"#, "_"] {
                 line = line.replacingOccurrences(of: #"(?<![\\\p{L}\p{N}])"# + marker + #"([^\n]+?)"# + marker + #"(?![\p{L}\p{N}])"#,

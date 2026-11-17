@@ -58,6 +58,8 @@ final class TranscriptMarkdownTests: XCTestCase {
             ("snake_case and 2*3", "snake_case and 2*3"),
             ("snake_case with _emphasis_ and 2*3*4", "snake_case with emphasis and 2*3*4"),
             ("# Heading ###", "Heading"), ("Literal ###", "Literal ###"), ("> - ## Heading", "Heading"),
+            ("> ![Cover](url)\nActual note", "Actual note"), ("> ![[Cover]]\nActual note", "Actual note"),
+            ("![icon](url) Actual title", "icon Actual title"), ("①", nil), ("① Heading", "Heading"),
             ("![Cover](url)\nActual note", "Actual note"), ("![[Cover]]\nActual note", "Actual note"),
             ("\\# literal", "# literal"), ("=", nil), ("+", nil), ("€", nil),
             ("See [[Topic|visible alias]] and [[Idea]]", "See visible alias and Idea"),
