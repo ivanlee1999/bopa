@@ -196,7 +196,7 @@ final class HandwritingTranscriptIndex: ObservableObject {
         let task = Task { [weak self] in
             let result = await serverReader(notebookID, pageID)
             guard let self, !Task.isCancelled, self.serverTasks[key]?.token == token else { return }
-            defer { self.serverTasks[key] = nil }
+            defer { if self.serverTasks[key]?.token == token { self.serverTasks[key] = nil } }
             let revision = store.pageRevision(notebookId: notebookID, pageId: pageID)
             guard self.serverTextEnabled(), self.activeDrawing.isEmpty, !self.editingNotebooks.values.contains(notebookID),
                   let current = store.transcriptPage(notebookID: notebookID, pageID: pageID), ScribeInkSnapshot(current) == ink,
@@ -204,7 +204,13 @@ final class HandwritingTranscriptIndex: ObservableObject {
                   let result, result.ink == ink, result.result.hasSourceIdentity,
                   result.result.pageId == pageID, result.result.notebookId == notebookID else {
                 self.serverRecords[key] = nil
-                if self.titlePages[key]?.recognized != nil { self.titlePages[key]?.recognized = nil }
+                let generation = self.titleGeneration, cached = await self.cachedServerTitle?(notebookID, pageID)
+                guard !Task.isCancelled, self.serverTasks[key]?.token == token else { return }
+                if generation == self.titleGeneration, self.serverTextEnabled(), self.activeDrawing.isEmpty,
+                   !self.editingNotebooks.values.contains(notebookID), store.pageRevision(notebookId: notebookID, pageId: pageID) == revision,
+                   let latest = store.transcriptPage(notebookID: notebookID, pageID: pageID), ScribeInkSnapshot(latest) == ink {
+                    self.titlePages[key]?.recognized = cached
+                } else if self.titlePages[key]?.recognized != nil { self.titlePages[key]?.recognized = nil }
                 return
             }
             self.serverRecords[key] = result

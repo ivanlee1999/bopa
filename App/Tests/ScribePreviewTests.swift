@@ -204,6 +204,8 @@ final class ScribePreviewTests: XCTestCase {
         index.cachedServerTitle = { await restarted.cachedTranscriptTitle(notebookID: $0, pageID: $1) }
         await index.prepareTitles(notebooks: reopened.notebooks, store: reopened)
         XCTAssertEqual(index.notebookTitle(note, store: reopened), "Offline meeting")
+        await index.requestServer(notebookID: note.notebookId, pageID: page.id, store: reopened).value
+        XCTAssertEqual(index.notebookTitle(note, store: reopened), "Offline meeting", "A failed preview fetch must not discard a still-current offline name")
         XCTAssertTrue(index.serverRecords.isEmpty, "Only a short derived name persists, not a replacement transcript")
         XCTAssertEqual(reopened.manifest(id: note.notebookId)?.title, "")
         state.databaseGeneration = "replacement-generation"
