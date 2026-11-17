@@ -207,8 +207,7 @@ final class NotebookStore: ObservableObject {
         try organization.capture(notebookID: id, at: date)
         if let topic { try organization.setTopic(notebookID: id, name: topic, present: true,
                                                 createdAt: Int64(date.timeIntervalSince1970 * 1000)) }
-        let format = DateFormatter(); format.dateStyle = .medium; format.timeStyle = .short
-        return try createNotebook(title: format.string(from: date), notebookId: id)
+        return try createNotebook(title: "", notebookId: id)
     }
 
     func setJournalTopic(notebookID: String, name: String, present: Bool) throws {
@@ -1602,7 +1601,7 @@ final class NotebookStore: ObservableObject {
     /// do not know where the thing is. Trashed items stay out — they are not in the library — and
     /// so does anything inside a trashed folder, which is why this filters on the same reachability
     /// rule the listings do rather than on the query alone.
-    func search(_ query: String) -> (folders: [FolderDTO], notebooks: [NotebookManifest]) {
+    func search(_ query: String, title: ((NotebookManifest) -> String)? = nil) -> (folders: [FolderDTO], notebooks: [NotebookManifest]) {
         let trashedFolderIDs = trash.folderIDs
         let trashedNotebookIDs = trash.notebookIDs
 
@@ -1615,7 +1614,7 @@ final class NotebookStore: ObservableObject {
             notebooks: notebooks.filter {
                 !trashedNotebookIDs.contains($0.notebookId)
                     && isInLiveSubtree($0.parentFolderId, trashed: trashedFolderIDs)
-                    && LibrarySort.matches(title: $0.title, query: query)
+                    && LibrarySort.matches(title: title?($0) ?? $0.title, query: query)
             }
         )
     }

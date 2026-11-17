@@ -89,6 +89,7 @@ struct LibraryRow: Identifiable {
 /// be renamed, moved or thrown away from its own row.
 struct LibrarySidebar: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @EnvironmentObject private var backendHost: SyncBackendHost
     @Binding var selection: LibrarySelection?
     @Binding var isPresentingModal: Bool
@@ -122,7 +123,7 @@ struct LibrarySidebar: View {
                             .padding(.bottom, 4)
                         ForEach(store.recentNotebooks, id: \.notebookId) { notebook in
                             Button { openNotebook(notebook.notebookId) } label: {
-                                Label(notebook.title, systemImage: "doc.text")
+                                Label(transcripts.notebookTitle(notebook, store: store), systemImage: "doc.text")
                                     .font(Modernist.font(14, .medium))
                                     .lineLimit(2)
                                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)

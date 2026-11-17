@@ -48,4 +48,23 @@ final class TranscriptMarkdownTests: XCTestCase {
         XCTAssertEqual(spans.map(\.text).joined(), "Label <script> !alt")
         XCTAssertFalse(spans.map(\.text).joined().contains("https://"))
     }
+    func testAutomaticTitleUsesVisibleFirstMeaningfulLineAndUnicodeScalars() {
+        let cases: [(String, String?)] = [
+            ("", nil), ("\n# **Project plan**\nMore", "Project plan"),
+            ("> - [x] **Buy milk**", "Buy milk"), ("1) _Next step_", "Next step"),
+            ("```\n[?]\n---\nMeeting notes", "Meeting notes"),
+            ("| --- | :---: |\n# Café 中文", "Café 中文"),
+            ("See [roadmap](https://example.com) now", "See roadmap now"),
+            ("snake_case and 2*3", "snake_case and 2*3"),
+            ("snake_case with _emphasis_ and 2*3*4", "snake_case with emphasis and 2*3*4"),
+            ("# Heading ###", "Heading"), ("Literal ###", "Literal ###"), ("> - ## Heading", "Heading"),
+            ("![Cover](url)\nActual note", "Actual note"), ("![[Cover]]\nActual note", "Actual note"),
+            ("\\# literal", "# literal"), ("=", nil), ("+", nil), ("€", nil),
+            ("See [[Topic|visible alias]] and [[Idea]]", "See visible alias and Idea"),
+            ("| item | kg |", "item | kg"), ("##", nil), ("[?]", nil), ("...", nil),
+            (String(repeating: "😀", count: 65), String(repeating: "😀", count: 60) + "…")
+        ]
+        for (source, expected) in cases { XCTAssertEqual(ContentTitle.firstLine(source), expected, source) }
+    }
+
 }

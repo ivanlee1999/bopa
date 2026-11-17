@@ -57,8 +57,8 @@ struct NotebookContentCard: View {
             Button {
                 renaming = TitleRenameRequest(notebookID: notebook.notebookId, title: notebook.title)
             } label: {
-                Text(notebook.title).font(.headline).lineLimit(2).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            }.buttonStyle(.plain).accessibilityLabel("Rename \(notebook.title)")
+                Text(transcripts.notebookTitle(notebook, store: store)).font(.headline).lineLimit(2).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }.buttonStyle(.plain).accessibilityLabel("Rename \(transcripts.notebookTitle(notebook, store: store))")
             if layout == .feed {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     ForEach(Array(notebook.pageIds.enumerated()), id: \.element) { index, pageID in
@@ -102,7 +102,7 @@ struct NotebookContentCard: View {
                     Text("\(notebook.pageIds.count) \(notebook.pageIds.count == 1 ? "page" : "pages")")
                 } else if let pageID {
                     Button { renaming = TitleRenameRequest(notebookID: notebook.notebookId, pageID: pageID, title: page?.title ?? "") } label: {
-                        Text(page?.title ?? "Page \((notebook.pageIds.firstIndex(of: pageID) ?? 0) + 1)").lineLimit(1)
+                        Text(transcripts.pageTitle(notebookID: notebook.notebookId, pageID: pageID, store: store) ?? "Page \((notebook.pageIds.firstIndex(of: pageID) ?? 0) + 1)").lineLimit(1)
                     }.accessibilityLabel("Rename page")
                 }
                 if layout != .feed { Button { showingPages = true } label: {
@@ -113,7 +113,7 @@ struct NotebookContentCard: View {
                 if layout != .compact && layout != .feed { Button(expanded ? "Collapse" : "Expand") { expanded.toggle() } }
                 Spacer(minLength: 0)
                 Button("Edit") { edit(pageID) }
-                    .accessibilityLabel("Edit \(notebook.title)")
+                    .accessibilityLabel("Edit \(transcripts.notebookTitle(notebook, store: store))")
                 accessory
             }.font(.caption).buttonStyle(.plain).frame(minHeight: 44)
             ModernistRule()
@@ -121,6 +121,7 @@ struct NotebookContentCard: View {
             .task(id: "\(layout.rawValue)#\(pageID ?? "")#\(revision)") {
                 guard layout != .feed, let pageID else { page = nil; return }
                 page = try? store.loadPage(notebookId: notebook.notebookId, pageId: pageID)
+                if let page { transcripts.rememberTitlePage(page, revision: revision) }
                 inkFingerprint = HandwritingTranscript.fingerprint(page?.strokes ?? [])
                 serverInk = page.map(ScribeInkSnapshot.init)
                 transcripts.request(notebookID: notebook.notebookId, pageID: pageID, store: store)
@@ -180,7 +181,7 @@ private struct NotebookReadingPage: View {
             Button { rename(page?.title ?? "") } label: {
                 HStack {
                     Text("Page \(number)")
-                    if let title = page?.title, !title.isEmpty, title != "Page \(number)" { Text(title).lineLimit(1) }
+                    if let title = transcripts.pageTitle(notebookID: notebookID, pageID: pageID, store: store), title != "Page \(number)" { Text(title).lineLimit(1) }
                 }.font(.caption).foregroundStyle(.secondary).frame(minHeight: 44)
             }.buttonStyle(.plain).accessibilityLabel("Rename page \(number)")
             if let page {
@@ -201,6 +202,7 @@ private struct NotebookReadingPage: View {
             let ready = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
             guard !Task.isCancelled, revision == requestedRevision else { return }
             page = ready.0; inkFingerprint = ready.1; serverInk = ready.2
+            if let page { transcripts.rememberTitlePage(page, revision: requestedRevision) }
             transcripts.request(notebookID: notebookID, pageID: pageID, store: store)
         }
         .task(id: "\(revision)#\(previewContent)#\(useServerText)#\(scenePhase)") {

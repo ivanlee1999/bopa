@@ -4,6 +4,7 @@ import SwiftUI
 /// A short route between notebooks, without leaving the writing screen for the library.
 struct NotebookSwitcherView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @EnvironmentObject private var coordinator: SyncCoordinator
     @Environment(\.dismiss) private var dismiss
     let currentNotebookID: String
@@ -16,7 +17,7 @@ struct NotebookSwitcherView: View {
 
     private var others: [NotebookManifest] {
         let recentIDs = Set(recent.map(\.notebookId))
-        return store.search(query).notebooks.filter { !recentIDs.contains($0.notebookId) }
+        return store.search(query, title: { transcripts.notebookTitle($0, store: store) }).notebooks.filter { !recentIDs.contains($0.notebookId) }
     }
 
     var body: some View {
@@ -64,7 +65,7 @@ struct NotebookSwitcherView: View {
                 Image(systemName: current ? "checkmark" : "doc.text")
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(notebook.title).foregroundStyle(Modernist.ink)
+                    Text(transcripts.notebookTitle(notebook, store: store)).foregroundStyle(Modernist.ink)
                     if conflicted {
                         Text("Resolve conflict in Library")
                             .font(.caption).foregroundStyle(.secondary)

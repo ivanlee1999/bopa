@@ -3,6 +3,7 @@ import SwiftUI
 
 struct JournalLibraryView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @Environment(\.horizontalSizeClass) private var sizeClass
     let topics: Bool
     var allDates = false
@@ -158,7 +159,7 @@ struct JournalLibraryView: View {
                 Button("Cancel", role: .cancel) { trashTarget = nil }
             } message: {
                 let count = trashTarget?.pageIds.count ?? 0
-                Text("\(trashTarget?.title ?? "Note")\(count > 1 ? " · \(count) pages" : ""). Restore from Trash.")
+                Text("\(trashTarget.map { transcripts.notebookTitle($0, store: store) } ?? "Note")\(count > 1 ? " · \(count) pages" : ""). Restore from Trash.")
             }
     }
 
@@ -173,7 +174,7 @@ struct JournalLibraryView: View {
             Button("Edit tags") { editing = note.notebookId }
             Button("Move to Trash", role: .destructive) { trashTarget = note }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-            .accessibilityLabel("Note actions \(note.title)")
+            .accessibilityLabel("Note actions \(transcripts.notebookTitle(note, store: store))")
             .accessibilityIdentifier("journal.noteMenu.\(note.notebookId)")))
     }
 }

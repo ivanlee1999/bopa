@@ -149,6 +149,124 @@ final class ScribePreviewTests: XCTestCase {
             fingerprint: HandwritingTranscript.fingerprint(page.strokes), serverInk: ScribeInkSnapshot(erased))
         XCTAssertEqual(fallback?.text, "# Local literal"); XCTAssertFalse(fallback?.isMarkdown ?? true)
     }
+    func testAutomaticTitleFollowsCurrentServerContentWithoutChangingSourceOrTags() async throws {
+        let (store, note, original) = try fixture(), index = HandwritingTranscriptIndex()
+        XCTAssertEqual(note.title, "", "New unnamed captures must remain eligible for content titles")
+        index.serverTextEnabled = { true }
+        var verified = result(note, original, text: "# **Meal plan**\n- [ ] tea")
+        index.serverReader = { _, _ in verified }
+        let pageURL = store.notebookDirURL(note.notebookId).appendingPathComponent("pages/\(original.id).json")
+        let noteURL = store.notebookDirURL(note.notebookId).appendingPathComponent("manifest.json")
+        let pageBytes = try Data(contentsOf: pageURL), noteBytes = try Data(contentsOf: noteURL)
+        let organization = store.journalEntries
+        await index.prepareTitles(notebooks: [note], store: store)
+        XCTAssertEqual(index.notebookTitle(note, store: store), "Meal plan")
+        XCTAssertEqual(index.pageTitle(notebookID: note.notebookId, pageID: original.id, store: store), "Meal plan")
+        XCTAssertEqual(try Data(contentsOf: pageURL), pageBytes)
+        XCTAssertEqual(try Data(contentsOf: noteURL), noteBytes)
+        XCTAssertEqual(store.journalEntries, organization)
+
+        var edited = original, stroke = original.strokes[0]
+        stroke.id = "new-title-ink"; edited.strokes.append(stroke); edited = try store.savePage(edited)
+        XCTAssertEqual(index.notebookTitle(note, store: store), "Untitled", "A page edit immediately invalidates the old display title")
+        await index.prepareTitles(notebooks: [note], store: store)
+        XCTAssertEqual(index.notebookTitle(note, store: store), "Untitled", "Old server ink cannot title the edited note")
+        verified = result(note, edited, text: "# Revised plan")
+        await index.prepareTitles(notebooks: [note], store: store)
+        XCTAssertEqual(index.notebookTitle(note, store: store), "Revised plan")
+        var erased = edited; erased.strokes = []
+        _ = try store.savePage(erased, baselineStrokeIDs: Set(edited.strokes.map(\.id)))
+        await index.prepareTitles(notebooks: [note], store: store)
+        XCTAssertEqual(index.notebookTitle(note, store: store), "Untitled")
+        XCTAssertEqual(store.journalEntries, organization)
+    }
+
+    func testRecognizedAutomaticTitleSurvivesOfflineRestartAndRejectsEditsOrAnotherSource() async throws {
+        let (store, note, page) = try fixture()
+        var settings = CouchSettings(serverURL: "https://example.invalid", database: "notes", username: "fixture", password: "fixture", deviceID: "test")
+        var state = CouchSyncState(revs: [CouchDocID.page(page.id): "1-source", CouchDocID.notebook(note.notebookId): "1-note"], databaseGeneration: "fixture-generation")
+        try JSONEncoder().encode(state).write(to: store.rootURL.appendingPathComponent(CouchSyncStack.stateFileName(for: settings)), options: .atomic)
+        var host: SyncBackendHost? = SyncBackendHost(loadSettings: { settings }, loadBackend: { .couchdb })
+        host?.serverTextEnabled = { true }
+        let verified = result(note, page, text: "# **Offline meeting**")
+        host?.readTranscript = { _, _, _, _, _ in verified }
+        host?.attach(store: store, coordinator: SyncCoordinator())
+        let fetched = await host?.serverTranscript(notebookID: note.notebookId, pageID: page.id)
+        XCTAssertNotNil(fetched); host = nil
+
+        let reopened = NotebookStore(rootURL: store.rootURL)
+        let restarted = SyncBackendHost(loadSettings: { settings }, loadBackend: { .couchdb })
+        restarted.serverTextEnabled = { true }
+        restarted.readTranscript = { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }
+        restarted.attach(store: reopened, coordinator: SyncCoordinator())
+        let index = HandwritingTranscriptIndex(); index.serverTextEnabled = { true }
+        index.serverReader = { await restarted.serverTranscript(notebookID: $0, pageID: $1) }
+        index.cachedServerTitle = { await restarted.cachedTranscriptTitle(notebookID: $0, pageID: $1) }
+        await index.prepareTitles(notebooks: reopened.notebooks, store: reopened)
+        XCTAssertEqual(index.notebookTitle(note, store: reopened), "Offline meeting")
+        XCTAssertTrue(index.serverRecords.isEmpty, "Only a short derived name persists, not a replacement transcript")
+        XCTAssertEqual(reopened.manifest(id: note.notebookId)?.title, "")
+        state.databaseGeneration = "replacement-generation"
+        try JSONEncoder().encode(state).write(to: reopened.rootURL.appendingPathComponent(CouchSyncStack.stateFileName(for: settings)), options: .atomic)
+        restarted.configure(); index.invalidateServerText()
+        await index.prepareTitles(notebooks: reopened.notebooks, store: reopened)
+        XCTAssertEqual(index.notebookTitle(note, store: reopened), "Untitled", "Reusing IDs and revisions in a recreated database must not reuse its old name")
+        state.databaseGeneration = "fixture-generation"
+        try JSONEncoder().encode(state).write(to: reopened.rootURL.appendingPathComponent(CouchSyncStack.stateFileName(for: settings)), options: .atomic)
+        settings.textDatabase = "another_text_source"; restarted.configure(); index.invalidateServerText()
+        await index.prepareTitles(notebooks: reopened.notebooks, store: reopened)
+        XCTAssertEqual(index.notebookTitle(note, store: reopened), "Untitled")
+        settings.textDatabase = "notes_text"; restarted.configure()
+        var edited = try reopened.loadPage(notebookId: note.notebookId, pageId: page.id)
+        _ = try reopened.savePage(edited)
+        let dirty = await restarted.cachedTranscriptTitle(notebookID: note.notebookId, pageID: page.id)
+        XCTAssertNil(dirty, "Pending local source writes reject cached names even when ink is identical")
+        edited.strokes = []; _ = try reopened.savePage(edited)
+        index.invalidateServerText()
+        await index.prepareTitles(notebooks: reopened.notebooks, store: reopened)
+        XCTAssertEqual(index.notebookTitle(note, store: reopened), "Untitled")
+        let cached = await restarted.cachedTranscriptTitle(notebookID: note.notebookId, pageID: page.id)
+        XCTAssertNil(cached)
+    }
+
+    func testTypedAutomaticTitleWorksOfflineInPageOrderAndManualRenamePinsIt() async throws {
+        let (store, note, original) = try fixture(), index = HandwritingTranscriptIndex()
+        index.serverTextEnabled = { false }
+        let second = try store.addPage(to: note.notebookId)
+        var first = original
+        first.blocks = try FlowText.replacing(base: [], in: [], with: "# First thought", stamp: first.updatedAt, deviceID: "test")
+        _ = try store.savePage(first)
+        var later = second
+        later.blocks = try FlowText.replacing(base: [], in: [], with: "# Later thought", stamp: later.updatedAt, deviceID: "test")
+        _ = try store.savePage(later)
+        var manifest = try XCTUnwrap(store.manifest(id: note.notebookId))
+        manifest.openPageId = second.id
+        await index.prepareTitles(notebooks: [manifest], store: store)
+        XCTAssertEqual(index.notebookTitle(manifest, store: store), "First thought", "Open page must not decide the notebook title")
+        XCTAssertEqual(store.search("first thought", title: { index.notebookTitle($0, store: store) }).notebooks.map(\.notebookId), [note.notebookId])
+        first = try store.loadPage(notebookId: note.notebookId, pageId: first.id)
+        let baseline = Set(first.blocks.map(\.id)); first.blocks = []
+        first = try store.savePage(first, baselineBlockIDs: baseline)
+        await index.prepareTitles(notebooks: [manifest], store: store)
+        XCTAssertEqual(index.notebookTitle(manifest, store: store), "Later thought", "Erasing the first page falls through to the next meaningful page")
+        try store.renamePage(in: note.notebookId, pageId: first.id, title: "Page chosen")
+        await index.prepareTitles(notebooks: [manifest], store: store)
+        XCTAssertEqual(index.notebookTitle(manifest, store: store), "Page chosen")
+        try store.renameNotebook(id: note.notebookId, title: "My chosen title")
+        first = try store.loadPage(notebookId: note.notebookId, pageId: first.id)
+        first.blocks = try FlowText.replacing(base: first.blocks.filter { $0.kind == "md" }, in: first.blocks, with: "# Changed content", stamp: first.updatedAt, deviceID: "test")
+        _ = try store.savePage(first)
+        await index.prepareTitles(notebooks: store.notebooks, store: store)
+        XCTAssertEqual(index.notebookTitle(manifest, store: store), "My chosen title", "Even an older UI snapshot must respect the current manual name")
+        XCTAssertEqual(store.manifest(id: note.notebookId)?.title, "My chosen title")
+        let legacy = try store.createNotebook(title: "Untitled")
+        let dated = try store.createNotebook(title: "16 Nov 2026 10:30")
+        XCTAssertEqual(index.notebookTitle(legacy, store: store), "Untitled")
+        XCTAssertEqual(index.notebookTitle(dated, store: store), "16 Nov 2026 10:30")
+        XCTAssertEqual(LibrarySort.notebooks([legacy, manifest], by: .title, descending: false,
+            titles: [legacy.notebookId: "Zebra", manifest.notebookId: "Apple"]).map(\.notebookId), [manifest.notebookId, legacy.notebookId])
+    }
+
 }
 
 private actor ScribePreviewGate {

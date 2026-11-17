@@ -66,5 +66,35 @@ final class TranscriptRenderingTests: XCTestCase {
         }
     }
 
+    func testAutomaticTitleRendersInNativePhoneAndTabletCardsWithoutSavingAName() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("automatic-title-render-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = NotebookStore(rootURL: root), note = try store.createJournalEntry()
+        var page = try store.loadPage(notebookId: note.notebookId, pageId: note.pageIds[0])
+        page.blocks = try FlowText.replacing(base: [], in: [], with: "# **Planning lunch**\n\nBring the meeting notes.", stamp: page.updatedAt, deviceID: "test")
+        _ = try store.savePage(page)
+        let index = HandwritingTranscriptIndex(); index.serverTextEnabled = { false }
+        await index.prepareTitles(notebooks: [note], store: store)
+        XCTAssertEqual(index.notebookTitle(note, store: store), "Planning lunch")
+        for width: CGFloat in [375, 834] {
+            let card = NotebookContentCard(notebook: note, layout: .compact, edit: { _ in })
+                .environmentObject(store).environmentObject(index).padding(20).background(Color.white)
+            let controller = UIHostingController(rootView: card)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let previous = scene.windows.first(where: \.isKeyWindow), window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: 500)
+            window.rootViewController = controller; window.makeKeyAndVisible(); controller.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(200))
+            let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
+                controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+            }
+            let proof = XCTAttachment(image: image); proof.name = "automatic-title-card-\(Int(width))"
+            proof.lifetime = .keepAlways; add(proof)
+            window.isHidden = true; previous?.makeKeyAndVisible()
+        }
+        XCTAssertEqual(store.manifest(id: note.notebookId)?.title, "")
+        XCTAssertEqual(FlowText.markdown(in: try store.loadPage(notebookId: note.notebookId, pageId: page.id).blocks), "# **Planning lunch**\n\nBring the meeting notes.")
+    }
+
     private func descendants(_ view: UIView) -> [UIView] { view.subviews.flatMap { [$0] + descendants($0) } }
 }

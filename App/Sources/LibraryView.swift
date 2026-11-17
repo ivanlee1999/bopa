@@ -9,9 +9,12 @@ import SwiftUI
 /// sidebar as a floating panel with rounded corners, and this design has neither.
 struct LibraryView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @EnvironmentObject private var coordinator: SyncCoordinator
     @EnvironmentObject private var backendHost: SyncBackendHost
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var titleScenePhase
+    @AppStorage(CouchSettings.cloudTextKey) private var titleServerText = false
     @State private var selection: LibrarySelection? = .today
     @State private var showsSidebar: Bool?
     @State private var openNotebook: OpenNotebook?
@@ -58,6 +61,13 @@ struct LibraryView: View {
             .onChange(of: geometry.size.width) { _, width in inlineEditor = width >= 1200 }
         }
         .background(Modernist.paper)
+        .task(id: "\(transcripts.titleRevision(notebooks: store.notebooks, store: store))#\(titleServerText)#\(titleScenePhase)") {
+            guard titleScenePhase == .active else { return }
+            while !Task.isCancelled {
+                await transcripts.prepareTitles(notebooks: store.notebooks, store: store)
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            }
+        }
         // Picking a folder on a one-column screen means "show me that folder".
         .onChange(of: selection) { _, _ in
             if horizontalSizeClass == .compact { showsSidebar = false }
@@ -197,6 +207,7 @@ struct LibraryView: View {
 /// `folderId == nil` is the library root.
 private struct FolderContentsView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @EnvironmentObject private var handwriting: HandwritingSettings
     @EnvironmentObject private var coordinator: SyncCoordinator
     @EnvironmentObject private var backendHost: SyncBackendHost
@@ -269,9 +280,9 @@ private struct FolderContentsView: View {
     }
 
     private var notebooks: [NotebookManifest] {
-        let found = isSearching ? store.search(query).notebooks : store.notebooks(in: folderId)
+        let found = isSearching ? store.search(query, title: { transcripts.notebookTitle($0, store: store) }).notebooks : store.notebooks(in: folderId)
         return LibrarySort.notebooks(found, by: sortOrder, descending: sortDescending,
-                                     activityDates: store.notebookActivityDates)
+                                     activityDates: store.notebookActivityDates, titles: Dictionary(uniqueKeysWithValues: found.map { ($0.notebookId, transcripts.notebookTitle($0, store: store)) }))
     }
 
     private var title: String {
@@ -774,7 +785,7 @@ private struct FolderContentsView: View {
                 HStack(spacing: 12) {
                     cover(for: notebook, showsPageCount: false).frame(width: 42, height: 56)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(notebook.title).font(Modernist.font(14, .bold)).lineLimit(2)
+                        Text(transcripts.notebookTitle(notebook, store: store)).font(Modernist.font(14, .bold)).lineLimit(2)
                         Text("\(notebook.pageIds.count) \(notebook.pageIds.count == 1 ? "page" : "pages") · \(notebookSubtitle(notebook))")
                             .font(Modernist.font(12)).foregroundStyle(Modernist.neutral700).lineLimit(1)
                     }
@@ -797,7 +808,7 @@ private struct FolderContentsView: View {
             Button { openNotebook(notebook.notebookId) } label: {
                 VStack(alignment: .leading, spacing: 7) {
                     cover(for: notebook)
-                    Text(notebook.title).font(Modernist.font(14, .semibold)).lineLimit(2)
+                    Text(transcripts.notebookTitle(notebook, store: store)).font(Modernist.font(14, .semibold)).lineLimit(2)
                     Text(notebookSubtitle(notebook))
                         .font(Modernist.font(12)).foregroundStyle(Modernist.neutral700).lineLimit(1)
                 }
@@ -821,13 +832,13 @@ private struct FolderContentsView: View {
                 .font(Modernist.font(12, .semibold)).frame(minHeight: 44)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Pages in \(notebook.title)")
+        .accessibilityLabel("Pages in \(transcripts.notebookTitle(notebook, store: store))")
         .accessibilityIdentifier("library.notebook.pages.\(notebook.notebookId)")
     }
 
     private func notebookOptions(_ notebook: NotebookManifest) -> some View {
         Menu { notebookMenu(notebook) } label: { moreLabel }
-            .accessibilityLabel("More options for \(notebook.title)")
+            .accessibilityLabel("More options for \(transcripts.notebookTitle(notebook, store: store))")
             .accessibilityIdentifier("library.notebook.options.\(notebook.notebookId)")
     }
 
@@ -879,7 +890,7 @@ private struct FolderContentsView: View {
     private func cover(for notebook: NotebookManifest, showsPageCount: Bool = true) -> some View {
         NotebookCoverView(
             seed: notebook.notebookId,
-            title: notebook.title,
+            title: transcripts.notebookTitle(notebook, store: store),
             pageCount: notebook.pageIds.count,
             thumbnail: ThumbnailRenderer.thumbnail(for: notebook, store: store),
             showsPageCount: showsPageCount
@@ -956,7 +967,7 @@ private struct NewNotebookSheet: View {
                     Button("Create") {
                         let trimmed = title.trimmingCharacters(in: .whitespaces)
                         do {
-                            try create(trimmed.isEmpty ? "Untitled" : trimmed, pageSize, template)
+                            try create(trimmed, pageSize, template)
                             dismiss()
                         } catch {
                             actionError = LibraryActionError(action: "Creating the notebook", underlying: error)

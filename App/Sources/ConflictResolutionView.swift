@@ -18,6 +18,7 @@ import SwiftUI
 /// either side. Do not ship the resolution buttons as working until this is understood.
 struct ConflictResolutionView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @EnvironmentObject private var coordinator: SyncCoordinator
     @Environment(\.dismiss) private var dismiss
 
@@ -28,7 +29,7 @@ struct ConflictResolutionView: View {
     @State private var applyError: String?
 
     private var title: String {
-        store.manifest(id: conflict.notebookId)?.title ?? "This notebook"
+        store.manifest(id: conflict.notebookId).map { transcripts.notebookTitle($0, store: store) } ?? "This notebook"
     }
 
     var body: some View {

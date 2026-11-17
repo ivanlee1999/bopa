@@ -24,6 +24,7 @@ struct NotebookNavigatorView: View {
     }
 
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @Environment(\.dismiss) private var dismiss
 
     let notebookId: String
@@ -52,7 +53,10 @@ struct NotebookNavigatorView: View {
             content
         }
         .background(Modernist.paper)
-        .navigationTitle(manifest?.title ?? "Notebook")
+        .task(id: manifest.map { transcripts.titleRevision(notebooks: [$0], store: store, includeNamedPages: true) } ?? "") {
+            if let manifest { await transcripts.prepareTitles(notebooks: [manifest], store: store, includeNamedPages: true) }
+        }
+        .navigationTitle(manifest.map { transcripts.notebookTitle($0, store: store) } ?? "Notebook")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -421,6 +425,7 @@ struct OutlineTabView: View {
 /// page itself is the only useful label, which is also why starring needs no prompt.
 struct BookmarksTabView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
 
     let notebookId: String
     let currentPageId: String?
@@ -535,7 +540,7 @@ struct BookmarksTabView: View {
     }
 
     private func label(for pageId: String) -> String {
-        let title = try? store.loadPage(notebookId: notebookId, pageId: pageId).title
+        let title = transcripts.pageTitle(notebookID: notebookId, pageID: pageId, store: store)
         if let title, !title.isEmpty { return "Page \(pageNumbers[pageId] ?? 0) · \(title)" }
         return "Page \(pageNumbers[pageId] ?? 0)"
     }

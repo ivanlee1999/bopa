@@ -283,6 +283,7 @@ struct FlowBoundaryView: View {
     let page: PageFile?
     let notebookID: String
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     var body: some View {
         if block.kind == "ink", let page {
             if let image = FlowPagePreview.ink(page: page, blockID: block.id) {
@@ -293,7 +294,7 @@ struct FlowBoundaryView: View {
                   let image = UIImage(contentsOfFile: store.notebookDirURL(notebookID).appendingPathComponent("images/\(sha)").path) {
             Image(uiImage: image).resizable().scaledToFit()
         } else if block.kind == "link", let target = block.targetNotebookId {
-            Label(store.manifest(id: target)?.title ?? "Linked note", systemImage: "link")
+            Label(store.manifest(id: target).map { transcripts.notebookTitle($0, store: store) } ?? "Linked note", systemImage: "link")
         } else {
             Label(block.kind.capitalized, systemImage: block.kind == "audio" ? "waveform" : "paperclip")
                 .foregroundStyle(.secondary)

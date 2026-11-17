@@ -11,6 +11,7 @@ import SwiftUI
 /// The twin of Notable's Trash screen on the BOOX.
 struct TrashView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
     @Environment(\.dismiss) private var dismiss
 
     private struct PurgeTarget {
@@ -61,7 +62,7 @@ struct TrashView: View {
                         Section("Notebooks") {
                             ForEach(notebooks, id: \.notebookId) { notebook in
                                 row(
-                                    title: notebook.title,
+                                    title: transcripts.notebookTitle(notebook, store: store),
                                     subtitle: "\(notebook.pageIds.count) "
                                         + (notebook.pageIds.count == 1 ? "page" : "pages"),
                                     deletedAt: store.trashedAt(notebookId: notebook.notebookId),
@@ -160,7 +161,7 @@ struct TrashView: View {
         }
         if let id = target.notebookId,
            let notebook = store.notebooks.first(where: { $0.notebookId == id }) {
-            return "\"\(notebook.title)\" will be deleted here and on every device you sync with. "
+            return "\"\(transcripts.notebookTitle(notebook, store: store))\" will be deleted here and on every device you sync with. "
                 + "It cannot be undone."
         }
         return ""

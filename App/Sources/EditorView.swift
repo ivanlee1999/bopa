@@ -249,7 +249,7 @@ struct EditorView: View {
             renaming = TitleRenameRequest(notebookID: notebookId, title: manifest.title)
         } label: {
             HStack(spacing: 4) {
-                Text(manifest?.title ?? "Notebook")
+                Text(manifest.map { transcripts.notebookTitle($0, store: store) } ?? "Notebook")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
             }
@@ -259,14 +259,14 @@ struct EditorView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Rename notebook")
-        .accessibilityValue(manifest?.title ?? "Notebook")
+        .accessibilityValue(manifest.map { transcripts.notebookTitle($0, store: store) } ?? "Notebook")
         .accessibilityIdentifier("editor.title")
 
         if !isCompact {
             Button(action: showNotebookSwitcher) { Image(systemName: "chevron.down") }
                 .buttonStyle(RailButtonStyle(selected: false, size: Modernist.hitCompact))
                 .disabled(onSwitchNotebook == nil)
-                .accessibilityLabel("Switch notebook").accessibilityValue(manifest?.title ?? "Notebook")
+                .accessibilityLabel("Switch notebook").accessibilityValue(manifest.map { transcripts.notebookTitle($0, store: store) } ?? "Notebook")
                 .accessibilityIdentifier("editor.notebooks")
         }
 

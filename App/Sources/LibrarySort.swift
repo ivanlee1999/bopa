@@ -44,8 +44,9 @@ enum LibrarySortOrder: String, CaseIterable, Identifiable {
 enum LibrarySort {
     static func notebooks(
         _ notebooks: [NotebookManifest], by order: LibrarySortOrder, descending: Bool,
-        activityDates: [String: Date] = [:]
+        activityDates: [String: Date] = [:], titles: [String: String] = [:]
     ) -> [NotebookManifest] {
+        func title(_ notebook: NotebookManifest) -> String { titles[notebook.notebookId] ?? notebook.title }
         let sorted: [NotebookManifest]
         switch order {
         case .updated:
@@ -54,13 +55,13 @@ enum LibrarySort {
                 (manifest: notebook, activity: activityDates[notebook.notebookId]
                     ?? NotableDate.parse(notebook.updatedAt) ?? .distantPast)
             }.sorted {
-                ($0.activity, $0.manifest.title, $0.manifest.notebookId)
-                    < ($1.activity, $1.manifest.title, $1.manifest.notebookId)
+                ($0.activity, title($0.manifest), $0.manifest.notebookId)
+                    < ($1.activity, title($1.manifest), $1.manifest.notebookId)
             }.map(\.manifest)
         case .created:
-            sorted = notebooks.sorted { ($0.createdAt, $0.title) < ($1.createdAt, $1.title) }
+            sorted = notebooks.sorted { ($0.createdAt, title($0)) < ($1.createdAt, title($1)) }
         case .title:
-            sorted = notebooks.sorted { compare($0.title, $1.title, tie: ($0.notebookId, $1.notebookId)) }
+            sorted = notebooks.sorted { compare(title($0), title($1), tie: ($0.notebookId, $1.notebookId)) }
         }
         return descending ? sorted.reversed() : sorted
     }

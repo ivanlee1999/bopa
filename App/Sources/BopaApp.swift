@@ -42,6 +42,9 @@ struct BopaApp: App {
                     transcripts.serverReader = { [weak backendHost] notebookID, pageID in
                         await backendHost?.serverTranscript(notebookID: notebookID, pageID: pageID)
                     }
+                    transcripts.cachedServerTitle = { [weak backendHost] notebookID, pageID in
+                        await backendHost?.cachedTranscriptTitle(notebookID: notebookID, pageID: pageID)
+                    }
                 }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     switch phase {

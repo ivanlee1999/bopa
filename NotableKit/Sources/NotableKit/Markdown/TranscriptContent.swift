@@ -1,5 +1,42 @@
 import Foundation
 
+/// A disposable label for an unnamed note; it never changes the authored title or content.
+public enum ContentTitle {
+    public static func firstLine(_ source: String) -> String? {
+        for raw in source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n") {
+            var line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("```") || line.hasPrefix("~~~") || line.hasPrefix("![") { continue }
+            var heading = false
+            while true {
+                let before = line
+                line = line.replacingOccurrences(of: #"^(?:>\s*)+"#, with: "", options: .regularExpression)
+                if line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil { heading = true }
+                line = line.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+                    .replacingOccurrences(of: #"^(?:[-*+•]\s+|[0-9]{1,9}[.)]\s+|[①-⑳]\s*)"#, with: "", options: .regularExpression)
+                    .replacingOccurrences(of: #"^\[[ xX]\]\s*"#, with: "", options: .regularExpression)
+                if line == before { break }
+            }
+            if heading { line = line.replacingOccurrences(of: #"\s+#+\s*$"#, with: "", options: .regularExpression) }
+            if line.hasPrefix("|") { line.removeFirst() }
+            if line.hasSuffix("|"), !line.hasSuffix("\\|") { line.removeLast() }
+            line = line.replacingOccurrences(of: #"\[\[[^\]|]*\|([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
+                .replacingOccurrences(of: #"\[\[([^\]]+)\]\]"#, with: "$1", options: .regularExpression)
+                .replacingOccurrences(of: #"\[([^\]]+)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+                .replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
+            for marker in [#"\*\*"#, "__", #"\*"#, "_"] {
+                line = line.replacingOccurrences(of: #"(?<![\\\p{L}\p{N}])"# + marker + #"([^\n]+?)"# + marker + #"(?![\p{L}\p{N}])"#,
+                    with: "$1", options: .regularExpression)
+            }
+            line = line.replacingOccurrences(of: #"\\([\\`*_{}\[\]()#+.!>|~=-])"#, with: "$1", options: .regularExpression)
+                .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            guard line.range(of: #"[\p{L}\p{N}\p{So}]"#, options: .regularExpression) != nil else { continue }
+            let scalars = Array(line.unicodeScalars)
+            return scalars.count > 60 ? String(String.UnicodeScalarView(scalars.prefix(60))).trimmingCharacters(in: .whitespaces) + "…" : line
+        }
+        return nil
+    }
+}
+
 /// Derived display only. Unknown/legacy formats and local OCR remain literal text.
 public struct TranscriptContent: Equatable, Sendable {
     public var text: String

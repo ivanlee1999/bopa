@@ -13,6 +13,7 @@ import SwiftUI
 /// bringing their own.
 struct PageOverviewView: View {
     @EnvironmentObject private var store: NotebookStore
+    @EnvironmentObject private var transcripts: HandwritingTranscriptIndex
 
     let notebookId: String
     /// The page the editor currently has open — highlighted, and scrolled to on appear.
@@ -175,7 +176,7 @@ struct PageOverviewView: View {
     /// The page's own name if it has one, else its position — the number is what everyone counts
     /// pages by, and a page nobody named has nothing else to say.
     private func label(for pageId: String, index: Int) -> String {
-        let title = try? store.loadPage(notebookId: notebookId, pageId: pageId).title
+        let title = transcripts.pageTitle(notebookID: notebookId, pageID: pageId, store: store)
         if let title, !title.isEmpty { return "Page \(index + 1) · \(title)" }
         return "Page \(index + 1)"
     }

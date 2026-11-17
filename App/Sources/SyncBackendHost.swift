@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import NotableKit
 import SwiftUI
 
@@ -26,6 +27,23 @@ final class SyncBackendHost: ObservableObject {
     private var transcriptClient: CouchDBClient?
     private var transcriptDatabase = "notes_text"
     private var transcriptGeneration = UUID()
+    private var titleCacheDirectory: URL?
+    private struct CachedTitle: Codable {
+        var databaseGeneration: String
+        var sourceRev: String
+        var ink: String
+        var title: String
+    }
+    private func titleCacheURL(notebookID: String, pageID: String) -> URL? {
+        titleCacheDirectory?.appendingPathComponent(Self.digest(Data("\(notebookID)/\(pageID)".utf8)) + ".json")
+    }
+    private static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+    private static func inkDigest(_ ink: ScribeInkSnapshot) -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return digest((try? encoder.encode(ink)) ?? Data())
+    }
     var serverTextEnabled: @MainActor () -> Bool = { UserDefaults.standard.bool(forKey: CouchSettings.cloudTextKey) }
     var readTranscript: @Sendable (CouchDBClient, String, String, ScribeInkSnapshot, String) async throws -> VerifiedScribeText? = {
         try await ScribeTextReader.read(client: $0, notebookID: $1, pageID: $2, localInk: $3, textDatabase: $4)
@@ -80,7 +98,7 @@ final class SyncBackendHost: ObservableObject {
 
     /// Rebuilds the CouchDB stack from current settings. Safe to call repeatedly.
     func configure() {
-        transcriptGeneration = UUID(); transcriptClient = nil
+        transcriptGeneration = UUID(); transcriptClient = nil; titleCacheDirectory = nil
         backend = loadBackend()
         webdavConfigured = SyncSettings.isServerConfigured
         guard let store else { return }
@@ -114,6 +132,8 @@ final class SyncBackendHost: ObservableObject {
         let settings = loadSettings()
         transcriptClient = settings.makeClient()
         transcriptDatabase = settings.textDatabase
+        let scope = Self.digest(Data((CouchSyncStack.stateFileName(for: settings) + "#" + settings.textDatabase + "#" + settings.username).utf8))
+        titleCacheDirectory = store.rootURL.appendingPathComponent(".automatic-titles/\(scope)", isDirectory: true)
         store.deviceID = settings.deviceID
         guard let stack = CouchSyncStack.make(
             settings: settings, rootURL: store.rootURL,
@@ -210,7 +230,30 @@ final class SyncBackendHost: ObservableObject {
               let latest = store.transcriptPage(notebookID: notebookID, pageID: pageID),
               ScribeInkSnapshot(latest) == ink, let result, result.ink == ink,
               latestState.revs[documentID] == result.result.sourceRev else { return nil }
+        if result.result.hasSourceIdentity, let sourceRev = result.result.sourceRev,
+           let databaseGeneration = latestState.databaseGeneration, !databaseGeneration.isEmpty,
+           let title = ContentTitle.firstLine(result.result.text), let url = titleCacheURL(notebookID: notebookID, pageID: pageID) {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? JSONEncoder().encode(CachedTitle(databaseGeneration: databaseGeneration, sourceRev: sourceRev, ink: Self.inkDigest(ink), title: title)).write(to: url, options: .atomic)
+        } else if let url = titleCacheURL(notebookID: notebookID, pageID: pageID) { try? FileManager.default.removeItem(at: url) }
         return result
+    }
+
+    /// A short, disposable title survives offline restarts only while the synced source is current.
+    func cachedTranscriptTitle(notebookID: String, pageID: String) async -> String? {
+        guard serverTextEnabled(), backend == .couchdb, let engine, let couchStore, let store,
+              let url = titleCacheURL(notebookID: notebookID, pageID: pageID) else { return nil }
+        let generation = transcriptGeneration, revision = store.pageRevision(notebookId: notebookID, pageId: pageID)
+        guard let page = store.transcriptPage(notebookID: notebookID, pageID: pageID) else { return nil }
+        let state = await engine.currentState, documentID = CouchDocID.page(pageID)
+        guard generation == transcriptGeneration, serverTextEnabled(), !state.dirty.contains(documentID),
+              !couchStore.pendingMarkIDs().contains(documentID),
+              store.pageRevision(notebookId: notebookID, pageId: pageID) == revision,
+              let data = try? Data(contentsOf: url), let cached = try? JSONDecoder().decode(CachedTitle.self, from: data),
+              let databaseGeneration = state.databaseGeneration, !databaseGeneration.isEmpty,
+              databaseGeneration == cached.databaseGeneration, state.revs[documentID] == cached.sourceRev,
+              Self.inkDigest(ScribeInkSnapshot(page)) == cached.ink else { return nil }
+        return cached.title
     }
 
     // MARK: Lifecycle
